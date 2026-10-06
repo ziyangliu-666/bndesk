@@ -1,6 +1,9 @@
 //! Alert rules and their active set.
 use std::collections::{HashMap, VecDeque};
 
+/// A public market-data connection silent this long is reported (the watchdog reconnects it at 60 s).
+const SILENT_MS: i64 = 45_000;
+
 use chrono::{Local, NaiveDate, TimeZone};
 
 use crate::app::{Desk, View};
@@ -173,6 +176,16 @@ impl Alerts {
         }
 
         if v.summary.session.open {
+            // a public connection with nothing at all: the watchdog reconnects it, this says it is still silent
+            for f in desk.all_feeds() {
+                let f = f.borrow();
+                if f.kind != FeedKind::Public || !f.up {
+                    continue;
+                }
+                if let Some(last) = f.last && now - last > SILENT_MS {
+                    add("stream_silent", &f.name, Level::Warn, format!("{} no data for {}s", f.name, (now - last).div_euclid(1000)));
+                }
+            }
             let stale_ms = ac.stale_quote_s * 1000.0;
             let tracked = desk.tracked.borrow();
             let m = desk.market.borrow();

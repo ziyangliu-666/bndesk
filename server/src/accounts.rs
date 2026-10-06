@@ -1165,7 +1165,7 @@ async fn spot_user(acct: AccountRef) {
             close();
         }
     };
-    run_ws(|| WS_API.to_string(), feed, on_msg, on_open).await;
+    run_ws(|| WS_API.to_string(), feed, on_msg, on_open, None).await;
 }
 
 #[derive(Deserialize)]
@@ -1245,7 +1245,7 @@ async fn fut_user(acct: AccountRef, rest: Rest) {
         }
     };
     let s3 = state.clone();
-    run_ws(move || format!("{USDM_PRIVATE}{}", s3.borrow().key), feed, on_msg, on_open).await;
+    run_ws(move || format!("{USDM_PRIVATE}{}", s3.borrow().key), feed, on_msg, on_open, None).await;
 }
 
 /// One universal transfer: (time, from email, to email, asset, amount).

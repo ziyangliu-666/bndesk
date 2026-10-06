@@ -40,7 +40,8 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
 - Public market data (no key): spot `wss://stream.binance.com:9443/stream` and USD-M
   `wss://fstream.binance.com/public/stream` with `<sym>@bookTicker`; USD-M
   `wss://fstream.binance.com/market/stream` with `<sym>@markPrice@1s` for positions' marks and
-  funding. At most 200 streams per connection; reconnect with backoff.
+  funding. At most 200 streams per connection; reconnect with backoff, and also when a
+  connection sends no data for 60 s while it still answers pings.
 - Per account (read key): spot user data via WS API `wss://ws-api.binance.com:443/ws-api/v3`
   (`session.logon` for Ed25519 keys, then `userDataStream.subscribe`; HMAC keys use
   `userDataStream.subscribe.signature`) -> `executionReport`, `outboundAccountPosition`.
@@ -146,7 +147,9 @@ rows and 60 days of hourly blocks are reloaded on start; per-account series are 
 
 Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 - `stream_down`: a feed disconnected > 10 s (crit for user data).
-- `stale_quote`: no bookTicker on a tracked instrument > `stale_quote_s` while its session is open.
+- `stream_silent`: a public market-data connection with no data for 45 s while the session is open.
+- `stale_quote`: no bookTicker on a tracked instrument > `stale_quote_s` (default 60) while its session is open.
+  bookTicker only sends on a change at the top of the book, and thin markets can sit unchanged for tens of seconds.
 - `orders_10s`, `orders_1d`: unfilled order count > 80 % of the limit.
 - `rest_ban`: 418 or 429 seen (also engine rate-limit cooldowns).
 - `fee_change`: commission differs from the first value seen; `fee_expiry` within 7 days if configured.

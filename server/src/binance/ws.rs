@@ -118,15 +118,18 @@ pub async fn connect(url: &str) -> anyhow::Result<WsStream> {
 }
 
 /// Read one connection until it ends: Ok(close code) on a close, Err on an error.
-async fn read_loop(conn: &mut WsConn, feed: &FeedRef, on_msg: &mut impl FnMut(&str)) -> anyhow::Result<u16> {
+/// With `idle`, a connection that answers pings but sends no data for that long is ended too.
+async fn read_loop(conn: &mut WsConn, feed: &FeedRef, on_msg: &mut impl FnMut(&str), idle: Option<Duration>) -> anyhow::Result<u16> {
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     let mut last_rx = Instant::now();
+    let mut last_data = Instant::now();
     loop {
         tokio::select! {
             m = conn.ws.next() => {
                 last_rx = Instant::now();
                 match m {
                     Some(Ok(Message::Text(t))) => {
+                        last_data = Instant::now();
                         feed.borrow_mut().hit(1);
                         on_msg(t.as_str());
                     }
@@ -147,6 +150,9 @@ async fn read_loop(conn: &mut WsConn, feed: &FeedRef, on_msg: &mut impl FnMut(&s
                 if last_rx.elapsed() > HEARTBEAT + HEARTBEAT / 2 {
                     anyhow::bail!("heartbeat timeout");
                 }
+                if let Some(idle) = idle && last_data.elapsed() > idle {
+                    anyhow::bail!("no data for {}s", idle.as_secs());
+                }
                 conn.ws.send(Message::Ping(Default::default())).await?;
             }
         }
@@ -155,7 +161,7 @@ async fn read_loop(conn: &mut WsConn, feed: &FeedRef, on_msg: &mut impl FnMut(&s
 
 /// Connect, dispatch text messages, reconnect with backoff; returns only on cancel (drop).
 /// `on_msg` gets the raw JSON text; `on_open` runs on each new connection before the read loop.
-pub async fn run_ws<U, M, O>(mut url: U, feed: FeedRef, mut on_msg: M, mut on_open: O)
+pub async fn run_ws<U, M, O>(mut url: U, feed: FeedRef, mut on_msg: M, mut on_open: O, idle: Option<Duration>)
 where
     U: FnMut() -> String,
     M: FnMut(&str),
@@ -175,7 +181,7 @@ where
             let (tx, rx) = mpsc::unbounded_channel();
             let mut conn = WsConn { ws, handle: WsHandle { tx }, rx };
             on_open(&mut conn).await?;
-            read_loop(&mut conn, &feed, &mut on_msg).await
+            read_loop(&mut conn, &feed, &mut on_msg, idle).await
         }
         .await;
         {
@@ -191,6 +197,10 @@ where
         backoff = (backoff * 2.0).min(30.0);
     }
 }
+
+/// A public connection with streams that sends nothing for this long is reconnected: the busiest
+/// connection carries many markets, so a full minute of silence means it has stopped, not that they are quiet.
+pub const PUBLIC_IDLE: Duration = Duration::from_secs(60);
 
 static IDS: AtomicU64 = AtomicU64::new(1);
 
@@ -312,7 +322,7 @@ impl StreamMux {
             c.in_url = c.streams.len();
             format!("{base}?streams={}", c.streams.join("/"))
         };
-        let task = tokio::task::spawn_local(run_ws(url, feed, on_msg, on_open));
+        let task = tokio::task::spawn_local(run_ws(url, feed, on_msg, on_open, Some(PUBLIC_IDLE)));
         c.borrow_mut().task = Some(task);
     }
 

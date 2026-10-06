@@ -121,7 +121,7 @@ impl Default for AlertCfg {
             inventory_cap_usd: 10000.0,
             asset_cap_usd: 1000.0,
             markout_floor_bps: -1.0,
-            stale_quote_s: 5.0,
+            stale_quote_s: 60.0,
             futures_margin_min_usd: 100.0,
             drop_1h_usd: 100.0,
             quote_idle_usd: 10.0,
