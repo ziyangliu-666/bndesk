@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { Select, SegmentedControl } from "@mantine/core";
 import { useStore, serverNow } from "../store";
 import { getJSON, type HistBar, type HistDay, type HistFill, type History as Hist, type Kline } from "../api";
-import { DeskChart, InstrumentChart } from "../components/HistoryChart";
+import { DeskChart, InstrumentChart, type PnlView } from "../components/HistoryChart";
 import { DaysTable, HourBars } from "../components/PnlDays";
 
 type Mode = "desk" | "instrument";
@@ -18,6 +18,7 @@ const TAIL_REFRESH = 2_000; // the latest bars, so the lines move while the page
 
 interface HistState {
   mode: Mode;
+  view: PnlView;
   step: number;
   inst: string | null; // "SYMBOL|venue"
   days: HistDay[];
@@ -26,6 +27,7 @@ interface HistState {
 // Kept outside the page so the choices survive switching tabs.
 const useHist = create<HistState>((set) => ({
   mode: "desk",
+  view: "day",
   step: 60,
   inst: null,
   days: [],
@@ -217,6 +219,23 @@ export function History() {
           onChange={(v) => h.set({ step: Number(v) })}
           data={STEPS.map((s) => ({ value: String(s), label: STEP_LABEL[s]! }))}
         />
+        {h.mode === "desk" && (
+          <>
+            <span className="hist-sep" />
+            <SegmentedControl
+              size="xs"
+              className="mini-seg"
+              value={h.view}
+              onChange={(v) => h.set({ view: v as PnlView })}
+              data={[
+                { value: "day", label: "Day" },
+                { value: "cum", label: "Cumulative" },
+                { value: "bar", label: "Per bar" },
+              ]}
+              title="Day: each day starts at 0. Cumulative: from the left edge of the chart. Per bar: what each bar made"
+            />
+          </>
+        )}
         <div className="hist-status">
           {cur.err ? (
             <span className="warn-text">{cur.err}</span>
@@ -231,7 +250,7 @@ export function History() {
       </div>
       <section className="panel hist-panel">
         {h.mode === "desk" ? (
-          <DeskChart key="desk" bars={deskBars} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={fitKey} onOlder={onOlder} />
+          <DeskChart key="desk" bars={deskBars} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={fitKey} onOlder={onOlder} view={h.view} />
         ) : (
           <InstrumentChart
             key="inst"

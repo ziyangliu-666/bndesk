@@ -33,6 +33,7 @@ import { serverNow, useStore } from "../store";
 const VOL = "rgba(163,173,189,0.42)";
 const GRID = "#0e1217";
 const HEDGE = HEDGE_COLOR;
+const OTHER_COLOR = "#4a5262"; // the per-bar remainder: quiet, it is usually small
 const VOL_WORD = "#a3adbd";
 export const sec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 
@@ -156,6 +157,116 @@ function fitLatest(chart: IChartApi | null, n: number) {
   else chart.timeScale().setVisibleLogicalRange({ from: n - VIEW_BARS, to: n + 2 });
 }
 
+export type PnlView = "day" | "cum" | "bar";
+const DAY_MS = 86_400_000;
+const PARTS = ["pi", "mm", "hedge"] as const;
+
+/** The P&L of `bars` (running totals from the first bar) as one view: "day" restarts at each day start (the
+ *  dayStart grid), "cum" starts at 0 on bar `k0`, "bar" is what each bar made by itself. Other fields pass. */
+export function viewBars(bars: HistBar[], view: PnlView, dayStart: number, k0 = 0): HistBar[] {
+  const out: HistBar[] = new Array(bars.length);
+  const last: Record<string, number | null> = { c: null, pi: null, mm: null, hedge: null };
+  let base: Record<string, number> = { c: 0, pi: 0, mm: 0, hedge: 0 };
+  let day = NaN;
+  if (view === "cum") {
+    const b0 = bars[Math.min(Math.max(k0, 0), bars.length - 1)];
+    base = { c: b0?.o ?? 0, pi: 0, mm: 0, hedge: 0 };
+    for (const f of PARTS) {
+      let v: number | null = null;
+      for (let i = Math.min(k0, bars.length) - 1; i >= 0 && v == null; i--) v = bars[i]![f];
+      for (let i = Math.max(k0, 0); i < bars.length && v == null; i++) v = bars[i]![f];
+      base[f] = v ?? 0;
+    }
+  }
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i]!;
+    if (view === "day") {
+      const d = dayStart + Math.floor((b.t - dayStart) / DAY_MS) * DAY_MS;
+      if (d !== day) {
+        // the running totals at the end of the previous day; the first day in view starts from 0
+        if (i > 0) base = { c: last.c ?? 0, pi: last.pi ?? 0, mm: last.mm ?? 0, hedge: last.hedge ?? 0 };
+        day = d;
+      }
+    }
+    if (view === "bar") {
+      const prev = { ...last };
+      const d = (f: "pi" | "mm" | "hedge") => (b[f] == null ? null : b[f]! - (prev[f] ?? b[f]!));
+      const o = prev.c ?? b.o;
+      out[i] = { ...b, o: 0, h: b.h - o, l: b.l - o, c: b.c - o, pi: d("pi"), mm: d("mm"), hedge: d("hedge") };
+    } else {
+      const sub = (v: number | null, f: string) => (v == null ? null : v - base[f]!);
+      out[i] = { ...b, o: b.o - base.c!, h: b.h - base.c!, l: b.l - base.c!, c: b.c - base.c!, pi: sub(b.pi, "pi"), mm: sub(b.mm, "mm"), hedge: sub(b.hedge, "hedge") };
+    }
+    last.c = b.c;
+    for (const f of PARTS) if (b[f] != null) last[f] = b[f];
+  }
+  return out;
+}
+
+/** A bar's P&L split into market making, inventory, hedge and the rest, each stacked away from 0 by sign:
+ *  for each part, the far edge of its segment (later parts outside earlier ones). */
+function stackParts(b: HistBar): { pos: number[]; neg: number[] } {
+  const mm = b.mm ?? 0;
+  const inv = b.pi != null && b.mm != null ? b.pi - b.mm : 0;
+  const he = b.hedge ?? 0;
+  const parts = [mm, inv, he, b.c - (b.pi ?? 0) - he];
+  const pos: number[] = [], neg: number[] = [];
+  let p = 0, n = 0;
+  for (const v of parts) {
+    if (v > 0) p += v;
+    else n += v;
+    pos.push(p);
+    neg.push(n);
+  }
+  return { pos, neg };
+}
+
+type DeskSeries = {
+  candle: ISeriesApi<"Candlestick">;
+  pl: ISeriesApi<"Line">;
+  stack: ISeriesApi<"Histogram">[];
+  pi: ISeriesApi<"Line">;
+  mm: ISeriesApi<"Line">;
+  ip: ISeriesApi<"Line">;
+  he: ISeriesApi<"Line">;
+};
+
+/** The P&L series of one view: candles and lines ("day"), a Day PnL line and the parts ("cum"), stacked
+ *  per-bar parts ("bar"). The series a view does not use are left empty. */
+function draw(x: DeskSeries, vb: HistBar[], view: PnlView) {
+  const pt = (b: HistBar, v: number | null) => (v == null ? [] : [{ time: sec(b.t), value: v }]);
+  const lines = view !== "bar";
+  x.candle.setData(view === "day" ? vb.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c })) : []);
+  x.pl.setData(view === "cum" ? vb.map((b) => ({ time: sec(b.t), value: b.c })) : []);
+  x.pi.setData(lines ? vb.flatMap((b) => pt(b, b.pi)) : []);
+  x.mm.setData(lines ? vb.flatMap((b) => pt(b, b.mm)) : []);
+  x.ip.setData(lines ? vb.flatMap((b) => pt(b, b.pi == null || b.mm == null ? null : b.pi - b.mm)) : []);
+  x.he.setData(lines ? vb.flatMap((b) => pt(b, b.hedge)) : []);
+  const st = view === "bar" ? vb.map(stackParts) : [];
+  for (let k = 0; k < 4; k++)
+    for (const sgn of [0, 1])
+      x.stack[k * 2 + sgn]!.setData(vb.flatMap((b, i) => (view === "bar" ? [{ time: sec(b.t), value: (sgn ? st[i]!.neg : st[i]!.pos)[k]! }] : [])));
+}
+
+/** The newest bar of a view, as an update. */
+function drawLast(x: DeskSeries, b: HistBar, view: PnlView) {
+  const t = sec(b.t);
+  if (view === "day") x.candle.update({ time: t, open: b.o, high: b.h, low: b.l, close: b.c });
+  if (view === "cum") x.pl.update({ time: t, value: b.c });
+  if (view === "bar") {
+    const st = stackParts(b);
+    for (let k = 0; k < 4; k++) {
+      x.stack[k * 2]!.update({ time: t, value: st.pos[k]! });
+      x.stack[k * 2 + 1]!.update({ time: t, value: st.neg[k]! });
+    }
+    return;
+  }
+  if (b.pi != null) x.pi.update({ time: t, value: b.pi });
+  if (b.mm != null) x.mm.update({ time: t, value: b.mm });
+  if (b.pi != null && b.mm != null) x.ip.update({ time: t, value: b.pi - b.mm });
+  if (b.hedge != null) x.he.update({ time: t, value: b.hedge });
+}
+
 /** Today's live figures as the newest bar. Within a day each running total is the last bar before the day
  *  start (yesterday's close, in the same running total) plus today's own figure; `prev` is the newest bar. */
 function liveBar(bars: HistBar[], prev: HistBar | null, dayStart: number, stepMs: number, now: number,
@@ -264,13 +375,15 @@ const sgn = (v: number | null | undefined) => (v == null || v === 0 ? "" : v > 0
 // =============================== desk ===============================
 
 
-export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
-  bars: HistBar[]; days: HistDay[]; step: number; tz: TzMode; fitKey: string; onOlder?: () => void;
+export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
+  bars: HistBar[]; days: HistDay[]; step: number; tz: TzMode; fitKey: string; onOlder?: () => void; view: PnlView;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<{
     candle: ISeriesApi<"Candlestick">;
+    pl: ISeriesApi<"Line">;
+    stack: ISeriesApi<"Histogram">[]; // [part][sign]: market making, inventory, hedge, other × up, down
     pi: ISeriesApi<"Line">;
     mm: ISeriesApi<"Line">;
     ip: ISeriesApi<"Line">;
@@ -290,12 +403,31 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
   const barsRef = useRef(bars);
   barsRef.current = bars;
   const hiddenRef = useRef<string[]>([]);
+  const sm = useStore((st) => st.snap?.summary);
+  const expo = useStore((st) => st.snap?.exposure);
+  const dsRef = useRef(0);
+  dsRef.current = sm?.day_start ?? days[days.length - 1]?.start ?? 0;
+  const shown = useRef<HistBar[]>([]);
+  // the cumulative view starts at the first bar on screen: re-based once a drag or zoom settles
+  const [k0, setK0] = useState(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  useEffect(() => {
+    const r = chart.current?.timeScale().getVisibleLogicalRange();
+    if (view === "cum" && r) setK0(Math.max(0, Math.ceil(r.from)));
+  }, [view]);
 
   useEffect(() => {
     const c = createChart(host.current!, chartOptions(tz, step));
     chart.current = c;
     c.subscribeCrosshairMove(onMove);
     onLeftEdge(c, older);
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    c.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+      if (!r || viewRef.current !== "cum") return;
+      clearTimeout(settle);
+      settle = setTimeout(() => setK0(Math.max(0, Math.ceil(r.from))), 200);
+    });
     const candle = c.addSeries(CandlestickSeries, {
       upColor: C.up,
       downColor: C.down,
@@ -309,6 +441,13 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
     const line = (color: string, pane: number, extra = {}) =>
       c.addSeries(LineSeries, { color, lineWidth: 1, crosshairMarkerVisible: false, priceFormat: usdFmt, ...quiet, ...extra }, pane);
     const right = {};
+    // per-bar view: outer segments first, so each part's inner edge is painted over by the part inside it
+    const stackColors = [MM_COLOR, INVPNL_COLOR, HEDGE, OTHER_COLOR];
+    const stack: ISeriesApi<"Histogram">[] = new Array(8);
+    for (let k = 3; k >= 0; k--)
+      for (const sgn of [0, 1])
+        stack[k * 2 + sgn] = c.addSeries(HistogramSeries, { color: stackColors[k], priceFormat: usdFmt, ...quiet, visible: false }, 0);
+    const pl = line(C.ink, 0, { visible: false });
     const he = line(HEDGE, 0, right);
     const ip = line(INVPNL_COLOR, 0, right);
     const mm = line(MM_COLOR, 0, right);
@@ -328,7 +467,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
       x.attachPrimitive(p);
       return p;
     });
-    s.current = { candle, pi, mm, ip, he, vol, inv, fut, seps, labels };
+    s.current = { candle, pl, stack, pi, mm, ip, he, vol, inv, fut, seps, labels };
     return () => {
       c.remove();
       chart.current = null;
@@ -352,26 +491,21 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
       step,
     );
     x.seps.forEach((p) => p.set(st));
-    x.candle.setData(bars.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c })));
-    const ln = (k: "pi" | "mm" | "hedge" | "inventory" | "futures") =>
-      bars.flatMap((b) => (b[k] == null ? [] : [{ time: sec(b.t), value: b[k]! }]));
-    x.pi.setData(ln("pi"));
-    x.mm.setData(ln("mm"));
-    x.ip.setData(bars.flatMap((b) => (b.pi == null || b.mm == null ? [] : [{ time: sec(b.t), value: b.pi - b.mm }])));
-    x.he.setData(ln("hedge"));
-    x.inv.setData(ln("inventory"));
-    x.fut.setData(ln("futures"));
+    const vb = viewBars(bars, view, dsRef.current, k0);
+    shown.current = vb;
+    draw(x, vb, view);
+    x.inv.setData(bars.flatMap((b) => (b.inventory == null ? [] : [{ time: sec(b.t), value: b.inventory }])));
+    x.fut.setData(bars.flatMap((b) => (b.futures == null ? [] : [{ time: sec(b.t), value: b.futures }])));
     x.vol.setData(bars.map((b) => ({ time: sec(b.t), value: b.volume })));
     if (fitKey !== lastFit.current) {
       lastFit.current = fitKey;
       fitLatest(chart.current, bars.length);
     } else keepView(chart.current, first.current, bars.map((b) => b.t));
     first.current = bars[0]?.t ?? null;
-  }, [bars, days, step, fitKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bars, days, step, fitKey, view, k0]);
 
   // the newest bar follows the live figures, like the Desk page, between fetches
-  const sm = useStore((st) => st.snap?.summary);
-  const expo = useStore((st) => st.snap?.exposure);
   const live = useRef<HistBar | null>(null);
   const [liveB, setLiveB] = useState<HistBar | null>(null);
   useEffect(() => {
@@ -388,24 +522,23 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
     live.current = b;
     const t = sec(b.t);
     if (!idx.current.has(t)) idx.current.set(t, bars.length);
-    x.candle.update({ time: t, open: b.o, high: b.h, low: b.l, close: b.c });
-    if (b.pi != null) x.pi.update({ time: t, value: b.pi });
-    if (b.mm != null) x.mm.update({ time: t, value: b.mm });
-    if (b.pi != null && b.mm != null) x.ip.update({ time: t, value: b.pi - b.mm });
-    if (b.hedge != null) x.he.update({ time: t, value: b.hedge });
+    const n = bars.length && bars[bars.length - 1]!.t === b.t ? bars.length - 1 : bars.length;
+    const shownLive = viewBars([...bars.slice(0, n), b], view, sm.day_start, k0)[n]!;
+    drawLast(x, shownLive, view);
     x.inv.update({ time: t, value: b.inventory! });
     x.fut.update({ time: t, value: b.futures! });
-    setLiveB(b);
-  }, [sm, expo, bars, step]);
+    setLiveB(shownLive);
+  }, [sm, expo, bars, step, view, k0]);
 
   const at = hover ?? bars.length - 1;
-  const b = liveB && (hover == null || liveB.t === bars[at]?.t || at >= bars.length) ? liveB : bars[at];
+  const b = liveB && (hover == null || liveB.t === bars[at]?.t || at >= bars.length) ? liveB : shown.current[at];
   const has = (k: "pi" | "mm" | "hedge") => bars.some((x) => x[k] != null);
   const names = [
     "Day PnL",
     ...(has("pi") ? ["Trading PnL"] : []),
     ...(has("mm") ? ["Market making", "Inventory PnL"] : []),
     ...(has("hedge") ? ["Hedge"] : []),
+    ...(view === "bar" ? ["Other"] : []),
     "Volume",
     "Inventory",
     "Futures",
@@ -417,17 +550,18 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
     const x = s.current;
     const c = chart.current;
     if (!x || !c) return;
-    const by: Record<string, { applyOptions: (o: { visible: boolean }) => void }> = {
-      "Day PnL": x.candle,
-      "Trading PnL": x.pi,
-      "Market making": x.mm,
-      "Inventory PnL": x.ip,
-      Hedge: x.he,
-      Volume: x.vol,
-      Inventory: x.inv,
-      Futures: x.fut,
+    const by: Record<string, { applyOptions: (o: { visible: boolean }) => void }[]> = {
+      "Day PnL": [x.candle, x.pl],
+      "Trading PnL": [x.pi],
+      "Market making": [x.mm, x.stack[0]!, x.stack[1]!],
+      "Inventory PnL": [x.ip, x.stack[2]!, x.stack[3]!],
+      Hedge: [x.he, x.stack[4]!, x.stack[5]!],
+      Other: [x.stack[6]!, x.stack[7]!],
+      Volume: [x.vol],
+      Inventory: [x.inv],
+      Futures: [x.fut],
     };
-    for (const [name, ser] of Object.entries(by)) ser.applyOptions({ visible: !tog.hidden.includes(name) });
+    for (const [name, ser] of Object.entries(by)) for (const z of ser) z.applyOptions({ visible: !tog.hidden.includes(name) });
     // a pane with nothing shown folds away
     const off = (...n: string[]) => n.every((x) => tog.hidden.includes(x));
     const panes = c.panes();
@@ -447,15 +581,24 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
           <div className="hl-row">
             <span className="hl-time">{barTime(b.t, tz, step)}</span>
             <span className={"hl-kv" + (off("Day PnL") ? " off" : "")}>{w("Day PnL", C.ink)}</span>
-            <KV k="O" off={off("Day PnL")}>{pnl(b.o)}</KV>
-            <KV k="H" off={off("Day PnL")}>{pnl(b.h)}</KV>
-            <KV k="L" off={off("Day PnL")}>{pnl(b.l)}</KV>
-            <KV k="C" off={off("Day PnL")}>
-              <span className={sgn(b.c)}>{pnl(b.c)}</span>
-            </KV>
-            <KV k="bar" off={off("Day PnL")}>
-              <span className={sgn(b.c - b.o)}>{pnl(b.c - b.o)}</span>
-            </KV>
+            {view === "day" ? (
+              <>
+                <KV k="O" off={off("Day PnL")}>{pnl(b.o)}</KV>
+                <KV k="H" off={off("Day PnL")}>{pnl(b.h)}</KV>
+                <KV k="L" off={off("Day PnL")}>{pnl(b.l)}</KV>
+                <KV k="C" off={off("Day PnL")}>
+                  <span className={sgn(b.c)}>{pnl(b.c)}</span>
+                </KV>
+                <KV k="bar" off={off("Day PnL")}>
+                  <span className={sgn(b.c - b.o)}>{pnl(b.c - b.o)}</span>
+                </KV>
+              </>
+            ) : (
+              <span className={"hl-v " + sgn(b.c)}>{pnl(b.c)}</span>
+            )}
+            {view === "bar" && (
+              <KV k={w("Other", OTHER_COLOR)} off={off("Other")}>{pnl(b.c - (b.pi ?? 0) - (b.hedge ?? 0))}</KV>
+            )}
           </div>
           <div className="hl-row">
             {has("pi") && <KV k={w("Trading PnL", S2)} off={off("Trading PnL")}>{pnl(b.pi)}</KV>}
