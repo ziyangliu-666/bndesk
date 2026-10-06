@@ -25,7 +25,7 @@ use crate::sessions;
 /// Bar sizes of `/api/history`, seconds.
 pub const STEPS: [i64; 6] = [60, 300, 900, 3600, 14400, 86400];
 /// Bars at most per response (history and klines); a longer range keeps its latest part.
-pub const MAX_BARS: i64 = 5000;
+pub const MAX_BARS: i64 = 25_000;
 pub const MAX_FILLS: i64 = 20000;
 pub const INTERVALS: [(&str, i64); 6] = [
     ("1m", 60_000), ("5m", 300_000), ("15m", 900_000), ("1h", 3_600_000), ("4h", 14_400_000), ("1d", 86_400_000),

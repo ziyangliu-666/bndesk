@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { Select, SegmentedControl } from "@mantine/core";
 import { useStore, serverNow } from "../store";
-import { getJSON, type HistDay, type HistFill, type History as Hist, type Kline } from "../api";
+import { getJSON, type HistBar, type HistDay, type HistFill, type History as Hist, type Kline } from "../api";
 import { DeskChart, InstrumentChart } from "../components/HistoryChart";
 import { DaysTable, HourBars } from "../components/PnlDays";
 
@@ -10,8 +10,11 @@ type Mode = "desk" | "instrument";
 
 const STEPS = [60, 300, 900, 3600, 14400, 86400] as const;
 const STEP_LABEL: Record<number, string> = { 60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d" };
-const MAX_BARS = 5000;
+const MAX_BARS = 5000; // bars per chunk; the server returns up to MAX_CHUNKS of them
+const MAX_CHUNKS = 5;
+const DAY = 86_400_000;
 const REFRESH = 30_000;
+const TAIL_REFRESH = 2_000; // the latest bars, so the lines move while the page is open
 
 interface HistState {
   mode: Mode;
@@ -29,18 +32,43 @@ const useHist = create<HistState>((set) => ({
   set: (p) => set(p),
 }));
 
-/** The window for a step: `chunks` × MAX_BARS bars back from now, starting on a desk day so the running
- *  P&L starts from a day's open; `all` once it reaches the first desk day. */
-function resolveRange(step: number, chunks: number, days: HistDay[], now: number): { from: number; to: number; all: boolean } {
+/** The window for a step: `chunks` × MAX_BARS bars back from now, moved forward onto a day start (any known
+ *  `dayStart`, else UTC midnight) so the running P&L starts from a day's open. */
+function resolveRange(step: number, chunks: number, dayStart: number, now: number): { from: number; to: number } {
   const reach = now - chunks * MAX_BARS * step * 1000;
-  const first = days[0]?.start;
-  if (first == null || reach <= first) return { from: first ?? reach, to: now, all: first != null };
-  return { from: days.find((d) => d.start >= reach)?.start ?? reach, to: now, all: false };
+  return { from: reach + (((dayStart - reach) % DAY) + DAY) % DAY, to: now };
+}
+
+/** Each running total of `tail` (fetched from a later start) differs from `full`'s by a constant: it is read
+ *  off the first bar both hold in full, and `tail` takes over from there. */
+function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
+  if (!tail.length) return full;
+  const j = full.findIndex((b) => b.t === tail[0]!.t);
+  if (j < 0) return full;
+  const off: Record<string, number> = { c: full[j]!.o - tail[0]!.o };
+  for (const k of ["pi", "mm", "realized", "hedge"] as const) {
+    for (let i = j; i < full.length - 1 && i - j < tail.length; i++) {
+      const a = full[i]![k], b = tail[i - j]![k];
+      if (a != null && b != null) {
+        off[k] = a - b;
+        break;
+      }
+    }
+  }
+  const add = (v: number | null, k: string) => (v == null || off[k] == null ? null : v + off[k]!);
+  const c = off.c!;
+  return [
+    ...full.slice(0, j),
+    ...tail.map((b) => ({
+      ...b, o: b.o + c, h: b.h + c, l: b.l + c, c: b.c + c,
+      pi: add(b.pi, "pi"), mm: add(b.mm, "mm"), realized: add(b.realized, "realized"), hedge: add(b.hedge, "hedge"),
+    })),
+  ];
 }
 
 type Load<T> = { key: string; data: T | null; err: string | null; loading: boolean };
 
-function useFetch<T>(key: string | null, run: (signal: AbortSignal) => Promise<T>, live: boolean): Load<T> {
+function useFetch<T>(key: string | null, run: (signal: AbortSignal) => Promise<T>, live: boolean, every = REFRESH): Load<T> {
   const [st, setSt] = useState<Load<T>>({ key: "", data: null, err: null, loading: false });
   useEffect(() => {
     if (!key) return;
@@ -57,13 +85,13 @@ function useFetch<T>(key: string | null, run: (signal: AbortSignal) => Promise<T
       );
     };
     go(true);
-    const id = live ? setInterval(() => go(false), REFRESH) : undefined;
+    const id = live ? setInterval(() => go(false), every) : undefined;
     return () => {
       ac.abort();
       if (id) clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, live]);
+  }, [key, live, every]);
   return st;
 }
 
@@ -82,10 +110,10 @@ export function History() {
   const step = h.step;
   const live = true; // the window ends at now: each refresh resolves it afresh
   // dragging to the left edge loads one more chunk of older bars, until the first desk day
-  const viewKey = `${h.mode}|${inst}|${step}|${h.days[0]?.start ?? ""}`;
+  const viewKey = `${h.mode}|${inst}|${step}`;
   const [more, setMore] = useState({ key: "", chunks: 1 });
   const chunks = more.key === viewKey ? more.chunks : 1;
-  const span = () => resolveRange(step, chunks, h.days, serverNow());
+  const span = () => resolveRange(step, chunks, h.days[h.days.length - 1]?.start ?? 0, serverNow());
 
   const deskKey = h.mode === "desk" ? `${viewKey}#${chunks}` : null;
   const desk = useFetch<Hist>(
@@ -94,7 +122,21 @@ export function History() {
       const r = span();
       return getJSON<Hist>("/api/history", { from: r.from, to: r.to, step }, signal);
     },
+    false, // loaded once per view: the tail below keeps its end current
+  );
+  // the tail starts on the full data's second-to-last bar: complete there, so the two agree on it
+  const full = desk.key === deskKey ? desk.data?.bars : undefined;
+  const tailFrom = full && full.length >= 2 ? full[full.length - 2]!.t : null;
+  const tailKey = deskKey && tailFrom != null ? `${deskKey}|${tailFrom}` : null;
+  const tail = useFetch<Hist>(
+    tailKey,
+    (signal) => getJSON<Hist>("/api/history", { from: tailFrom!, to: serverNow(), step }, signal),
     live,
+    TAIL_REFRESH,
+  );
+  const deskBars = useMemo(
+    () => (full && tail.key === tailKey && tail.data ? joinTail(full, tail.data.bars) : (desk.data?.bars ?? [])),
+    [full, tail.key, tail.data, tailKey, desk.data],
   );
   useEffect(() => {
     const d = desk.data?.days;
@@ -128,7 +170,11 @@ export function History() {
   const fetchKey = (h.mode === "desk" ? deskKey : instKey) ?? "";
   const stale = cur.key !== fetchKey;
   const onOlder = () => {
-    if (!cur.loading && cur.key === fetchKey && !span().all) setMore({ key: viewKey, chunks: chunks + 1 });
+    if (cur.loading || cur.key !== fetchKey || chunks >= MAX_CHUNKS) return;
+    // nothing older exists when the data starts more than a day after the start it was asked for
+    const firstT = h.mode === "desk" ? desk.data?.bars[0]?.t : instr.data?.klines[0]?.[0];
+    if (firstT == null || firstT > span().from + DAY) return;
+    setMore({ key: viewKey, chunks: chunks + 1 });
   };
   const fitKey = cur.key.split("#")[0]!; // the view the loaded bars belong to: refit only once they arrive
   const empty = !cur.loading && !cur.err && cur.data != null && (h.mode === "desk" ? desk.data!.bars.length === 0 : instr.data!.klines.length === 0);
@@ -185,7 +231,7 @@ export function History() {
       </div>
       <section className="panel hist-panel">
         {h.mode === "desk" ? (
-          <DeskChart key="desk" bars={desk.data?.bars ?? []} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={fitKey} onOlder={onOlder} />
+          <DeskChart key="desk" bars={deskBars} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={fitKey} onOlder={onOlder} />
         ) : (
           <InstrumentChart
             key="inst"
