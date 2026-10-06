@@ -4,8 +4,6 @@
 
 A high-performance, real-time dashboard for high-frequency market making on Binance, written in Rust and especially designed for [FastMM](https://github.com/ziyangliu-666/FastMM).
 
-bndesk streams every account, order and fill into the browser as it happens, and renders large volumes of quotes, fills and P&L at very low overhead.
-
 ![Desk](docs/screenshots/desk.gif)
 
 ![Orders](docs/screenshots/orders.gif)
