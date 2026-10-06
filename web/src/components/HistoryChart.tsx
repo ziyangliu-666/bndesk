@@ -245,12 +245,9 @@ export function DeskChart({ bars, days, step, tz, fitKey }: { bars: HistBar[]; d
       wickUpColor: C.up,
       wickDownColor: C.down,
       priceFormat: usdFmt,
-      // Day PnL is the small net of much larger parts (inventory and hedge offset): its own scale, on the left
-      priceScaleId: "left",   // scaled to the candles alone, so their bodies fill the pane
+      // one scale with its parts, so the lines and the candles compare at the same height
     });
-    c.applyOptions({ leftPriceScale: { visible: true, borderColor: C.rule, minimumWidth: 64 } });
-    candle.priceScale().applyOptions({ scaleMargins: { top: 0.14, bottom: 0.06 } });
-    c.priceScale("right", 0).applyOptions({ scaleMargins: { top: 0.14, bottom: 0.06 } });
+    candle.priceScale().applyOptions({ scaleMargins: { top: 0.24, bottom: 0.06 } }); // clear of the two legend rows
     const line = (color: string, pane: number, extra = {}) =>
       c.addSeries(LineSeries, { color, lineWidth: 1, crosshairMarkerVisible: false, priceFormat: usdFmt, ...quiet, ...extra }, pane);
     const right = {};
