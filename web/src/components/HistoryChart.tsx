@@ -28,6 +28,7 @@ import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1, S2, S
 import { SeriesWord, useSeriesToggle } from "./ui";
 import { DASH, int, num, pnl, price, qty, usdShort, type TzMode } from "../format";
 import type { HistBar, HistDay, HistFill, Kline } from "../api";
+import { serverNow, useStore } from "../store";
 
 const VOL = "rgba(163,173,189,0.42)";
 const GRID = "#0e1217";
@@ -153,6 +154,42 @@ function fitLatest(chart: IChartApi | null, n: number) {
   if (!chart) return;
   if (n <= VIEW_BARS) chart.timeScale().fitContent();
   else chart.timeScale().setVisibleLogicalRange({ from: n - VIEW_BARS, to: n + 2 });
+}
+
+/** Today's live figures as the newest bar. Within a day each running total is the last bar before the day
+ *  start (yesterday's close, in the same running total) plus today's own figure; `prev` is the newest bar. */
+function liveBar(bars: HistBar[], prev: HistBar | null, dayStart: number, stepMs: number, now: number,
+                 v: { pnl: number; pi: number; mm: number; hedge: number | null; inventory: number; futures: number }): HistBar | null {
+  const last = bars[bars.length - 1];
+  if (!last) return null;
+  let k = bars.length - 1;
+  while (k >= 0 && bars[k]!.t >= dayStart) k--;
+  const base = (f: (b: HistBar) => number | null) => {
+    for (let i = k; i >= 0; i--) {
+      const x = f(bars[i]!);
+      if (x != null) return x;
+    }
+    return 0;
+  };
+  const t = dayStart + Math.floor((now - dayStart) / stepMs) * stepMs;
+  if (t < last.t) return null;
+  const c = base((b) => b.c) + v.pnl;
+  const open = prev && prev.t === t ? prev : t === last.t ? last : null;
+  return {
+    t,
+    o: open ? open.o : c,
+    h: Math.max(open ? open.h : c, c),
+    l: Math.min(open ? open.l : c, c),
+    c,
+    pi: base((b) => b.pi) + v.pi,
+    mm: base((b) => b.mm) + v.mm,
+    realized: open?.realized ?? null,
+    hedge: v.hedge == null ? (open?.hedge ?? null) : base((b) => b.hedge) + v.hedge,
+    inventory: v.inventory,
+    futures: v.futures,
+    volume: open ? open.volume : 0,
+    fills: open ? open.fills : 0,
+  };
 }
 
 /** Asks for older bars when the view comes within a few bars of the left edge. */
@@ -332,7 +369,37 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
     first.current = bars[0]?.t ?? null;
   }, [bars, days, step, fitKey]);
 
-  const b = bars[hover ?? bars.length - 1];
+  // the newest bar follows the live figures, like the Desk page, between fetches
+  const sm = useStore((st) => st.snap?.summary);
+  const expo = useStore((st) => st.snap?.exposure);
+  const live = useRef<HistBar | null>(null);
+  const [liveB, setLiveB] = useState<HistBar | null>(null);
+  useEffect(() => {
+    live.current = null;
+  }, [bars]);
+  useEffect(() => {
+    const x = s.current;
+    if (!x || !sm || !expo || !bars.length) return;
+    const b = liveBar(bars, live.current, sm.day_start, step * 1000, serverNow(), {
+      pnl: sm.pnl_day, pi: sm.pnl.trading, mm: sm.pnl.mm, hedge: expo.hedge_day?.hedge_pnl ?? null,
+      inventory: sm.inventory_value, futures: expo.futures_notional,
+    });
+    if (!b) return;
+    live.current = b;
+    const t = sec(b.t);
+    if (!idx.current.has(t)) idx.current.set(t, bars.length);
+    x.candle.update({ time: t, open: b.o, high: b.h, low: b.l, close: b.c });
+    if (b.pi != null) x.pi.update({ time: t, value: b.pi });
+    if (b.mm != null) x.mm.update({ time: t, value: b.mm });
+    if (b.pi != null && b.mm != null) x.ip.update({ time: t, value: b.pi - b.mm });
+    if (b.hedge != null) x.he.update({ time: t, value: b.hedge });
+    x.inv.update({ time: t, value: b.inventory! });
+    x.fut.update({ time: t, value: b.futures! });
+    setLiveB(b);
+  }, [sm, expo, bars, step]);
+
+  const at = hover ?? bars.length - 1;
+  const b = liveB && (hover == null || liveB.t === bars[at]?.t || at >= bars.length) ? liveB : bars[at];
   const has = (k: "pi" | "mm" | "hedge") => bars.some((x) => x[k] != null);
   const names = [
     "Day PnL",
