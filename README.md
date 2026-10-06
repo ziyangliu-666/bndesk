@@ -1,6 +1,6 @@
 # bndesk
 
-**[Live demo](https://ziy.bio/bndesk/)**
+**[See it in action](https://ziy.bio/bndesk/)**
 
 A high-performance, real-time dashboard for high-frequency market making on Binance, written in Rust and especially designed for [FastMM](https://github.com/ziyangliu-666/FastMM).
 
