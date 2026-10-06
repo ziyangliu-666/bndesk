@@ -508,6 +508,10 @@ impl Desk {
             if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
             }
+            // orders counted off the user stream today (read-only keys cannot ask Binance), so a restart keeps them
+            if let Some(v) = data.kv.get(&format!("orders1d:{}:{ds}", a.id)).and_then(|v| v.parse::<i64>().ok()) {
+                a.orders_1d = v;
+            }
         }
         info!("reloaded {} fills, {} series points, {} transfers", self.fills.borrow().fills.len(), self.series.len(),
               self.transfers.borrow().records.len());
@@ -921,6 +925,17 @@ impl Desk {
         if n.is_multiple_of(60 * TICKS_1S) {
             pnl_flush(&self.pnl, &self.store);
             self.put_day_real(self.day_start());
+            self.put_order_counts();
+        }
+    }
+
+    fn put_order_counts(&self) {
+        let ds = self.day_start();
+        for a in &self.accounts {
+            let a = a.borrow();
+            if a.no_order_counts {
+                self.store.put(Row::Kv(format!("orders1d:{}:{ds}", a.id), a.orders_1d.to_string()));
+            }
         }
     }
 
@@ -1242,6 +1257,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let d = desk.borrow();
     if d.pnl.borrow().started() {
         pnl_flush(&d.pnl, &d.store);
+        d.put_order_counts();
         d.put_day_real(d.day_start());
     }
     d.store.close();
