@@ -155,6 +155,21 @@ function fitLatest(chart: IChartApi | null, n: number) {
   else chart.timeScale().setVisibleLogicalRange({ from: n - VIEW_BARS, to: n + 2 });
 }
 
+/** Asks for older bars when the view comes within a few bars of the left edge. */
+function onLeftEdge(chart: IChartApi, older: { current?: () => void }) {
+  chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+    if (r && r.from < 10) older.current?.();
+  });
+}
+
+/** After older bars were put in front, move the view by as many bars so it shows the same time. */
+function keepView(chart: IChartApi | null, prevFirst: number | null, times: number[]) {
+  if (!chart || prevFirst == null || !times.length || times[0]! >= prevFirst) return;
+  const shift = times.findIndex((t) => t >= prevFirst);
+  const r = chart.timeScale().getVisibleLogicalRange();
+  if (r && shift > 0) chart.timeScale().setVisibleLogicalRange({ from: r.from + shift, to: r.to + shift });
+}
+
 /** Volume scale capped at 1.2 × the 98th percentile, so one huge bar does not flatten the rest. */
 export function capAt(values: number[]): number | null {
   const xs = values.filter((v) => v > 0).sort((a, b) => a - b);
@@ -212,7 +227,9 @@ const sgn = (v: number | null | undefined) => (v == null || v === 0 ? "" : v > 0
 // =============================== desk ===============================
 
 
-export function DeskChart({ bars, days, step, tz, fitKey }: { bars: HistBar[]; days: HistDay[]; step: number; tz: TzMode; fitKey: string }) {
+export function DeskChart({ bars, days, step, tz, fitKey, onOlder }: {
+  bars: HistBar[]; days: HistDay[]; step: number; tz: TzMode; fitKey: string; onOlder?: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<{
@@ -229,6 +246,9 @@ export function DeskChart({ bars, days, step, tz, fitKey }: { bars: HistBar[]; d
   } | null>(null);
   const idx = useRef(new Map<number, number>());
   const lastFit = useRef("");
+  const first = useRef<number | null>(null);
+  const older = useRef(onOlder);
+  older.current = onOlder;
   const [hover, onMove] = useCrosshairIndex(idx);
   const barsRef = useRef(bars);
   barsRef.current = bars;
@@ -238,6 +258,7 @@ export function DeskChart({ bars, days, step, tz, fitKey }: { bars: HistBar[]; d
     const c = createChart(host.current!, chartOptions(tz, step));
     chart.current = c;
     c.subscribeCrosshairMove(onMove);
+    onLeftEdge(c, older);
     const candle = c.addSeries(CandlestickSeries, {
       upColor: C.up,
       downColor: C.down,
@@ -307,7 +328,8 @@ export function DeskChart({ bars, days, step, tz, fitKey }: { bars: HistBar[]; d
     if (fitKey !== lastFit.current) {
       lastFit.current = fitKey;
       fitLatest(chart.current, bars.length);
-    }
+    } else keepView(chart.current, first.current, bars.map((b) => b.t));
+    first.current = bars[0]?.t ?? null;
   }, [bars, days, step, fitKey]);
 
   const b = bars[hover ?? bars.length - 1];
@@ -434,6 +456,7 @@ export function InstrumentChart({
   step,
   tz,
   fitKey,
+  onOlder,
 }: {
   klines: Kline[];
   fills: HistFill[];
@@ -441,6 +464,7 @@ export function InstrumentChart({
   step: number;
   tz: TzMode;
   fitKey: string;
+  onOlder?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
@@ -455,6 +479,9 @@ export function InstrumentChart({
   } | null>(null);
   const idx = useRef(new Map<number, number>());
   const lastFit = useRef("");
+  const first = useRef<number | null>(null);
+  const older = useRef(onOlder);
+  older.current = onOlder;
   const aggRef = useRef(new Map<number, Agg>());
   const volCap = useRef<number | null>(null);
   const [hover, onMove] = useCrosshairIndex(idx);
@@ -463,6 +490,7 @@ export function InstrumentChart({
     const c = createChart(host.current!, chartOptions(tz, step));
     chart.current = c;
     c.subscribeCrosshairMove(onMove);
+    onLeftEdge(c, older);
     const candle = c.addSeries(CandlestickSeries, {
       upColor: C.up,
       downColor: C.down,
@@ -554,7 +582,8 @@ export function InstrumentChart({
     if (fitKey !== lastFit.current) {
       lastFit.current = fitKey;
       fitLatest(chart.current, klines.length);
-    }
+    } else keepView(chart.current, first.current, klines.map((k) => k[0]));
+    first.current = klines[0]?.[0] ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [klines, fills, days, step, fitKey]);
 

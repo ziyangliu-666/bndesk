@@ -7,19 +7,14 @@ import { DeskChart, InstrumentChart } from "../components/HistoryChart";
 import { DaysTable, HourBars } from "../components/PnlDays";
 
 type Mode = "desk" | "instrument";
-type Range = "today" | "7d" | "30d" | "all" | "day";
 
 const STEPS = [60, 300, 900, 3600, 14400, 86400] as const;
 const STEP_LABEL: Record<number, string> = { 60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d" };
-const DEFAULT_STEP: Record<Range, number> = { today: 60, day: 60, "7d": 900, "30d": 3600, all: 86400 };
 const MAX_BARS = 5000;
-const DAY = 86_400_000;
 const REFRESH = 30_000;
 
 interface HistState {
   mode: Mode;
-  range: Range;
-  day: string | null;
   step: number;
   inst: string | null; // "SYMBOL|venue"
   days: HistDay[];
@@ -28,38 +23,19 @@ interface HistState {
 // Kept outside the page so the choices survive switching tabs.
 const useHist = create<HistState>((set) => ({
   mode: "desk",
-  range: "today",
-  day: null,
   step: 60,
   inst: null,
   days: [],
   set: (p) => set(p),
 }));
 
-function resolveRange(range: Range, day: string | null, days: HistDay[], now: number): { from: number; to: number; live: boolean } {
-  const utcMidnight = Math.floor(now / DAY) * DAY;
-  switch (range) {
-    case "today": {
-      const last = [...days].reverse().find((d) => d.start <= now);
-      return { from: last?.start ?? utcMidnight, to: now, live: true };
-    }
-    case "7d":
-      return { from: now - 7 * DAY, to: now, live: true };
-    case "30d":
-      return { from: now - 30 * DAY, to: now, live: true };
-    case "all":
-      return { from: days[0]?.start ?? now - 90 * DAY, to: now, live: true };
-    case "day": {
-      const i = days.findIndex((d) => d.day === day);
-      if (i < 0) return { from: utcMidnight, to: now, live: true };
-      const next = days[i + 1];
-      return { from: days[i]!.start, to: next ? next.start - 1 : now, live: !next };
-    }
-  }
-}
-const barsFor = (from: number, to: number, step: number) => Math.ceil((to - from) / (step * 1000));
-function fitStep(step: number, from: number, to: number): number {
-  return STEPS.find((s) => s >= step && barsFor(from, to, s) <= MAX_BARS) ?? 86400;
+/** The window for a step: `chunks` × MAX_BARS bars back from now, starting on a desk day so the running
+ *  P&L starts from a day's open; `all` once it reaches the first desk day. */
+function resolveRange(step: number, chunks: number, days: HistDay[], now: number): { from: number; to: number; all: boolean } {
+  const reach = now - chunks * MAX_BARS * step * 1000;
+  const first = days[0]?.start;
+  if (first == null || reach <= first) return { from: first ?? reach, to: now, all: first != null };
+  return { from: days.find((d) => d.start >= reach)?.start ?? reach, to: now, all: false };
 }
 
 type Load<T> = { key: string; data: T | null; err: string | null; loading: boolean };
@@ -95,8 +71,6 @@ export function History() {
   const h = useHist();
   const tz = useStore((s) => s.tz);
   const symbols = useStore((s) => s.snap?.symbols);
-  // Live ranges end at "now": the keys name the range, and each fetch resolves it afresh.
-  const now = serverNow();
 
   const instOptions = useMemo(() => {
     const rows = (symbols ?? []).slice().sort((a, b) => (a.venue === b.venue ? b.volume_day - a.volume_day : a.venue === "spot" ? -1 : 1));
@@ -105,12 +79,15 @@ export function History() {
   const inst = h.inst ?? instOptions[0]?.value ?? null;
   const [symbol, venue] = (inst ?? "|").split("|") as [string, "spot" | "usdm"];
 
-  const { from, to, live } = resolveRange(h.range, h.day, h.days, now);
-  const step = fitStep(h.step, from, to);
-  const span = () => resolveRange(h.range, h.day, h.days, serverNow());
-  const rangeKey = live ? `${h.range}|${h.day}|${h.days[0]?.start ?? ""}` : `${from}|${to}`;
+  const step = h.step;
+  const live = true; // the window ends at now: each refresh resolves it afresh
+  // dragging to the left edge loads one more chunk of older bars, until the first desk day
+  const viewKey = `${h.mode}|${inst}|${step}|${h.days[0]?.start ?? ""}`;
+  const [more, setMore] = useState({ key: "", chunks: 1 });
+  const chunks = more.key === viewKey ? more.chunks : 1;
+  const span = () => resolveRange(step, chunks, h.days, serverNow());
 
-  const deskKey = h.mode === "desk" ? `desk|${rangeKey}|${step}` : null;
+  const deskKey = h.mode === "desk" ? `${viewKey}#${chunks}` : null;
   const desk = useFetch<Hist>(
     deskKey,
     (signal) => {
@@ -133,7 +110,7 @@ export function History() {
     );
   }, [h.days.length]);
 
-  const instKey = h.mode === "instrument" && symbol ? `inst|${symbol}|${venue}|${rangeKey}|${step}` : null;
+  const instKey = h.mode === "instrument" && symbol ? `${viewKey}#${chunks}` : null;
   const instr = useFetch<{ klines: Kline[]; fills: HistFill[]; step: number }>(
     instKey,
     async (signal) => {
@@ -148,12 +125,14 @@ export function History() {
   );
 
   const cur = h.mode === "desk" ? desk : instr;
-  const fitKey = (h.mode === "desk" ? deskKey : instKey) ?? "";
-  const stale = cur.key !== fitKey;
+  const fetchKey = (h.mode === "desk" ? deskKey : instKey) ?? "";
+  const stale = cur.key !== fetchKey;
+  const onOlder = () => {
+    if (!cur.loading && cur.key === fetchKey && !span().all) setMore({ key: viewKey, chunks: chunks + 1 });
+  };
+  const fitKey = cur.key.split("#")[0]!; // the view the loaded bars belong to: refit only once they arrive
   const empty = !cur.loading && !cur.err && cur.data != null && (h.mode === "desk" ? desk.data!.bars.length === 0 : instr.data!.klines.length === 0);
 
-  const pickRange = (r: Range) => h.set({ range: r, day: null, step: DEFAULT_STEP[r] });
-  const dayOptions = [...h.days].reverse().map((d) => ({ value: d.day, label: d.day }));
   const fills = instr.data?.fills.length ?? 0;
 
   return (
@@ -188,33 +167,9 @@ export function History() {
         <SegmentedControl
           size="xs"
           className="mini-seg"
-          value={h.range === "day" ? "" : h.range}
-          onChange={(v) => pickRange(v as Range)}
-          data={[
-            { value: "today", label: "Today" },
-            { value: "7d", label: "7d" },
-            { value: "30d", label: "30d" },
-            { value: "all", label: "All" },
-          ]}
-        />
-        <Select
-          size="xs"
-          className="hist-select hist-day"
-          placeholder="Day"
-          value={h.range === "day" ? h.day : null}
-          onChange={(v) => (v ? h.set({ range: "day", day: v, step: DEFAULT_STEP.day }) : pickRange("today"))}
-          data={dayOptions}
-          comboboxProps={{ transitionProps: { duration: 0 } }}
-          maxDropdownHeight={360}
-          aria-label="Day"
-        />
-        <span className="hist-sep" />
-        <SegmentedControl
-          size="xs"
-          className="mini-seg"
           value={String(step)}
           onChange={(v) => h.set({ step: Number(v) })}
-          data={STEPS.map((s) => ({ value: String(s), label: STEP_LABEL[s]!, disabled: barsFor(from, to, s) > MAX_BARS }))}
+          data={STEPS.map((s) => ({ value: String(s), label: STEP_LABEL[s]! }))}
         />
         <div className="hist-status">
           {cur.err ? (
@@ -230,7 +185,7 @@ export function History() {
       </div>
       <section className="panel hist-panel">
         {h.mode === "desk" ? (
-          <DeskChart key="desk" bars={desk.data?.bars ?? []} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={desk.key} />
+          <DeskChart key="desk" bars={desk.data?.bars ?? []} days={h.days} step={desk.data?.step ?? step} tz={tz} fitKey={fitKey} onOlder={onOlder} />
         ) : (
           <InstrumentChart
             key="inst"
@@ -239,7 +194,8 @@ export function History() {
             days={h.days}
             step={instr.data?.step ?? step}
             tz={tz}
-            fitKey={instr.key}
+            fitKey={fitKey}
+            onOlder={onOlder}
           />
         )}
         {(empty || (cur.err && !cur.data)) && <div className="hist-empty">{cur.err ? "Could not load history" : "No data in this range"}</div>}
