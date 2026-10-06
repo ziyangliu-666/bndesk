@@ -120,6 +120,9 @@ impl Rest {
             f.borrow_mut().hit(1);
         }
         if status >= 400 {
+            if body.windows(7).any(|w| w == b"-1021,\"") {
+                RESYNC.notify_one();
+            }
             return Err(RestError { status, body: String::from_utf8_lossy(&body).into_owned() }.into());
         }
         Ok(serde_json::from_slice(&body)?)
@@ -132,10 +135,24 @@ struct ServerTime {
     server_time: f64,
 }
 
+/// Woken by a -1021 (timestamp outside the window) so `resync` measures the offset again at once.
+pub static RESYNC: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// The offset from the fastest of five round trips. A slow one (a governor wait, a new TLS connection)
+/// moves the midpoint by half its length, and a late send makes our clock read ahead, which Binance
+/// rejects past 1 s; a fastest round trip over 1 s keeps the last offset.
 pub async fn sync_time(rest: &Rest) -> anyhow::Result<()> {
-    let t0 = now_s() * 1000.0;
-    let r: ServerTime = rest.get("/api/v3/time", &[], 1, false).await?;
-    let t1 = now_s() * 1000.0;
-    CLOCK.set_offset_ms((r.server_time - (t0 + t1) / 2.0) as i64);
+    let mut best: Option<(f64, f64)> = None;
+    for _ in 0..5 {
+        let t0 = now_s() * 1000.0;
+        let r: ServerTime = rest.get("/api/v3/time", &[], 1, false).await?;
+        let t1 = now_s() * 1000.0;
+        if best.is_none_or(|(rtt, _)| t1 - t0 < rtt) {
+            best = Some((t1 - t0, r.server_time - (t0 + t1) / 2.0));
+        }
+    }
+    let (rtt, offset) = best.expect("five samples");
+    anyhow::ensure!(rtt < 1000.0, "time sync: fastest round trip {rtt:.0} ms");
+    CLOCK.set_offset_ms(offset as i64);
     Ok(())
 }

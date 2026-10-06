@@ -19,7 +19,7 @@ use crate::accounts::{self, Account, AccountRef, MarketRef, OnFee, OnFill, Trans
 use crate::alerts::Alerts;
 use crate::backfill;
 use crate::beta::Betas;
-use crate::binance::rest::{CLOCK, Rest, client, governors, sync_time};
+use crate::binance::rest::{CLOCK, RESYNC, Rest, client, governors, sync_time};
 use crate::binance::sign::credentials;
 use crate::binance::weight::Governors;
 use crate::binance::ws::{SPOT_STREAM, StreamMux, USDM_MARKET, USDM_PUBLIC};
@@ -1128,7 +1128,10 @@ async fn seed_books(market: MarketRef, rest: Rest) {
 
 async fn resync(rest: Rest) {
     loop {
-        tokio::time::sleep(Duration::from_secs(600)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(600)) => {}
+            _ = RESYNC.notified() => {}
+        }
         if let Err(e) = sync_time(&rest).await {
             warn!("time sync failed: {e:#}");   // keep the last offset
         }
