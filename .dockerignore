@@ -1,0 +1,9 @@
+.git
+server/target
+web/node_modules
+web/dist
+*.db
+*.db-*
+desk.toml
+fly.toml
+*.pem

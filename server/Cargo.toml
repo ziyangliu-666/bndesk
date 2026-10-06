@@ -1,0 +1,58 @@
+[package]
+name = "desk"
+version = "0.1.0"
+edition = "2024"
+description = "Read-only real-time monitor for Binance master and sub-accounts"
+license = "MIT"
+
+[[bin]]
+name = "desk"
+path = "src/main.rs"
+
+[lib]
+name = "desk"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "net", "signal", "sync", "fs", "io-util"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json", "gzip"] }
+axum = { version = "0.8", features = ["ws", "tokio", "http1"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "set-header"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sonic-rs = "0.5"
+toml = "0.9"
+rusqlite = { version = "0.37", features = ["bundled"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+hmac = "0.12"
+sha2 = "0.10"
+scrypt = { version = "0.11", default-features = false }
+base64 = "0.22"
+rand = "0.9"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive", "env"] }
+url = "2"
+urlencoding = "2"
+subtle = "2"
+chrono-tz = "0.10"
+rustc-hash = "2"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+
+[dev-dependencies]
+approx = "0.5"
+regex = "1"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = 1

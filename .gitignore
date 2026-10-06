@@ -1,0 +1,9 @@
+desk.toml
+fly.toml
+*.db
+*.db-*
+node_modules/
+dist/
+*.env
+web/screenshots/
+*.pem

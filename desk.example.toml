@@ -1,0 +1,99 @@
+# Copy to desk.toml (not tracked). Secrets come from the env vars named here; env_file is loaded first.
+env_file = "~/.config/desk/keys.env"
+
+[server]
+listen = "127.0.0.1:8710"
+db = "desk.db"
+simulate = false            # real public market data + synthetic accounts, no keys needed
+day_start = "00:00"         # UTC, start of the PnL day
+fair_halflife_s = 120
+mark_max_spread_bps = 100  # wider books are valued at the reference-implied fair, not their mid
+
+# Instruments to track besides those discovered from balances, positions and fills.
+# A reference is optional: with one, markouts are also shown net of the reference's move.
+[[markets]]
+symbol = "ETHUSDT"
+venue = "spot"
+reference = { symbol = "ETHUSDT", venue = "usdm" }
+
+# Optional hedge check: the hedge symbols' futures notional (all futures if none named) should be
+# -target_ratio x the beta-weighted spot inventory value. Set beta = ... on [[markets]] entries.
+# [exposure]
+# target_ratio = 1.0
+# band_usd = 200               # band = max(band_usd, band_frac x |target|)
+# band_frac = 0.25
+# hedge_symbols = ["BTCUSDT"]
+# markets_only = true          # count only the configured markets' assets (not stray coins)
+# beta = "estimate"            # or "fixed" (the beta on each [[markets]] entry, default 1)
+# beta_vs = "BTCUSDT"          # usdm instrument the betas are measured against (default: first hedge symbol)
+# beta_prior = 1.0             # shrink target while samples are few
+# beta_halflife_h = 8
+# beta_prior_samples = 1440    # weight of the prior, in samples
+# beta_sample_s = 10
+# beta_clip = 1.5
+# per market: beta_prior = -0.4 on a [[markets]] entry (a market that moves against beta_vs)
+#
+# Weekly windows with the hedge off (target 0; any hedge left shows as to be closed):
+# [[exposure.pauses]]
+# name = "Hedge off (weekend)"
+# tz = "Europe/London"
+# start = "fri 21:00"
+# end = "sun 21:00"
+
+# Optional trading sessions and events, drawn on the day chart.
+# [[sessions]]
+# name = "London"
+# tz = "Europe/London"
+# start = "08:00"
+# end = "16:30"
+# days = "mon-fri"
+#
+# [[events]]
+# name = "Data release"
+# tz = "UTC"
+# at = "12:30"
+# days = "mon-fri"
+
+[fees]
+# expiry = "2026-12-31"     # warn 7 days before a fee arrangement ends
+
+[alerts]
+day_drawdown_usd = 100
+drop_15m_usd = 40
+inventory_cap_usd = 10000
+asset_cap_usd = 1000
+markout_floor_bps = -1.0
+stale_quote_s = 5
+futures_margin_min_usd = 100
+drop_1h_usd = 100
+quote_idle_usd = 10
+quote_idle_s = 600
+latency_p99_us = 2000
+
+[master]
+# show = false               # read transfers and sub-accounts only; keep the master off the desk
+email = ""
+api_key_env = "DESK_MASTER_API_KEY"
+private_key_env = "DESK_MASTER_PRIVATE_KEY"   # path to an Ed25519 PEM, or
+# secret_env = "DESK_MASTER_API_SECRET"       # an HMAC secret
+
+[[accounts]]
+id = "sub-a"
+label = "sub a"
+email = ""
+api_key_env = "DESK_SUB_A_API_KEY"
+private_key_env = "DESK_SUB_A_PRIVATE_KEY"
+futures = true
+
+[[accounts]]
+id = "sub-b"
+label = "sub b"
+email = ""
+api_key_env = "DESK_SUB_B_API_KEY"
+private_key_env = "DESK_SUB_B_PRIVATE_KEY"
+futures = false
+
+# Optional engine metrics (Prometheus text), e.g. through an SSH tunnel.
+# [[engines]]
+# name = "engine-1"
+# url = "http://127.0.0.1:9464/metrics"

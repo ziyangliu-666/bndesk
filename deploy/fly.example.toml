@@ -1,0 +1,31 @@
+# Copy to fly.toml in the repo root, then: fly launch --no-deploy --copy-config, set secrets (see README), fly deploy.
+app = "your-app"
+primary_region = "your-region"    # outside the US: Binance refuses US addresses
+
+kill_signal = "SIGTERM"
+kill_timeout = 20   # the final P&L flush, then the store closes
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"   # the collector must stay connected
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/healthz"
+
+[mounts]
+  source = "bndesk_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
