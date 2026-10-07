@@ -1159,3 +1159,22 @@ kbd {
 .ag-row-pinned .ag-cell-data-changed-animation {
   background-color: transparent !important;
 }
+
+/* demo build: the simulated-data notice */
+.demo-notice {
+  background: var(--panel);
+}
+.mantine-Modal-content.demo-notice {
+  border: 1px solid var(--rule);
+}
+.demo-notice-title {
+  font-weight: 600;
+}
+.demo-notice-body {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.demo-notice-body a {
+  color: var(--accent);
+}

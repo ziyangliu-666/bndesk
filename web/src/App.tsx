@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Header, PAGE_KEYS } from "./components/Header";
 import { AlertBanner } from "./components/AlertBanner";
+import { DemoNotice } from "./components/DemoNotice";
 import { useStore } from "./store";
 import { Desk } from "./pages/Desk";
 import { Markouts } from "./pages/Markouts";
@@ -33,6 +34,7 @@ export function App() {
     <div className="app">
       <Header />
       <AlertBanner />
+      {import.meta.env.VITE_MOCK === "1" && <DemoNotice />}
       <main className="app-main">
         {!ready ? (
           <div className="waiting">Waiting for the first snapshot from the server</div>
