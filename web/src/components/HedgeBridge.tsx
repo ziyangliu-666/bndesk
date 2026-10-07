@@ -15,7 +15,7 @@ export function HedgeBridge({ h }: { h: HedgeDay }) {
   const hedge = h.hedge_pnl ?? 0;
   const net = h.net ?? h.inventory_drift + hedge;
   const rows = [
-    { label: "Inventory drift", from: 0, v: h.inventory_drift, total: h.inventory_drift },
+    { label: "Inventory PnL", from: 0, v: h.inventory_drift, total: h.inventory_drift },
     { label: "Hedge", from: h.inventory_drift, v: hedge, total: h.hedge_pnl },
     { label: "Net", from: 0, v: net, total: net },
   ];
@@ -29,7 +29,7 @@ export function HedgeBridge({ h }: { h: HedgeDay }) {
   return (
     <div ref={ref} className="bridge">
       {width > 0 && (
-        <svg width={width} height={height} style={{ display: "block" }} role="img" aria-label="Inventory drift, hedge and net today">
+        <svg width={width} height={height} style={{ display: "block" }} role="img" aria-label="Inventory PnL, hedge and net today">
           {rows.map((r, i) => {
             const y = i * ROW_H + (ROW_H - BAR_H) / 2;
             const a = X(r.from);
