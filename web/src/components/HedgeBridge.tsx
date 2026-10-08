@@ -9,14 +9,14 @@ const PAD = 12;
 const LABEL_W = 120 + PAD;
 const VALUE_W = 96 + PAD;
 
-/** Today's inventory drift, what the hedge legs made, and the net: three bars on one zero-based axis. */
-export function HedgeBridge({ h }: { h: HedgeDay }) {
+/** Today's Inventory PnL (the Desk's), what the hedge legs made, and the net: three bars on one zero-based axis. */
+export function HedgeBridge({ h, inventory }: { h: HedgeDay; inventory: number }) {
   const { ref, width } = useElementSize();
   const hedge = h.hedge_pnl ?? 0;
-  const net = h.net ?? h.inventory_drift + hedge;
+  const net = inventory + hedge;
   const rows = [
-    { label: "Inventory PnL", from: 0, v: h.inventory_drift, total: h.inventory_drift },
-    { label: "Hedge", from: h.inventory_drift, v: hedge, total: h.hedge_pnl },
+    { label: "Inventory PnL", from: 0, v: inventory, total: inventory },
+    { label: "Hedge", from: inventory, v: hedge, total: h.hedge_pnl },
     { label: "Net", from: 0, v: net, total: net },
   ];
   const pts = [0, ...rows.flatMap((r) => [r.from, r.from + r.v])];

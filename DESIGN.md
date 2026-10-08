@@ -323,7 +323,8 @@ interface Exposure {
   hedge_day: HedgeDay | null;
 }
 
-// Today's inventory drift against the futures legs. Drift H: what the spot inventory made on each name's
+// Today's inventory drift against the futures legs (the Accounts page's bridge shows the Desk's
+// pnl.inventory instead, so the two pages agree; the drifts feed the exposure target). Drift H: what the spot inventory made on each name's
 // reference; Hm: the beta instrument's part. A leg's price P&L is Q0 (M_T − M_D) + Σ s q (M_T − p) at mark,
 // from REST fills since the day start; hedge P&L = price P&L − fees + funding.
 interface HedgeDay {

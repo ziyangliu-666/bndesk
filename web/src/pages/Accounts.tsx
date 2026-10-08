@@ -166,6 +166,7 @@ const rowIdLeg = (p: GetRowIdParams<HedgeLeg>) => p.data.symbol;
 
 function HedgePanel() {
   const h = useStore((s) => s.snap?.exposure.hedge_day);
+  const inv = useStore((s) => s.snap?.summary.pnl.inventory);
   const cols = useMemo<ColDef<HedgeLeg>[]>(() => {
     const n = (c: ColDef<HedgeLeg>): ColDef<HedgeLeg> => ({ type: "rightAligned", cellClass: "num", ...c });
     return [
@@ -184,14 +185,14 @@ function HedgePanel() {
     <Panel
       className="hedge-panel"
       title={
-        <span title="Since the day start: what the spot inventory made on its references (drift), against what the futures legs made">
+        <span title="Since the day start: the Inventory PnL of the Desk, against what the futures legs made">
           Inventory and hedge, today
         </span>
       }
       right={
-        h ? (
-          <span className="muted fig" title={`Hedge over the drift it offsets; of the beta part: ${pct(h.offset_factor)}`}>
-            offset {pct(h.offset_total)}
+        h && inv != null && h.hedge_pnl != null && Math.abs(inv) > 1e-9 ? (
+          <span className="muted fig" title="Hedge P&L over the Inventory PnL it offsets">
+            offset {pct(-h.hedge_pnl / inv)}
           </span>
         ) : undefined
       }
@@ -199,7 +200,7 @@ function HedgePanel() {
     >
       {h ? (
         <>
-          <HedgeBridge h={h} />
+          <HedgeBridge h={h} inventory={inv ?? 0} />
           {h.legs.length > 0 && (
             <div className="hedge-legs">
               <AgGridReact<HedgeLeg>
