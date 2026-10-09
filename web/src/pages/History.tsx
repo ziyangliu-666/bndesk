@@ -232,7 +232,7 @@ export function History() {
                 { value: "cum", label: "Cumulative" },
                 { value: "bar", label: "Per bar" },
               ]}
-              title="Day: each day starts at 0. Cumulative: from the left edge of the chart. Per bar: what each bar made"
+              title="Day: each day starts at 0. Cumulative: from the first bar loaded. Per bar: what each bar made"
             />
           </>
         )}

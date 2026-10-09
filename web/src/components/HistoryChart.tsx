@@ -408,26 +408,18 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
   const dsRef = useRef(0);
   dsRef.current = sm?.day_start ?? days[days.length - 1]?.start ?? 0;
   const shown = useRef<HistBar[]>([]);
-  // the cumulative view starts at the first bar on screen: re-based once a drag or zoom settles
-  const [k0, setK0] = useState(0);
-  const viewRef = useRef(view);
-  viewRef.current = view;
-  useEffect(() => {
-    const r = chart.current?.timeScale().getVisibleLogicalRange();
-    if (view === "cum" && r) setK0(Math.max(0, Math.ceil(r.from)));
-  }, [view]);
+  // the cumulative view starts at 0 on the first bar loaded for this view; older bars loaded later count
+  // back from there, so dragging never moves the lines
+  const origin = useRef<{ key: string; t: number } | null>(null);
+  if (bars.length && origin.current?.key !== fitKey) origin.current = { key: fitKey, t: bars[0]!.t };
+  const t0 = origin.current?.t ?? 0;
+  const k0 = Math.max(0, bars.findIndex((b) => b.t >= t0));
 
   useEffect(() => {
     const c = createChart(host.current!, chartOptions(tz, step));
     chart.current = c;
     c.subscribeCrosshairMove(onMove);
     onLeftEdge(c, older);
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    c.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-      if (!r || viewRef.current !== "cum") return;
-      clearTimeout(settle);
-      settle = setTimeout(() => setK0(Math.max(0, Math.ceil(r.from))), 200);
-    });
     const candle = c.addSeries(CandlestickSeries, {
       upColor: C.up,
       downColor: C.down,
