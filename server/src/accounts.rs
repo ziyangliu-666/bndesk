@@ -1,6 +1,6 @@
 //! Per-account state: balances, futures, orders, fees and user streams, from REST and WebSocket.
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
 use std::time::Duration;
@@ -52,18 +52,20 @@ pub struct LivePosition {
     pub notional: f64,
 }
 
-/// One futures symbol's day: fills (time, signed qty, price, fee in USD), funding received, mark at the start.
+/// One futures symbol's day: fills by trade id (time, signed qty, price, fee in USD), funding received, mark
+/// at the start. REST fills the day in; the user stream adds each fill as it happens, so the fills always
+/// match the live position until the next REST pass.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FutDay {
     pub ds: i64,
-    pub trades: Vec<(i64, f64, f64, f64)>,
+    pub trades: BTreeMap<i64, (i64, f64, f64, f64)>,
     pub funding: f64,
     pub m0: Option<f64>,
 }
 
 impl FutDay {
     pub fn new(ds: i64) -> Self {
-        FutDay { ds, trades: vec![], funding: 0.0, m0: None }
+        FutDay { ds, trades: BTreeMap::new(), funding: 0.0, m0: None }
     }
 }
 
@@ -387,14 +389,14 @@ impl Account {
             .get(&format!("usdm:{s}"))
             .and_then(|i| i.mark.filter(|x| *x != 0.0).or_else(|| i.mid()))
             .filter(|x| *x != 0.0);
-        let Some(d) = self.fut_day.get(s) else {
+        let Some(d) = self.fut_day.get(s).filter(|d| d.ds == self.day_start) else {
             return FutLeg { q0: q, q, m0: None, mark, fills: 0, price: None, fees: 0.0, funding: 0.0 };
         };
-        let q0 = q - d.trades.iter().map(|t| t.1).sum::<f64>();
-        let fees = d.trades.iter().map(|t| t.3).sum();
+        let q0 = q - d.trades.values().map(|t| t.1).sum::<f64>();
+        let fees = d.trades.values().map(|t| t.3).sum();
         let price = match mark {
             Some(mk) if d.m0.is_some() || q0.abs() < 1e-12 => Some(
-                d.m0.map_or(0.0, |m0| q0 * (mk - m0)) + d.trades.iter().map(|&(_, sq, px, _)| sq * (mk - px)).sum::<f64>(),
+                d.m0.map_or(0.0, |m0| q0 * (mk - m0)) + d.trades.values().map(|&(_, sq, px, _)| sq * (mk - px)).sum::<f64>(),
             ),
             _ => None,
         };
@@ -606,6 +608,27 @@ impl Account {
         Ok(())
     }
 
+    /// A user-stream futures fill into today's fills, at once: the position moves with it, so leaving it to the
+    /// next REST pass would count it as held since the day start.
+    fn fut_fill(&mut self, sym: &str, id: i64, f: &FillRec) {
+        let ds = self.day_start;
+        if ds == 0 || f.ts < ds {
+            return;
+        }
+        let mut fee = f.fee;
+        if !matches!(f.fee_asset.as_str(), "USDT" | "USDC" | "")
+            && let Some(m) = &self.market
+        {
+            fee *= m.try_borrow_mut().ok().and_then(|mut m| m.asset_price(&f.fee_asset)).unwrap_or(0.0);
+        }
+        let d = self.fut_day.entry(sym.to_string()).or_insert_with(|| FutDay::new(ds));
+        if d.ds != ds {
+            *d = FutDay::new(ds);
+        }
+        let sq = if f.side == Side::Buy { f.qty } else { -f.qty };
+        d.trades.entry(id).or_insert((f.ts, sq, f.price, fee));
+    }
+
     pub fn on_fut_event(&mut self, e: &Value) -> Result<()> {
         match e.get("e").and_then(Value::as_str) {
             Some("ORDER_TRADE_UPDATE") => {
@@ -621,6 +644,7 @@ impl Account {
                     fr.fee = f_or0(o, "n")?;
                     fr.fee_asset = first(o, &["N"]).and_then(Value::as_str).unwrap_or("").to_string();
                     fr.maker = o.get("m").is_some_and(truthy);
+                    self.fut_fill(sym, to_i(get(o, "t")?)?, &fr);
                     let cb = self.on_fill.clone();
                     cb(fr);
                 }
@@ -950,7 +974,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     all.sort();
     for sym in all {
         let mut d = acct.borrow().fut_day.get(&sym).cloned().unwrap_or_else(|| FutDay::new(ds));
-        let mut trades = vec![];
+        let mut trades = BTreeMap::new();
         let mut frm: Option<i64> = None;
         loop {
             let mut q: Params = params!["symbol" => sym, "limit" => 1000];
@@ -973,7 +997,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 {
                     fee *= m.borrow_mut().asset_price(asset).unwrap_or(0.0);
                 }
-                trades.push((ts, if s(x, "side")? == "BUY" { qty } else { -qty }, f(x, "price")?, fee));
+                trades.insert(to_i(get(x, "id")?)?, (ts, if s(x, "side")? == "BUY" { qty } else { -qty }, f(x, "price")?, fee));
             }
             match rows.last() {
                 Some(last) if rows.len() >= 1000 => frm = Some(to_i(get(last, "id")?)? + 1),
@@ -991,7 +1015,14 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 d.m0 = Some(to_f(&k0[1])?);
             }
         }
-        acct.borrow_mut().fut_day.insert(sym, d);
+        // fills the stream added while REST was answering are newer than its list: kept
+        let mut a = acct.borrow_mut();
+        if let Some(cur) = a.fut_day.get(&sym).filter(|c| c.ds == d.ds) {
+            for (id, t) in &cur.trades {
+                d.trades.entry(*id).or_insert(*t);
+            }
+        }
+        a.fut_day.insert(sym, d);
     }
     Ok(())
 }
@@ -1635,7 +1666,7 @@ mod tests {
         let mut a = Account::new(cfg("a", ""), None, "");
         a.positions.insert("XUSDT".into(), (-2.5, 99.0));
         let mut d = FutDay::new(0);
-        d.trades = vec![(1, -1.0, 99.0, 0.04), (2, 0.5, 97.0, 0.02)];
+        d.trades = BTreeMap::from([(1, (1, -1.0, 99.0, 0.04)), (2, (2, 0.5, 97.0, 0.02))]);
         (d.funding, d.m0) = (0.3, Some(100.0));
         a.fut_day.insert("XUSDT".into(), d);
         let l = a.fut_leg(&m, "XUSDT");
@@ -1646,6 +1677,31 @@ mod tests {
         assert_eq!(l.funding, 0.3);
         a.fut_day.get_mut("XUSDT").unwrap().m0 = None;   // opening mark unknown with a position held at the start: no price P&L yet
         assert!(a.fut_leg(&m, "XUSDT").price.is_none());
+    }
+
+    #[test]
+    fn futures_stream_fill_counts_before_rest_and_day_change_drops_the_old_day() {
+        // Flat at the start (opening mark 100); the stream sells 2 at 90 and the position follows. Before any
+        // REST pass the fill is today's, not a position held since the start: price P&L = -2 (88-90) = 4.
+        let mut m = Market::new(info(&[]), 120.0, 100.0);
+        let id = m.ensure("XUSDT", Venue::Usdm, None);
+        m.insts[id].mark = Some(88.0);
+        let mut a = Account::new(cfg("a", ""), None, "");
+        a.day_start = 1_000;
+        let mut d = FutDay::new(1_000);
+        d.m0 = Some(100.0);
+        a.fut_day.insert("XUSDT".into(), d);
+        a.on_fut_event(&json!({"e": "ORDER_TRADE_UPDATE", "E": 2_001, "T": 2_000, "o": {"s": "XUSDT", "S": "SELL", "i": 9,
+            "p": "90", "q": "2", "z": "2", "X": "FILLED", "x": "TRADE", "t": 77, "L": "90", "l": "2", "n": "0.07",
+            "N": "USDT", "m": false, "T": 2_000}})).unwrap();
+        a.positions.insert("XUSDT".into(), (-2.0, 90.0));
+        let l = a.fut_leg(&m, "XUSDT");
+        assert!(l.q0.abs() < 1e-12 && l.fills == 1);
+        assert_relative_eq!(l.price.unwrap(), 4.0);
+        assert_relative_eq!(l.fees, 0.07);
+        // a new day before REST has caught up: the old day's fills are not the new day's
+        a.day_start = 86_401_000;
+        assert!(a.fut_leg(&m, "XUSDT").m0.is_none() && a.fut_leg(&m, "XUSDT").fills == 0);
     }
 
     // the user-stream fill and fee callbacks
