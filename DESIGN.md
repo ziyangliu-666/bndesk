@@ -92,9 +92,16 @@ All times are exchange event times (ms).
   reference, r_k(t) = R_k(t) / R_k(t−1) − 1 (0 without a reference), r_b(t) = return of the beta
   instrument (`beta_vs`, else the first hedge symbol), β_k = the estimated or configured beta.
   Inventory Q_k is rebuilt, not read: Q0_k at the day start D is the current balance across the desk's
-  accounts minus today's fills, then it changes only by fills (s·q, before fees).
+  accounts minus today's fills and flows, then it changes by fills (s·q, before fees) and by flows.
+  Flows: today's transfers that cross the desk's edge, the same list Day PnL takes off (each account's
+  records and unconfirmed moves, netted by transfer, so one between two of the desk's accounts is none;
+  a desk account with the master's email sending to an address off the desk is a flow out). A flow books
+  like a fill of s·q at p = its transfer value per unit, no fee, not counted in fills or volume, and left
+  out of markouts and the market-making split; an asset Π holds no position in yet gets one (stablecoins
+  only move a position Π already has). A move that drops unconfirmed is taken back as it was booked, so
+  Π, like Day PnL, is as if it had never been seen.
   - Π for the day has a closed form, so it covers the whole day whenever the monitor started:
-    Π_k = Q0_k·(M_k(T) − M_k(D)) + Σ_fills [s·q·(M_k(T) − p) − fee], fees in USDT. M_k(D) is the open of
+    Π_k = Q0_k·(M_k(T) − M_k(D)) + Σ_fills+flows [s·q·(M_k(T) − p) − fee], fees in USDT. M_k(D) is the open of
     the 1 min kline at D (fetched once for names held at D, kept across restarts), or the last mark at
     the day roll.
   - H and Hm depend on the path, booked on a live 1 s grid of exchange-clock seconds; a fill at t_f
@@ -123,7 +130,7 @@ All times are exchange event times (ms).
 - Account equity (quote USDT) = spot balances at mid (stablecoins at 1) + futures margin balance.
   Day PnL = equity − equity at the day start − net transfers in since then, at their values when they
   happened (day start configurable, default 00:00 UTC). An asset that leaves carries no price exposure
-  after it has gone.
+  after it has gone, in Day PnL or in Π.
 - Inventory per asset = sum over accounts of free + locked of non-quote assets; value at mid;
   average cost from today's fills.
 - Exposure: per account and total, spot inventory value, futures net notional, net. Optional

@@ -1433,6 +1433,23 @@ impl Transfers {
         self.legs(acct, since).iter().map(|l| l.qty * l.px).sum()
     }
 
+    /// The desk's flows since `since`: every desk account's legs, netted by transfer, so a transfer between two
+    /// of the desk's accounts nets to nothing. Π books these; their value is the sum of the accounts' net_in_live.
+    pub fn desk_flows(&self, since: i64) -> Vec<Flow> {
+        let mut by: BTreeMap<String, Flow> = BTreeMap::new();
+        for a in &self.accounts {
+            for l in self.legs(&a.borrow(), since) {
+                match by.get_mut(&l.key) {
+                    Some(f) => f.qty += l.qty,
+                    None => {
+                        by.insert(l.key.clone(), l);
+                    }
+                }
+            }
+        }
+        by.into_values().filter(|f| f.qty.abs() > 1e-12).collect()
+    }
+
     pub fn roll(&mut self, since: i64) {
         self.records.retain(|_, v| v.ts >= since);
     }
@@ -1646,6 +1663,10 @@ mod tests {
         assert_relative_eq!(t.net_in_live(&b.borrow(), 100), 300.0);
         // equity 10_000 at open, 1000 transferred in, 700 net in: +40 of trading (metrics::day_pnl)
         assert_relative_eq!(10_740.0 - 10_000.0 - 700.0, 40.0);
+        // the desk: only what crossed its edge, the master's 1000 USDT in
+        let d = t.desk_flows(100);
+        assert!(d.len() == 1 && d[0].key == "t:1" && d[0].asset == "USDT");
+        assert_relative_eq!(d[0].qty * d[0].px, 1000.0);
     }
 
     fn bnb_market() -> Market {
@@ -1678,6 +1699,10 @@ mod tests {
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
         // stored when seen (no value yet), then once with its value
         assert_eq!(*v.borrow(), [("9".to_string(), None), ("9".to_string(), Some(3750.0))]);
+        // the desk sees 5 BNB out at 750
+        let d = t.desk_flows(0);
+        assert!(d.len() == 1 && d[0].qty == -5.0);
+        assert_relative_eq!(d[0].px, 750.0);
         // a record stored with its value keeps it (a restart)
         let mut t = Transfers::new(None, vec![a.clone()]);
         let mut r = tr(10_400, "master@x.io", "out@x.io", "BNB", 5.0);
@@ -1704,16 +1729,44 @@ mod tests {
         a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
         t.value(&mut m, 2_000);
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        let d = t.desk_flows(0);
+        assert!(d.len() == 1 && d[0].key.starts_with("m:a:1000:BNB"));
         bnb(&mut m, 900_000, 760.0);
         t.add("1", tr(1_005, "a@x.io", "b@x.io", "BNB", 5.0));
         t.value(&mut m, 60_000);
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
-        // an unconfirmed move drops after MOVE_HOLD_MS
+        let d = t.desk_flows(0);
+        assert!(d.len() == 1 && d[0].key == "t:1" && d[0].qty == -5.0);
+        assert_relative_eq!(d[0].px, 750.0);
+        // an unconfirmed move drops after MOVE_HOLD_MS, from Day PnL and from the desk's flows alike
         a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "2", "T": 70_000})).unwrap();
         t.value(&mut m, 71_000);
-        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0 + 2.0 * 760.0);
+        assert_eq!(t.desk_flows(0).len(), 2);
         t.value(&mut m, 70_000 + MOVE_HOLD_MS);
+        assert_eq!(t.desk_flows(0).len(), 1);
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+    }
+
+    #[test]
+    fn a_transfer_between_desk_accounts_is_no_flow_of_the_desk() {
+        let mut m = bnb_market();
+        bnb(&mut m, 1_000, 750.0);
+        let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
+        let b = Account::new(cfg("b", "b@x.io"), None, "").shared();
+        let mut t = Transfers::new(None, vec![a.clone(), b.clone()]);
+        // seen on both streams first, then in the history
+        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
+        b.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "5", "T": 1_000})).unwrap();
+        t.value(&mut m, 2_000);
+        let d = t.desk_flows(0);
+        assert_relative_eq!(d.iter().map(|f| f.qty * f.px).sum::<f64>(), 0.0);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 3750.0);
+        t.add("1", tr(1_002, "a@x.io", "b@x.io", "BNB", 5.0));
+        t.value(&mut m, 60_000);
+        assert!(t.desk_flows(0).is_empty());
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 3750.0);
     }
 
     struct FakeRest {

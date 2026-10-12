@@ -425,6 +425,8 @@ impl Desk {
             }
             let mut pnl = self.pnl.borrow_mut();
             pnl.load_fills(&mut m, fills.fills.iter());
+            // today's transfers of the desk's assets, as valued then (rows not valued yet are booked once they are)
+            pnl.load_flows(&mut m, &self.transfers.borrow().desk_flows(ds));
             let hours: Vec<pnl::HourRow> = data
                 .hours
                 .iter()
@@ -744,6 +746,14 @@ impl Desk {
             let mut m = self.market.borrow_mut();
             self.transfers.borrow_mut().value(&mut m, now);
             let tr = self.transfers.borrow();
+            {
+                // Π books the same transfers Day PnL takes off; it waits for its own day roll, a couple of
+                // seconds after the desk's
+                let mut pnl = self.pnl.borrow_mut();
+                if pnl.day_start == ds {
+                    pnl.set_flows(&mut m, &tr.desk_flows(ds), now);
+                }
+            }
             let mut tracked = self.tracked.borrow_mut();
             for a in &self.accounts {
                 let mut a = a.borrow_mut();

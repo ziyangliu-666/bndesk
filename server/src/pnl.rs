@@ -3,11 +3,13 @@
 //!
 //! Per instrument k (keyed by base asset): M_k(t) valuation price, R_k(t) mid of its reference, r_k(t) =
 //! R_k(t) / R_k(t-1) - 1 (0 without a reference), r_b(t) the beta instrument's return, beta_k its beta.
-//! Q0_k = inventory at the day start D: the current balance minus today's fills; then Q changes only by fills
-//! (s q, before fees); a fill at t_f enters at the first grid point >= t_f.
+//! Q0_k = inventory at the day start D: the current balance minus today's fills and flows; then Q changes by
+//! fills (s q, before fees) and by flows: transfers of the asset into (+) or out of (-) the desk, each at the
+//! USD price it was valued at when it happened (the same value Day PnL takes off), like a fill with no fee
+//! that is not counted as one. A fill or flow at t_f enters at the first grid point >= t_f.
 //!
 //! ```text
-//!   Pi_k  = Q0_k (M_k(T) - M_k(D)) + sum_fills [s q (M_k(T) - p) - fee]                    trading P&L, day
+//!   Pi_k  = Q0_k (M_k(T) - M_k(D)) + sum_fills+flows [s q (M_k(T) - p) - fee]              trading P&L, day
 //!   dPi(t) = sum_fills(t) [s q (M_k(t) - p) - fee] + sum_k Q_k(t-1) (M_k(t) - M_k(t-1))     ... per grid step
 //!   dH(t)  = sum_k Q_k(t-1) M_k(t-1) r_k(t)                                                own-reference hedge
 //!   dHm(t) = (sum_k beta_k Q_k(t-1) M_k(t-1)) r_b(t)                                       factor hedge
@@ -275,6 +277,7 @@ pub struct FillSum {
     pub sq: f64,
     pub cash: OMap<f64>,   // quote asset -> sum s q p
     pub fees: OMap<f64>,   // fee asset -> sum fee
+    pub usd: f64,          // flows: sum s q p, p in USD
 }
 
 /// What the book keeps of a fill (Python keeps the FillRec itself).
@@ -288,12 +291,14 @@ pub struct PFill {
     pub qty: f64,
     pub fee: f64,
     pub fee_asset: String,
+    /// a transfer, not a fill: `price` is in USD, `symbol` the asset's own instrument, `key` the flow's
+    pub flow: Option<Rc<str>>,
 }
 
 impl From<&FillRec> for PFill {
     fn from(f: &FillRec) -> Self {
         PFill { ts: f.ts, symbol: f.symbol.clone(), venue: f.venue, side: f.side, price: f.price, qty: f.qty,
-                fee: f.fee, fee_asset: f.fee_asset.clone() }
+                fee: f.fee, fee_asset: f.fee_asset.clone(), flow: None }
     }
 }
 
@@ -306,6 +311,14 @@ pub struct Flow {
     pub asset: String,
     pub qty: f64,
     pub px: f64,
+}
+
+/// A flow as the book took it: `grid` if Q took it on the grid, else it was already in the balance the
+/// opening quantity came from (Q0 took it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Booked {
+    pub flow: Flow,
+    pub grid: bool,
 }
 
 /// (M, R) per base at a gap's start or end.
@@ -420,6 +433,8 @@ pub struct PnlBook {
     pub gaps: Vec<Gap>,                    // waiting for backfill
     pub last: Option<i64>,                 // last booked grid second
     pub rb: Option<f64>,                   // R_b(t-1)
+    pub flows: BTreeMap<String, Booked>,   // today's flows booked, by key
+    pub flow_keys: Vec<String>,            // instruments of the bases today's flows moved: in scope
     next_gap: u64,
 }
 
@@ -449,6 +464,8 @@ impl PnlBook {
             gaps: vec![],
             last: None,
             rb: None,
+            flows: BTreeMap::new(),
+            flow_keys: vec![],
             next_gap: 0,
         }
     }
@@ -475,9 +492,13 @@ impl PnlBook {
         *self.seen_sq.entry(base.to_string()).or_insert(0.0) += sq;
         let s = self.sums.entry(base.to_string()).or_default();
         s.sq += sq;
-        let quote = &m.insts[inst].quote;
-        let c = s.cash.get(quote).copied().unwrap_or(0.0) + sq * f.price;
-        s.cash.insert(quote.clone(), c);
+        if f.flow.is_some() {
+            s.usd += sq * f.price;
+        } else {
+            let quote = &m.insts[inst].quote;
+            let c = s.cash.get(quote).copied().unwrap_or(0.0) + sq * f.price;
+            s.cash.insert(quote.clone(), c);
+        }
         if f.fee != 0.0 && !f.fee_asset.is_empty() {
             let v = s.fees.get(&f.fee_asset).copied().unwrap_or(0.0) + f.fee;
             s.fees.insert(f.fee_asset.clone(), v);
@@ -536,6 +557,96 @@ impl PnlBook {
         }
         self.seen(m, &base, inst, idx, &f);
         self.pending.push((idx, f));
+    }
+
+    /// Today's flows from before a restart (the history's records, valued): already in the balances, so
+    /// already in Q, like `load_fills`.
+    pub fn load_flows(&mut self, m: &mut Market, flows: &[Flow]) {
+        let ds = self.day_start;
+        for f in flows.iter().filter(|f| f.ts >= ds) {
+            if self.put_flow(m, &f.key, &f.asset, f.ts, f.qty, f.px, Some(false)).is_some() {
+                self.flows.insert(f.key.clone(), Booked { flow: f.clone(), grid: false });
+            }
+        }
+    }
+
+    /// The desk's flows today, as they stand (the same list Day PnL takes off): a new one is booked, one no
+    /// longer listed is taken back as it was booked, at the price it was booked at, so Π is as if it had
+    /// never been seen.
+    pub fn set_flows(&mut self, m: &mut Market, flows: &[Flow], now: i64) {
+        let target: BTreeMap<&str, &Flow> =
+            flows.iter().filter(|f| f.ts >= self.day_start && f.qty != 0.0).map(|f| (f.key.as_str(), f)).collect();
+        let gone: Vec<String> = self
+            .flows
+            .iter()
+            .filter(|(k, b)| target.get(k.as_str()).is_none_or(|f| f.qty != b.flow.qty || f.px != b.flow.px))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in gone {
+            let b = self.flows.remove(&k).expect("booked");
+            let ts = if b.grid { now } else { b.flow.ts };
+            self.put_flow(m, &k, &b.flow.asset, ts, -b.flow.qty, b.flow.px, Some(b.grid));
+        }
+        for (k, f) in target {
+            if !self.flows.contains_key(k)
+                && let Some(grid) = self.put_flow(m, k, &f.asset, f.ts, f.qty, f.px, None)
+            {
+                self.flows.insert(k.to_string(), Booked { flow: f.clone(), grid });
+            }
+        }
+    }
+
+    /// Books qty of the asset at px (USD) as a fill with no fee. grid: Some(false) when it is in the balance
+    /// already (Q0 takes it), Some(true) for the grid to apply, None to decide: in the balance when it came
+    /// before the balance its position's opening quantity was taken from, or when it is a stablecoin the book
+    /// holds no position in. Returns how it was booked, None when the asset has no instrument.
+    #[allow(clippy::too_many_arguments)]
+    fn put_flow(&mut self, m: &mut Market, key: &str, asset: &str, ts: i64, qty: f64, px: f64, grid: Option<bool>)
+                -> Option<bool> {
+        let inst = m.asset_inst(asset)?;
+        let base = m.insts[inst].base.clone();
+        let stable = crate::market::STABLES.contains(&asset);
+        let grid = grid.unwrap_or_else(|| match self.pos.get(&base) {
+            Some(p) => ts >= p.t0,
+            None => !stable,
+        });
+        let f = Rc::new(PFill {
+            ts,
+            symbol: m.insts[inst].symbol.clone(),
+            venue: Venue::Spot,
+            side: if qty > 0.0 { Side::Buy } else { Side::Sell },
+            price: px,
+            qty: qty.abs(),
+            fee: 0.0,
+            fee_asset: String::new(),
+            flow: Some(key.into()),
+        });
+        if !stable {
+            let k = m.insts[inst].key.clone();
+            if !self.flow_keys.contains(&k) {
+                self.flow_keys.push(k);
+            }
+        }
+        if !grid {
+            self.seen(m, &base, inst, ceil_div(ts, 1000), &f);
+            self.add_applied(&base, qty);
+            if let Some(p) = self.pos.get_mut(&base) {
+                p.q0 -= qty;
+            }
+            if let Some(v) = self.day_fills.get_mut(&base) {
+                v.sort_by_key(|x| x.0);
+            }
+            return Some(false);
+        }
+        let mut idx = ceil_div(ts, 1000);
+        if let Some(last) = self.last
+            && idx <= last
+        {
+            idx = last + 1;
+        }
+        self.seen(m, &base, inst, idx, &f);
+        self.pending.push((idx, f));
+        Some(true)
     }
 
     pub fn load_hours<'a>(&mut self, rows: impl IntoIterator<Item = &'a HourRow>) {
@@ -681,6 +792,7 @@ impl PnlBook {
         // Python iterates a set (arbitrary order); here scope order, then the pending fills' order
         let mut keys = (self.scope)();
         keys.extend(self.pending.iter().map(|(_, f)| format!("spot:{}", f.symbol)));
+        keys.extend(self.flow_keys.iter().cloned());
         let mut seen = HashSet::new();
         for k in keys {
             if !seen.insert(k.clone()) {
@@ -773,6 +885,9 @@ impl PnlBook {
 
     /// (price, fee) of a fill in USDT, at today's conversion prices.
     fn usd(m: &mut Market, f: &PFill, inst: InstId) -> (f64, f64) {
+        if f.flow.is_some() {
+            return (f.price, 0.0);
+        }
         let quote = m.insts[inst].quote.clone();
         let px = f.price * nz(m.asset_price(&quote)).unwrap_or(1.0);
         let fee = if f.fee != 0.0 && !f.fee_asset.is_empty() {
@@ -842,9 +957,11 @@ impl PnlBook {
                 d_pi += sq * (p.m.unwrap() - px) - fee;
                 p.q += sq;
                 self.add_applied(&base, sq);
-                let blk = self.blk(hour);
-                blk.fills += 1;
-                blk.volume += px * f.qty;
+                if f.flow.is_none() {
+                    let blk = self.blk(hour);
+                    blk.fills += 1;
+                    blk.volume += px * f.qty;
+                }
             }
             // fills that arrived during this loop (none: single-threaded) would be lost
             self.pending = keep;
@@ -868,6 +985,8 @@ impl PnlBook {
             self.seen(m, &base, inst, idx, &f);
         }
         self.saved.clear();
+        self.flows.clear();   // the desk's flows of the new day are all new
+        self.flow_keys.clear();
         self.m0 = OMap::new();
         for p in self.pos.values_mut() {
             p.h = 0.0;
@@ -1016,9 +1135,11 @@ impl PnlBook {
                         let fi = m.ensure(&f.symbol, Venue::Spot, None);
                         let (fpx, fee) = Self::usd(m, &f, fi);
                         d_pi += sq * (nz(mm).unwrap_or(fpx) - fpx) - fee;
-                        let blk = self.hours.get_mut(&hour).expect("block");
-                        blk.fills += 1;
-                        blk.volume += fpx * f.qty;
+                        if f.flow.is_none() {
+                            let blk = self.hours.get_mut(&hour).expect("block");
+                            blk.fills += 1;
+                            blk.volume += fpx * f.qty;
+                        }
                     }
                     s.q += sq;
                     s.i += 1;
@@ -1094,7 +1215,7 @@ impl PnlBook {
         for (a, v) in s.fees.iter() {
             out -= v * nz(m.asset_price(a)).unwrap_or(0.0);
         }
-        out
+        out - s.usd
     }
 
     /// Π_k split over today's fills in time order, in USD: (realized, realized_old, floating). Sells take
@@ -1108,12 +1229,24 @@ impl PnlBook {
         // the inventory at the day start as Π takes it (balance minus today's fills: negative when a fill went unseen)
         let mut opening = p.q0;
         let mut fills: Vec<&Rc<PFill>> = self.day_fills.get(&p.base).map(|v| v.iter().map(|x| &x.2).collect()).unwrap_or_default();
+        // a flow taken back (a stream move the history did not confirm, or replaced by its record) is left out
+        let mut net: HashMap<&str, f64> = HashMap::new();
+        for f in &fills {
+            if let Some(k) = &f.flow {
+                *net.entry(k).or_insert(0.0) += sign(f.side) * f.qty;
+            }
+        }
+        fills.retain(|f| f.flow.as_deref().is_none_or(|k| net[k].abs() > 1e-12));
         fills.sort_by_key(|f| f.ts);
         let (mut realized, mut old, mut fees) = (0.0, 0.0, 0.0);
         for f in fills {
-            let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
-            let qpx = quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0);
-            let px = f.price * qpx;
+            // a flow out leaves at its transfer price, a flow in comes at it
+            let px = if f.flow.is_some() {
+                f.price
+            } else {
+                let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
+                f.price * quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0)
+            };
             if f.fee != 0.0 {
                 fees += f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
             }
@@ -1793,5 +1926,275 @@ mod tests {
         assert_eq!(st.k.keys().collect::<Vec<_>>(), ["Y", "X"]);
         assert_eq!(serde_json::to_string(&st).unwrap(),
                    r#"{"t":100,"rb":200.0,"spans":[[0,100,0]],"m0":{"X":100.0},"k":{"Y":[0.5,1.0,null],"X":[1.5,2.0,3.0]}}"#);
+    }
+
+    // transfers: the desk's flows in Π, beside Day PnL. The incident of 2026-10-10: a desk account (the master's
+    // email) bought an asset, then sent it off the desk; Π kept the bought quantity and marked it for days.
+
+    use crate::accounts::{Account, AccountRef, Transfer, Transfers};
+    use crate::config::AccountCfg;
+    use crate::protocol::Role;
+    use std::cell::RefCell;
+
+    /// Spot X (reference usdm X) and Y (none), the beta instrument usdm B.
+    fn two_markets() -> Market {
+        let mut info = Info::new();
+        info.insert(Venue::Spot, HashMap::from([("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0)),
+                                                ("YUSDT".to_string(), SymbolInfo::new("Y", "USDT", 5.0))]));
+        info.insert(Venue::Usdm, HashMap::new());
+        let mut m = Market::new(info, 120.0, 100.0);
+        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        m.ensure("YUSDT", Venue::Spot, None);
+        m.ensure("BUSDT", Venue::Usdm, None);
+        m
+    }
+
+    fn y_tick(m: &mut Market, t: i64, y: f64) {
+        m.on_book(Venue::Spot, &BookTicker::new("YUSDT", y, y, Some(t)));
+    }
+
+    /// What the desk does with its accounts, the transfer history and the P&L book: balances move with fills and
+    /// transfers, `slow` values the transfers and hands the desk's flows to Π, Day PnL = equity − opening −
+    /// transfers in (each account's, summed), other = Day PnL − Π (no futures legs here).
+    struct Desk {
+        m: Market,
+        bal: Rc<RefCell<HashMap<String, f64>>>,
+        accts: Vec<AccountRef>,
+        t: Transfers,
+        pb: PnlBook,
+        open: f64,
+    }
+
+    impl Desk {
+        fn new(m: Market, bal: &[(&str, f64)]) -> Desk {
+            let bal = Rc::new(RefCell::new(bal.iter().map(|(a, v)| (a.to_string(), *v)).collect::<HashMap<_, _>>()));
+            // mm1 is the master account itself, configured as an ordinary desk account
+            let accts: Vec<AccountRef> = [("mm1", "Master@x.io"), ("mm2", "mm2@x.io")]
+                .iter()
+                .map(|(id, e)| Account::new(AccountCfg::new(id, id, e, Role::Sub), None, "").shared())
+                .collect();
+            let t = Transfers::new(None, accts.clone());
+            let pb = Self::book(&bal);
+            let mut d = Desk { m, bal, accts, t, pb, open: 0.0 };
+            d.open = d.equity();
+            d
+        }
+
+        fn book(bal: &Rc<RefCell<HashMap<String, f64>>>) -> PnlBook {
+            let b = bal.clone();
+            PnlBook::new(DAY0, Box::new(move |base| b.borrow().get(base).copied().unwrap_or(0.0)),
+                         Box::new(|| vec!["spot:XUSDT".into()]), Box::new(|_| 0.5), Some("usdm:BUSDT".into()), None)
+        }
+
+        /// A restart: a new book, today's fills and the stored (valued) transfer records reloaded.
+        fn restart(&mut self, fills: &[FillRec], now: i64, m0: f64) {
+            let records = self.t.records.clone();
+            self.t = Transfers::new(None, self.accts.clone());
+            self.t.records = records;
+            for a in &self.accts {
+                a.borrow_mut().moves.clear();
+            }
+            self.pb = Self::book(&self.bal);
+            self.pb.load_fills(&mut self.m, fills);
+            let fl = self.t.desk_flows(DAY0);
+            self.pb.load_flows(&mut self.m, &fl);
+            self.begin(now, m0);
+        }
+
+        fn begin(&mut self, now: i64, m0: f64) {
+            self.pb.begin(&mut self.m, now);
+            self.pb.gaps.clear();   // the price was flat before: nothing to backfill
+            self.pb.m0.insert("X", m0);
+        }
+
+        fn equity(&mut self) -> f64 {
+            let bal: Vec<(String, f64)> = self.bal.borrow().iter().map(|(a, q)| (a.clone(), *q)).collect();
+            bal.iter().map(|(a, q)| q * self.m.asset_price(a).unwrap_or(0.0)).sum()
+        }
+
+        fn add(&self, asset: &str, q: f64) {
+            *self.bal.borrow_mut().entry(asset.into()).or_insert(0.0) += q;
+        }
+
+        fn fill(&mut self, f: &FillRec) {
+            let sq = sign(f.side) * f.qty;
+            self.add("X", sq);
+            self.add("USDT", -sq * f.price - f.fee);
+            self.pb.on_fill(&mut self.m, f);
+        }
+
+        /// A balance change the account's stream reports.
+        fn stream(&self, acct: usize, t: i64, asset: &str, d: f64) {
+            let e = serde_json::json!({"e": "balanceUpdate", "a": asset, "d": d.to_string(), "T": t});
+            self.accts[acct].borrow_mut().on_spot_event(&e).unwrap();
+        }
+
+        fn slow(&mut self, now: i64) {
+            self.t.value(&mut self.m, now);
+            let fl = self.t.desk_flows(DAY0);
+            self.pb.set_flows(&mut self.m, &fl, now);
+        }
+
+        fn day_pnl(&mut self) -> f64 {
+            let net_in: f64 = self.accts.iter().map(|a| self.t.net_in_live(&a.borrow(), DAY0)).sum();
+            self.equity() - self.open - net_in
+        }
+
+        fn pi(&mut self) -> f64 {
+            self.pb.trading(&mut self.m)
+        }
+
+        fn other(&mut self) -> f64 {
+            self.day_pnl() - self.pi()
+        }
+    }
+
+    fn tr(ts: i64, frm: &str, to: &str, asset: &str, amount: f64) -> Transfer {
+        Transfer { ts, frm: frm.into(), to: to.into(), asset: asset.into(), amount, usd: None }
+    }
+
+    #[test]
+    fn an_asset_bought_then_sent_off_the_desk_leaves_no_position() {
+        let mut m = two_markets();
+        tick(&mut m, 500, 100.0, 50.0, 200.0);
+        let mut d = Desk::new(m, &[("X", 0.6), ("USDT", 1000.0)]);
+        d.begin(3000, 100.0);
+        // mm1 buys 4.4 X at 100.1, a taker fee of 0.044; X goes to 102
+        let buy = fee(FillRec::new("b", 5_000, "mm1", "XUSDT", Venue::Spot, Side::Buy, 100.1, 4.4), 0.044);
+        d.fill(&buy);
+        d.pb.step(&mut d.m, 8_000);
+        tick(&mut d.m, 8_000, 102.0, 51.0, 200.0);
+        d.pb.step(&mut d.m, 10_000);
+        // then 5 X leave the desk: the stream shows it at once, the history a minute later
+        d.add("X", -5.0);
+        d.stream(0, 10_000, "X", -5.0);
+        d.slow(10_500);
+        d.pb.step(&mut d.m, 12_000);
+        let made = 0.6 * (102.0 - 100.0) + 4.4 * (102.0 - 100.1) - 0.044;   // what the desk made: price and edge, less the fee
+        approx!(d.day_pnl(), made);
+        approx!(d.pi(), made);
+        assert!(d.other().abs() < 1e-9);
+        approx!(d.pb.pos["X"].q + 1.0, 1.0);
+        // X moves after it left: nothing moves with it
+        for (t, x) in [(20_000, 110.0), (30_000, 90.0), (40_000, 120.0)] {
+            tick(&mut d.m, t, x, x / 2.0, 200.0);
+            d.pb.step(&mut d.m, t + 2_000);
+            approx!(d.day_pnl(), made);
+            approx!(d.pi(), made);
+            assert!(d.other().abs() < 1e-9);
+        }
+        // the history confirms the move (the master's email to an outside one): booked once, at the move's value
+        d.t.add("1", tr(10_002, "master@x.io", "out@x.io", "X", 5.0));
+        d.slow(60_000);
+        d.pb.step(&mut d.m, 62_000);
+        approx!(d.day_pnl(), made);
+        approx!(d.pi(), made);
+        assert_eq!(d.pb.flows.keys().collect::<Vec<_>>(), ["t:1"]);
+        approx!(d.pb.pos["X"].q + 1.0, 1.0);
+        // the grid agrees with the closed form, the split sums to Π, and the transfer is not a fill
+        approx!(blocks_sum(&d.pb, |b| b.trading), made);
+        let (r, o, f) = d.pb.fifo(&mut d.m, &d.pb.pos["X"]);
+        approx!(r + o + f, made);
+        let hours = d.pb.hour_rows();
+        assert_eq!(hours.iter().map(|h| h.fills).sum::<i64>(), 1);
+        approx!(hours.iter().map(|h| h.volume).sum::<f64>(), 4.4 * 100.1);
+        // the next day starts flat: no position left behind
+        d.pb.roll(&mut d.m, DAY, None);
+        approx!(d.pb.pos["X"].q0 + 1.0, 1.0);
+
+        // a restart mid-day, after the record was stored with its value: the same Π, and the opening is the
+        // 0.6 held at the day start (balance 0 minus today's buy and transfer)
+        let mut m = two_markets();
+        tick(&mut m, 500, 100.0, 50.0, 200.0);
+        let mut d2 = Desk::new(m, &[("X", 0.6), ("USDT", 1000.0)]);
+        d2.add("X", 4.4 - 5.0);
+        d2.add("USDT", -4.4 * 100.1 - 0.044);
+        d2.t.records = d.t.records.clone();
+        tick(&mut d2.m, 64_000, 120.0, 60.0, 200.0);
+        d2.restart(std::slice::from_ref(&buy), 66_000, 100.0);
+        d2.open = 0.6 * 100.0 + 1000.0;
+        approx!(d2.pb.pos["X"].q0, 0.6);
+        approx!(d2.pb.pos["X"].q + 1.0, 1.0);
+        approx!(d2.pi(), made);
+        approx!(d2.day_pnl(), made);
+        tick(&mut d2.m, 70_000, 95.0, 47.5, 200.0);
+        d2.pb.step(&mut d2.m, 72_000);
+        approx!(d2.pi(), made);
+        d2.pb.roll(&mut d2.m, DAY, None);
+        approx!(d2.pb.pos["X"].q0 + 1.0, 1.0);
+    }
+
+    #[test]
+    fn an_asset_transferred_in_moves_pi_not_other() {
+        // 3 Y, never traded, come in from outside the desk at 10; Y goes to 12: Π takes the 6
+        let mut m = two_markets();
+        tick(&mut m, 500, 100.0, 50.0, 200.0);
+        y_tick(&mut m, 500, 10.0);
+        let mut d = Desk::new(m, &[("USDT", 1000.0)]);
+        d.begin(3000, 100.0);
+        d.add("Y", 3.0);
+        d.t.add("1", tr(5_000, "outside@x.io", "mm2@x.io", "Y", 3.0));
+        y_tick(&mut d.m, 6_000, 12.0);
+        d.slow(6_500);   // valued at 10, its price when it came in
+        d.pb.step(&mut d.m, 9_000);
+        approx!(d.pb.pos["Y"].q, 3.0);
+        approx!(d.pb.pos["Y"].q0 + 1.0, 1.0);
+        approx!(d.day_pnl(), 6.0);
+        approx!(d.pi(), 6.0);
+        assert!(d.other().abs() < 1e-9);
+        approx!(blocks_sum(&d.pb, |b| b.trading), 6.0);
+        // after a restart: the same
+        d.restart(&[], 12_000, 100.0);
+        approx!(d.pb.pos["Y"].q0 + 1.0, 1.0);
+        approx!(d.pi(), 6.0);
+    }
+
+    #[test]
+    fn a_transfer_between_desk_accounts_changes_nothing() {
+        let mut m = two_markets();
+        tick(&mut m, 500, 100.0, 50.0, 200.0);
+        let mut d = Desk::new(m, &[("X", 2.0), ("USDT", 1000.0)]);
+        d.begin(3000, 100.0);
+        d.stream(0, 5_000, "X", -1.0);   // mm1's stream first
+        d.slow(5_200);
+        tick(&mut d.m, 5_500, 101.0, 50.5, 200.0);
+        d.stream(1, 5_000, "X", 1.0);    // then mm2's
+        d.slow(6_000);
+        d.pb.step(&mut d.m, 8_000);
+        approx!(d.pb.pos["X"].q, 2.0);
+        approx!(d.pi(), 2.0);
+        approx!(d.day_pnl(), 2.0);
+        d.t.add("1", tr(5_001, "master@x.io", "mm2@x.io", "X", 1.0));
+        d.slow(60_000);
+        d.pb.step(&mut d.m, 62_000);
+        assert!(d.pb.flows.is_empty() && d.t.desk_flows(DAY0).is_empty());
+        approx!(d.pb.pos["X"].q, 2.0);
+        approx!(d.pi(), 2.0);
+        approx!(d.day_pnl(), 2.0);
+        approx!(blocks_sum(&d.pb, |b| b.trading), 2.0);
+    }
+
+    #[test]
+    fn an_unconfirmed_move_drops_from_pi_as_from_day_pnl() {
+        // a deposit the history never lists: counted for MOVE_HOLD_MS, then as if never seen, by both
+        let mut m = two_markets();
+        tick(&mut m, 500, 100.0, 50.0, 200.0);
+        let mut d = Desk::new(m, &[("X", 1.0), ("USDT", 1000.0)]);
+        d.begin(3000, 100.0);
+        d.add("X", 2.0);
+        d.stream(1, 5_000, "X", 2.0);
+        d.slow(5_500);
+        tick(&mut d.m, 8_000, 104.0, 52.0, 200.0);
+        d.pb.step(&mut d.m, 10_000);
+        approx!(d.pi(), 3.0 * 4.0);
+        assert!(d.other().abs() < 1e-9);
+        d.slow(5_000 + crate::accounts::MOVE_HOLD_MS);
+        d.pb.step(&mut d.m, 7_000 + crate::accounts::MOVE_HOLD_MS);
+        approx!(d.pi(), 1.0 * 4.0);
+        approx!(d.pb.pos["X"].q, 1.0);
+        approx!(blocks_sum(&d.pb, |b| b.trading), 4.0);
+        let (r, o, f) = d.pb.fifo(&mut d.m, &d.pb.pos["X"]);
+        approx!(r + o + f, 4.0);
+        approx!(d.other(), 2.0 * 104.0);   // neither explains the deposit now
     }
 }
