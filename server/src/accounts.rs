@@ -17,6 +17,7 @@ use crate::config::AccountCfg;
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::FillRec;
 use crate::market::{Market, STABLES};
+use crate::pnl::Flow;
 use crate::params;
 use crate::protocol::{self as P, Role, Side, UserStream, Venue};
 
@@ -39,6 +40,22 @@ pub struct Open {
     pub side: Side,
     pub price: f64,
     pub left: f64,
+}
+
+/// A balance change apart from trading seen on a user stream (a transfer, seconds before the history shows
+/// it): signed amount d of the asset at time t, valued once at px, the asset's USD price at t.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Move {
+    pub t: i64,
+    pub asset: String,
+    pub d: f64,
+    pub px: Option<f64>,
+}
+
+impl Move {
+    pub fn new(t: i64, asset: &str, d: f64) -> Self {
+        Move { t, asset: asset.into(), d, px: None }
+    }
 }
 
 /// (symbol, amt, entry, mark, upnl, notional) at live marks.
@@ -212,7 +229,7 @@ pub struct Account {
     pub on_fee: OnFee,
     pub market: Option<MarketRef>,
     pub via_master: bool,
-    pub moves: Vec<(i64, String, f64)>,   // (time, asset, signed amount) from the user streams
+    pub moves: Vec<Move>,   // balance changes apart from trading, from the user streams
     pub no_order_counts: bool,
     pub new_ts: VecDeque<i64>,
 }
@@ -580,7 +597,7 @@ impl Account {
                 // a transfer in or out, seconds before the transfer history shows it
                 let t = int_or(e, &["T", "E"], 0)?;
                 let t = if t != 0 { t } else { now_ms() };
-                self.moves.push((t, s(e, "a")?.to_string(), f(e, "d")?));
+                self.moves.push(Move::new(t, s(e, "a")?, f(e, "d")?));
             }
             Some("executionReport") => {
                 let x = s(e, "x")?;
@@ -660,7 +677,7 @@ impl Account {
                     for b in bs {
                         let bc = f_or0(b, "bc")?;
                         if bc != 0.0 {
-                            self.moves.push((if u != 0 { u } else { now_ms() }, s(b, "a")?.to_string(), bc));
+                            self.moves.push(Move::new(if u != 0 { u } else { now_ms() }, s(b, "a")?, bc));
                         }
                     }
                 }
@@ -1279,7 +1296,8 @@ async fn fut_user(acct: AccountRef, rest: Rest) {
     run_ws(move || format!("{USDM_PRIVATE}{}", s3.borrow().key), feed, on_msg, on_open, None).await;
 }
 
-/// One universal transfer: (time, from email, to email, asset, amount).
+/// One universal transfer: (time, from email, to email, asset, amount), and its USD value, fixed when first
+/// valued (the asset's price at the time, or the value of the stream move it confirms).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transfer {
     pub ts: i64,
@@ -1287,6 +1305,16 @@ pub struct Transfer {
     pub to: String,
     pub asset: String,
     pub amount: f64,
+    pub usd: Option<f64>,
+}
+
+/// Does the history record r confirm the stream move mv of the account with this (lowercase) email?
+fn confirms(r: &Transfer, mv: &Move, email: &str) -> bool {
+    (r.ts - mv.t).abs() < MOVE_HOLD_MS
+        && r.asset == mv.asset
+        && (r.amount - mv.d.abs()).abs() < 1e-9
+        && r.frm.to_lowercase() != r.to.to_lowercase()
+        && (if mv.d > 0.0 { r.to.to_lowercase() } else { r.frm.to_lowercase() }) == email
 }
 
 pub type TransfersRef = Rc<RefCell<Transfers>>;
@@ -1331,55 +1359,78 @@ impl Transfers {
         }
     }
 
-    /// Transfer history, plus stream-seen moves the history does not show yet. A move stays
-    /// provisional for MOVE_HOLD_MS: sub-to-sub moves are matched by the history within a poll or
-    /// two; a move between the account's own spot and futures shows on both streams and nets out.
-    pub fn net_in_live(&self, acct: &mut Account, m: &mut Market, since: i64, now: i64) -> f64 {
-        let mut net = self.net_in(&acct.email, m, since);
-        acct.moves.retain(|mv| now - mv.0 < MOVE_HOLD_MS);
-        let email = acct.email.to_lowercase();
-        if email.is_empty() {
-            // without an email the history cannot confirm a move; do not book it provisionally
-            return net;
-        }
-        for (t, asset, d) in &acct.moves {
-            if *t < since {
-                continue;
-            }
-            let seen = self.records.values().any(|r| {
-                (r.ts - t).abs() < MOVE_HOLD_MS
-                    && r.asset == *asset
-                    && (r.amount - d.abs()).abs() < 1e-9
-                    && r.frm.to_lowercase() != r.to.to_lowercase()
-                    && (if *d > 0.0 { r.to.to_lowercase() } else { r.frm.to_lowercase() }) == email
-            });
-            if !seen {
-                net += d * m.asset_price(asset).unwrap_or(0.0);
+    /// Values once what is not yet valued, and drops the stream moves past MOVE_HOLD_MS. A stream move takes
+    /// its asset's price at its time; a record takes the price of a move it confirms, so a move confirmed
+    /// later keeps its value, else its asset's price at its time (the price now when the market's ring does
+    /// not reach back that far, as for rows stored before values were). A newly valued record goes to
+    /// on_record, so the store keeps its value.
+    pub fn value(&mut self, m: &mut Market, now: i64) {
+        for a in &self.accounts {
+            let mut a = a.borrow_mut();
+            a.moves.retain(|mv| now - mv.t < MOVE_HOLD_MS);
+            for mv in a.moves.iter_mut().filter(|mv| mv.px.is_none()) {
+                mv.px = m.asset_price_at(&mv.asset, mv.t);
             }
         }
-        net
+        let mut ids: Vec<String> = self.records.iter().filter(|(_, r)| r.usd.is_none()).map(|(k, _)| k.clone()).collect();
+        ids.sort();
+        for id in ids {
+            let r = &self.records[&id];
+            let px = self
+                .accounts
+                .iter()
+                .find_map(|a| {
+                    let a = a.borrow();
+                    let email = a.email.to_lowercase();
+                    a.moves.iter().find(|mv| !email.is_empty() && mv.px.is_some() && confirms(r, mv, &email)).and_then(|mv| mv.px)
+                })
+                .or_else(|| m.asset_price_at(&r.asset, r.ts));
+            if let Some(px) = px {
+                let r = self.records.get_mut(&id).expect("record");
+                r.usd = Some(r.amount * px);
+                (self.on_record)(&id, r);
+            }
+        }
     }
 
-    pub fn net_in(&self, email: &str, m: &mut Market, since: i64) -> f64 {
+    /// The account's transfers since `since`, signed (+ in), at their fixed values: the history's records, and
+    /// the stream moves no record confirms yet (provisional: sub-to-sub moves are matched by the history
+    /// within a poll or two; a move between the account's own spot and futures shows on both streams and
+    /// nets out; one never confirmed drops after MOVE_HOLD_MS). Without an email the history cannot confirm a
+    /// move, so none is taken provisionally. Not yet valued: left out.
+    pub fn legs(&self, acct: &Account, since: i64) -> Vec<Flow> {
+        let email = acct.email.to_lowercase();
         if email.is_empty() {
-            return 0.0;
+            return vec![];
         }
-        let email = email.to_lowercase();
-        let mut net = 0.0;
-        for r in self.records.values() {
+        let mut out = vec![];
+        for (id, r) in &self.records {
             let (frm, to) = (r.frm.to_lowercase(), r.to.to_lowercase());
-            if r.ts < since || frm == to {
+            let Some(usd) = r.usd else { continue };
+            if r.ts < since || frm == to || r.amount == 0.0 {
                 continue;
             }
-            let v = r.amount * m.asset_price(&r.asset).unwrap_or(0.0);
-            if to == email {
-                net += v;
-            }
-            if frm == email {
-                net -= v;
+            let px = usd / r.amount;
+            for (side, sign) in [(&to, 1.0), (&frm, -1.0)] {
+                if *side == email {
+                    out.push(Flow { key: format!("t:{id}"), ts: r.ts, asset: r.asset.clone(), qty: sign * r.amount, px });
+                }
             }
         }
-        net
+        for mv in &acct.moves {
+            let Some(px) = mv.px else { continue };
+            if mv.t < since || self.records.values().any(|r| confirms(r, mv, &email)) {
+                continue;
+            }
+            out.push(Flow { key: format!("m:{}:{}:{}:{}", acct.id, mv.t, mv.asset, mv.d), ts: mv.t, asset: mv.asset.clone(),
+                            qty: mv.d, px });
+        }
+        out
+    }
+
+    /// Net transfers into the account since `since`, in USD at their fixed values (Day PnL takes them off).
+    pub fn net_in_live(&self, acct: &Account, since: i64) -> f64 {
+        self.legs(acct, since).iter().map(|l| l.qty * l.px).sum()
     }
 
     pub fn roll(&mut self, since: i64) {
@@ -1427,6 +1478,7 @@ async fn transfers_poll(t: &TransfersRef, rest: &impl RestGet, n: u64, day_start
                 to: email("toEmail"),
                 asset: s(x, "asset")?.to_string(),
                 amount: f(x, "amount")?,
+                usd: None,
             };
             tb.add(&id_str(get(x, "tranId")?), rec);
         }
@@ -1576,7 +1628,7 @@ mod tests {
     // account P&L
 
     fn tr(ts: i64, frm: &str, to: &str, asset: &str, amount: f64) -> Transfer {
-        Transfer { ts, frm: frm.into(), to: to.into(), asset: asset.into(), amount }
+        Transfer { ts, frm: frm.into(), to: to.into(), asset: asset.into(), amount, usd: None }
     }
 
     #[test]
@@ -1584,15 +1636,84 @@ mod tests {
         let mut m = Market::new(info(&[]), 120.0, 100.0);
         let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
         let b = Account::new(cfg("b", "B@x.io"), None, "").shared();
-        let mut t = Transfers::new(None, vec![a, b]);
+        let mut t = Transfers::new(None, vec![a.clone(), b.clone()]);
         t.add("1", tr(100, "master@x.io", "a@x.io", "USDT", 1000.0));
         t.add("2", tr(200, "a@x.io", "b@x.io", "USDC", 300.0));
         t.add("3", tr(50, "a@x.io", "b@x.io", "USDT", 999.0));   // before the day start
         t.add("4", tr(300, "b@x.io", "b@x.io", "USDT", 50.0));   // inside one account (spot -> futures)
-        assert_relative_eq!(t.net_in("a@x.io", &mut m, 100), 700.0);
-        assert_relative_eq!(t.net_in("b@x.io", &mut m, 100), 300.0);
+        t.value(&mut m, 400);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 100), 700.0);
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 100), 300.0);
         // equity 10_000 at open, 1000 transferred in, 700 net in: +40 of trading (metrics::day_pnl)
         assert_relative_eq!(10_740.0 - 10_000.0 - 700.0, 40.0);
+    }
+
+    fn bnb_market() -> Market {
+        let mut m = Market::new(info(&[("BNBUSDT", SymbolInfo::new("BNB", "USDT", 5.0))]), 120.0, 100.0);
+        m.ensure("BNBUSDT", Venue::Spot, None);
+        m
+    }
+
+    fn bnb(m: &mut Market, t: i64, px: f64) {
+        m.on_book(Venue::Spot, &BookTicker::new("BNBUSDT", px, px, Some(t)));
+    }
+
+    #[test]
+    fn a_transfer_keeps_the_value_it_had_when_it_happened() {
+        // 5 BNB leave the desk at 750; BNB then moves to 760: the transfer still takes 3750 off, so the day's
+        // P&L carries no exposure to BNB that is no longer there
+        let mut m = bnb_market();
+        bnb(&mut m, 9_000, 750.0);
+        let a = Account::new(cfg("mm1", "Master@x.io"), None, "").shared();
+        let v = t_stored();
+        let mut t = Transfers::new(None, vec![a.clone()]);
+        let v2 = v.clone();
+        t.on_record = Rc::new(move |id, r| v2.borrow_mut().push((id.to_string(), r.usd)));
+        t.add("9", tr(10_400, "master@x.io", "out@x.io", "BNB", 5.0));
+        bnb(&mut m, 20_000, 760.0);
+        t.value(&mut m, 20_500);   // the ring reaches back to the transfer: 750
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        bnb(&mut m, 30_000, 770.0);
+        t.value(&mut m, 30_500);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        // stored when seen (no value yet), then once with its value
+        assert_eq!(*v.borrow(), [("9".to_string(), None), ("9".to_string(), Some(3750.0))]);
+        // a record stored with its value keeps it (a restart)
+        let mut t = Transfers::new(None, vec![a.clone()]);
+        let mut r = tr(10_400, "master@x.io", "out@x.io", "BNB", 5.0);
+        r.usd = Some(3750.0);
+        t.records.insert("9".into(), r);
+        t.value(&mut m, 30_500);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+    }
+
+    type Stored = Rc<RefCell<Vec<(String, Option<f64>)>>>;
+
+    fn t_stored() -> Stored {
+        Rc::default()
+    }
+
+    #[test]
+    fn a_confirmed_move_keeps_its_value_and_counts_once() {
+        // the stream shows 5 BNB out at 750; the history confirms it later, when BNB is at 760 and the ring no
+        // longer reaches back: the record takes the move's value, and the desk's flow is the same 5 at 750
+        let mut m = bnb_market();
+        bnb(&mut m, 1_000, 750.0);
+        let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
+        let mut t = Transfers::new(None, vec![a.clone()]);
+        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
+        t.value(&mut m, 2_000);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        bnb(&mut m, 900_000, 760.0);
+        t.add("1", tr(1_005, "a@x.io", "b@x.io", "BNB", 5.0));
+        t.value(&mut m, 60_000);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
+        // an unconfirmed move drops after MOVE_HOLD_MS
+        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "2", "T": 70_000})).unwrap();
+        t.value(&mut m, 71_000);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0 + 2.0 * 760.0);
+        t.value(&mut m, 70_000 + MOVE_HOLD_MS);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
     }
 
     struct FakeRest {
@@ -1645,14 +1766,18 @@ mod tests {
         a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "USDT", "d": "-363", "T": 1_000})).unwrap();
         b.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "USDT", "d": "363", "T": 1_000})).unwrap();
         // before the history poll: the move is already out of both accounts' PnL
-        assert_relative_eq!(t.net_in_live(&mut a.borrow_mut(), &mut m, 0, 2_000), -363.0);
-        assert_relative_eq!(t.net_in_live(&mut b.borrow_mut(), &mut m, 0, 2_000), 363.0);
+        t.value(&mut m, 2_000);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -363.0);
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 363.0);
         // the history shows it: counted once
         t.add("1", tr(1_005, "a@x.io", "b@x.io", "USDT", 363.0));
-        assert_relative_eq!(t.net_in_live(&mut a.borrow_mut(), &mut m, 0, 3_000), -363.0);
-        assert_relative_eq!(t.net_in_live(&mut b.borrow_mut(), &mut m, 0, 3_000), 363.0);
+        t.value(&mut m, 3_000);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -363.0);
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 363.0);
         // long after: history only
-        assert_relative_eq!(t.net_in_live(&mut b.borrow_mut(), &mut m, 0, 400_000), 363.0);
+        t.value(&mut m, 400_000);
+        assert!(b.borrow().moves.is_empty());
+        assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 363.0);
     }
 
     #[test]

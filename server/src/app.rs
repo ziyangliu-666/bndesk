@@ -338,6 +338,7 @@ impl Desk {
                 to_email: r.to.clone(),
                 asset: r.asset.clone(),
                 amount: r.amount,
+                usd: r.usd,
             }));
         });
         self.transfers = Rc::new(RefCell::new(t));
@@ -396,6 +397,19 @@ impl Desk {
         *self.fills.borrow_mut() = FillBook::new();
         *self.pnl.borrow_mut() = self.new_pnl_book();
         {
+            let mut t = self.transfers.borrow_mut();
+            for r in &data.transfers {
+                t.records.insert(r.id.clone(), Transfer {
+                    ts: r.ts,
+                    frm: r.from_email.clone(),
+                    to: r.to_email.clone(),
+                    asset: r.asset.clone(),
+                    amount: r.amount,
+                    usd: r.usd,
+                });
+            }
+        }
+        {
             let mut m = self.market.borrow_mut();
             let mut fills = self.fills.borrow_mut();
             let mut tracked = self.tracked.borrow_mut();
@@ -442,18 +456,6 @@ impl Desk {
             pnl.clip_live(&alive_spans(&ts, ALIVE_STEP_MS, ALIVE_GAP_MS));
             for f in fills.take_dirty() {
                 self.fill_protos.insert(f.id.clone(), f.proto());
-            }
-        }
-        {
-            let mut t = self.transfers.borrow_mut();
-            for r in &data.transfers {
-                t.records.insert(r.id.clone(), Transfer {
-                    ts: r.ts,
-                    frm: r.from_email.clone(),
-                    to: r.to_email.clone(),
-                    asset: r.asset.clone(),
-                    amount: r.amount,
-                });
             }
         }
         self.alerts.borrow_mut().load(&data.alerts);
@@ -740,11 +742,12 @@ impl Desk {
         let ds = self.day_start();
         {
             let mut m = self.market.borrow_mut();
+            self.transfers.borrow_mut().value(&mut m, now);
             let tr = self.transfers.borrow();
             let mut tracked = self.tracked.borrow_mut();
             for a in &self.accounts {
                 let mut a = a.borrow_mut();
-                let td = tr.net_in_live(&mut a, &mut m, ds, now);
+                let td = tr.net_in_live(&a, ds);
                 a.transfers_day = td;
                 a.day_start = ds;
                 if a.equity_open.is_none() && a.valued(&mut m) && tr.loaded {

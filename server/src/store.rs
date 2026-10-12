@@ -31,11 +31,11 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 10] = [
+pub const MIGRATIONS: [(&str, &str, &str); 11] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
-    ("equity", "mm", "REAL"),
+    ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
     ref0, has_ref, mk, mk_raw, mk_fast, tox, refs";
@@ -49,7 +49,9 @@ const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl
     futures_notional, trading, hedged, realized, floating, hedge, mm) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
     volume, covered_s, backfilled_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
-const SQL_TRANSFER: &str = "INSERT OR IGNORE INTO transfers VALUES (?,?,?,?,?,?)";
+// a record is written when first seen and again once valued: the value is set once, the rest never changes
+const SQL_TRANSFER: &str = "INSERT INTO transfers (id, ts, from_email, to_email, asset, amount, usd) VALUES (?,?,?,?,?,?,?) \
+    ON CONFLICT(id) DO UPDATE SET usd = COALESCE(transfers.usd, excluded.usd)";
 const SQL_ALERT: &str = "INSERT OR REPLACE INTO alerts VALUES (?,?,?,?,?,?)";
 const SQL_KV: &str = "INSERT OR REPLACE INTO kv VALUES (?,?)";
 
@@ -88,6 +90,7 @@ pub struct HourRow {
     pub backfilled_s: Option<i64>,
 }
 
+/// transfers row; `usd` (its value, fixed when first valued) is NULL until then and in rows older than the column.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TransferRow {
     pub id: String,
@@ -96,6 +99,7 @@ pub struct TransferRow {
     pub to_email: String,
     pub asset: String,
     pub amount: f64,
+    pub usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -320,7 +324,7 @@ impl Store {
                 })
             })?
             .collect::<Result<_, _>>()?;
-        let mut st = c.prepare("SELECT * FROM transfers WHERE ts >= ?")?;
+        let mut st = c.prepare("SELECT id, ts, from_email, to_email, asset, amount, usd FROM transfers WHERE ts >= ?")?;
         out.transfers = st
             .query_map([since], |r| {
                 Ok(TransferRow {
@@ -330,6 +334,7 @@ impl Store {
                     to_email: str_at(r, 3)?,
                     asset: str_at(r, 4)?,
                     amount: f64_at(r, 5)?,
+                    usd: f64_opt(r, 6)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -417,7 +422,7 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             }
             Item::Row(Row::Transfer(t)) => {
                 c.prepare_cached(SQL_TRANSFER)?.execute(params![t.id, t.ts, t.from_email, t.to_email, t.asset,
-                                                                t.amount])?;
+                                                                t.amount, t.usd])?;
             }
             Item::Row(Row::Alert(a)) => {
                 c.prepare_cached(SQL_ALERT)?.execute(params![a.id, a.since, a.rule, a.level, a.text,
@@ -509,8 +514,9 @@ mod tests {
                                      factor_hedge: 0.2, fills: 3, volume: 300.0, covered_s: 3600,
                                      backfilled_s: Some(60) }));
         s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, from_email: "a@x".into(), to_email: "b@x".into(),
-                                          asset: "USDT".into(), amount: 10.0 }));
-        s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, ..Default::default() }));
+                                          asset: "USDT".into(), amount: 10.0, usd: None }));
+        s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, usd: Some(10.0), ..Default::default() }));
+        s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, usd: Some(12.0), ..Default::default() }));
         s.put(Row::Alert(AlertRow { id: "al".into(), since: 1, rule: "r".into(), level: "warn".into(),
                                     text: "t".into(), active: true }));
         s.start().unwrap();
@@ -520,7 +526,8 @@ mod tests {
         assert_eq!(l.hours.len(), 1);
         assert_eq!(l.hours[0].backfilled_s, Some(60));
         assert_eq!(l.transfers.len(), 0); // ts 5 < since 100
-        assert_eq!(s.load(0, 1).unwrap().transfers[0].amount, 10.0); // INSERT OR IGNORE
+        let t = &s.load(0, 1).unwrap().transfers[0];
+        assert_eq!((t.amount, t.usd), (10.0, Some(10.0))); // kept as first written; the value set once
         assert!(l.alerts[0].active); // active alerts come back whatever their age
     }
 

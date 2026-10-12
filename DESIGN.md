@@ -57,7 +57,15 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
   60 s for the futures day.
 - Master key (read; `[master] show = false` keeps the master's own balances off the desk):
   `/sapi/v1/sub-account/list` hourly, `/sapi/v1/sub-account/universalTransfer`
-  history every 60 s, so per-account PnL excludes transfers.
+  history every 60 s, so per-account PnL excludes transfers. The user streams show a transfer seconds
+  earlier (spot `balanceUpdate`, USD-M `ACCOUNT_UPDATE` `bc` outside orders and funding): such a move counts
+  until the history shows it, and for 3 min at most (`MOVE_HOLD_MS`) if it never does (a deposit or
+  withdrawal, a spot to futures move inside one account, which nets out there).
+- Transfer values: each move and each record is valued once, when first seen: the asset's mid at the end
+  of the last whole second before it (1 s ring, 10 min; the price at first sight when the ring does not
+  reach back), stablecoins at 1. A record that confirms a move takes the move's value. The value is
+  stored (`transfers.usd`) and kept across restarts; a row stored without one is valued at first sight
+  after the start.
 - Balance ordering: a REST snapshot can be read before a fill and applied after the stream reported
   it. Each held spot balance keeps its account update time (REST `updateTime`, stream `u`); a snapshot
   leaves alone the assets the stream set after its `updateTime`, and a stream event older than what is
@@ -113,7 +121,9 @@ All times are exchange event times (ms).
 - Toxicity D(h) = −s × (R(t+h) / R(t−5 s) − 1) × 1e4 for h ∈ {0, 0.2, 1, 60, 300} s, notional
   weighted over today's fills with a reference: positive = the reference moved against the fill.
 - Account equity (quote USDT) = spot balances at mid (stablecoins at 1) + futures margin balance.
-  Day PnL = equity − equity at the day start − net transfers in since then (day start configurable, default 00:00 UTC).
+  Day PnL = equity − equity at the day start − net transfers in since then, at their values when they
+  happened (day start configurable, default 00:00 UTC). An asset that leaves carries no price exposure
+  after it has gone.
 - Inventory per asset = sum over accounts of free + locked of non-quote assets; value at mid;
   average cost from today's fills.
 - Exposure: per account and total, spot inventory value, futures net notional, net. Optional

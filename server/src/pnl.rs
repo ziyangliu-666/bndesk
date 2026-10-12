@@ -297,6 +297,17 @@ impl From<&FillRec> for PFill {
     }
 }
 
+/// A transfer of an asset into (qty > 0) or out of (qty < 0) the desk, at the USD price fixed when it was
+/// first valued. key: stable across calls ("t:<tranId>" for a history record, "m:..." for a stream move).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flow {
+    pub key: String,
+    pub ts: i64,
+    pub asset: String,
+    pub qty: f64,
+    pub px: f64,
+}
+
 /// (M, R) per base at a gap's start or end.
 pub type Marks = OMap<(Option<f64>, Option<f64>)>;
 

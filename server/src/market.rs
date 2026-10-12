@@ -414,6 +414,20 @@ impl Market {
         inst.and_then(|i| self.px(i))
     }
 
+    /// The asset's USD price at t_ms: its mid at the end of the last whole second before (from the 1 s ring,
+    /// so it no longer changes once asked after that second), else the price now when the ring does not reach
+    /// back that far.
+    pub fn asset_price_at(&mut self, asset: &str, t_ms: i64) -> Option<f64> {
+        if STABLES.contains(&asset) {
+            return Some(1.0);
+        }
+        match self.asset_inst(asset) {
+            Some(i) => self.insts[i].ring.at(t_ms.div_euclid(1000) * 1000 - 1).filter(|p| *p != 0.0).or_else(|| self.px(i)),
+            None if asset.starts_with("LD") && asset.len() > 2 => self.asset_price_at(&asset[2..], t_ms),
+            None => None,
+        }
+    }
+
     fn ref_mid(&self, inst: &Inst) -> Option<f64> {
         inst.ref_.and_then(|r| self.insts[r].mid())
     }

@@ -319,7 +319,7 @@ impl Sim {
             if !transferred && now_ms() - t0 > 30_000 {
                 transferred = true;
                 let rec = Transfer { ts: CLOCK.now(), frm: "master@sim.invalid".into(), to: "sub-1@sim.invalid".into(),
-                                     asset: "USDT".into(), amount: 1000.0 };
+                                     asset: "USDT".into(), amount: 1000.0, usd: Some(1000.0) };
                 self.transfers.borrow_mut().add(&format!("sim-{}", rec.ts), rec.clone());
                 self.move_(&rec.frm, &rec.to, &rec.asset, rec.amount);
             }
