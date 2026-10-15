@@ -64,7 +64,7 @@ function PmCell(field: "trading") {
 function totalRow(days: DayPnl[]): DayRow {
   const sum = (k: "trading" | "hedged" | "factor" | "fills" | "volume" | "covered_s" | "backfilled_s") => days.reduce((a, d) => a + d[k], 0);
   // sums of the days that kept it, null when none did
-  const sumN = (k: "pnl_day" | "realized" | "realized_old" | "floating" | "hedge" | "other" | "mm" | "inventory") => {
+  const sumN = (k: "pnl_day" | "realized" | "realized_old" | "floating" | "hedge" | "rebates" | "other" | "mm" | "inventory") => {
     const xs = days.map((d) => d[k]).filter((x): x is number => x != null);
     return xs.length ? xs.reduce((a, x) => a + x, 0) : null;
   };
@@ -91,6 +91,7 @@ function totalRow(days: DayPnl[]): DayRow {
     realized_old: sumN("realized_old"),
     floating: sumN("floating"),
     hedge: sumN("hedge"),
+    rebates: sumN("rebates"),
     other: sumN("other"),
     mm: sumN("mm"),
     inventory: sumN("inventory"),
@@ -115,7 +116,8 @@ export function DaysTable() {
       n({ field: "mm", headerName: "Market making", headerTooltip: `${DEF_MM}, USDT`, width: 96, valueFormatter: fPnl, cellClass: signCls }),
       n({ field: "inventory", headerName: "Inventory", headerTooltip: `${DEF_INV}, USDT`, width: 72, valueFormatter: fPnl, cellClass: signCls }),
       n({ field: "hedge", headerName: "Hedge", headerTooltip: "Futures legs: price, fees, funding, USDT", width: 60, valueFormatter: fPnl, cellClass: signCls }),
-      n({ field: "other", headerName: "Other", headerTooltip: "Day PnL minus trading PnL and the hedge legs, USDT", width: 60, valueFormatter: fPnl, cellClass: signCls }),
+      n({ field: "rebates", headerName: "Rebates", headerTooltip: "Market-maker rebates credited that day, USDT", width: 64, valueFormatter: fPnl, cellClass: signCls }),
+      n({ field: "other", headerName: "Other", headerTooltip: "Day PnL minus trading PnL, the hedge legs and the rebates, USDT", width: 60, valueFormatter: fPnl, cellClass: signCls }),
       n({ colId: "trading", headerName: "Trading ± SE", headerTooltip: `${DEF_PI}. ${DEF_SE}. USDT`, width: 128, valueGetter: (p) => p.data?.trading, cellRenderer: PmCell("trading") }),
       n({ field: "fills", headerName: "Fills", headerTooltip: "Spot fills booked that day", width: 72, valueFormatter: fInt }),
       n({ field: "volume", headerName: "Volume", headerTooltip: "Notional of the spot fills booked that day, USDT", width: 76, valueFormatter: fUsd }),

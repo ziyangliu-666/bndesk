@@ -10,6 +10,7 @@ export interface HistBar {
   mm: number | null; // market making, cumulative like pi
   realized: number | null;
   hedge: number | null;
+  rebates: number | null; // market-maker rebates, cumulative like pi
   inventory: number | null;
   futures: number | null;
   volume: number;

@@ -24,7 +24,7 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1, S2, SANS } from "../theme";
+import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR, S1, S2, SANS } from "../theme";
 import { SeriesWord, useSeriesToggle } from "./ui";
 import { DASH, int, num, pnl, price, qty, usdShort, type TzMode } from "../format";
 import type { HistBar, HistDay, HistFill, Kline } from "../api";
@@ -159,18 +159,18 @@ function fitLatest(chart: IChartApi | null, n: number) {
 
 export type PnlView = "day" | "cum" | "bar";
 const DAY_MS = 86_400_000;
-const PARTS = ["pi", "mm", "hedge"] as const;
+const PARTS = ["pi", "mm", "hedge", "rebates"] as const;
 
 /** The P&L of `bars` (running totals from the first bar) as one view: "day" restarts at each day start (the
  *  dayStart grid), "cum" starts at 0 on bar `k0`, "bar" is what each bar made by itself. Other fields pass. */
 export function viewBars(bars: HistBar[], view: PnlView, dayStart: number, k0 = 0): HistBar[] {
   const out: HistBar[] = new Array(bars.length);
-  const last: Record<string, number | null> = { c: null, pi: null, mm: null, hedge: null };
-  let base: Record<string, number> = { c: 0, pi: 0, mm: 0, hedge: 0 };
+  const last: Record<string, number | null> = { c: null, pi: null, mm: null, hedge: null, rebates: null };
+  let base: Record<string, number> = { c: 0, pi: 0, mm: 0, hedge: 0, rebates: 0 };
   let day = NaN;
   if (view === "cum") {
     const b0 = bars[Math.min(Math.max(k0, 0), bars.length - 1)];
-    base = { c: b0?.o ?? 0, pi: 0, mm: 0, hedge: 0 };
+    base = { c: b0?.o ?? 0, pi: 0, mm: 0, hedge: 0, rebates: 0 };
     for (const f of PARTS) {
       let v: number | null = null;
       for (let i = Math.min(k0, bars.length) - 1; i >= 0 && v == null; i--) v = bars[i]![f];
@@ -184,18 +184,18 @@ export function viewBars(bars: HistBar[], view: PnlView, dayStart: number, k0 = 
       const d = dayStart + Math.floor((b.t - dayStart) / DAY_MS) * DAY_MS;
       if (d !== day) {
         // the running totals at the end of the previous day; the first day in view starts from 0
-        if (i > 0) base = { c: last.c ?? 0, pi: last.pi ?? 0, mm: last.mm ?? 0, hedge: last.hedge ?? 0 };
+        if (i > 0) base = { c: last.c ?? 0, pi: last.pi ?? 0, mm: last.mm ?? 0, hedge: last.hedge ?? 0, rebates: last.rebates ?? 0 };
         day = d;
       }
     }
     if (view === "bar") {
       const prev = { ...last };
-      const d = (f: "pi" | "mm" | "hedge") => (b[f] == null ? null : b[f]! - (prev[f] ?? b[f]!));
+      const d = (f: (typeof PARTS)[number]) => (b[f] == null ? null : b[f]! - (prev[f] ?? b[f]!));
       const o = prev.c ?? b.o;
-      out[i] = { ...b, o: 0, h: b.h - o, l: b.l - o, c: b.c - o, pi: d("pi"), mm: d("mm"), hedge: d("hedge") };
+      out[i] = { ...b, o: 0, h: b.h - o, l: b.l - o, c: b.c - o, pi: d("pi"), mm: d("mm"), hedge: d("hedge"), rebates: d("rebates") };
     } else {
       const sub = (v: number | null, f: string) => (v == null ? null : v - base[f]!);
-      out[i] = { ...b, o: b.o - base.c!, h: b.h - base.c!, l: b.l - base.c!, c: b.c - base.c!, pi: sub(b.pi, "pi"), mm: sub(b.mm, "mm"), hedge: sub(b.hedge, "hedge") };
+      out[i] = { ...b, o: b.o - base.c!, h: b.h - base.c!, l: b.l - base.c!, c: b.c - base.c!, pi: sub(b.pi, "pi"), mm: sub(b.mm, "mm"), hedge: sub(b.hedge, "hedge"), rebates: sub(b.rebates, "rebates") };
     }
     last.c = b.c;
     for (const f of PARTS) if (b[f] != null) last[f] = b[f];
@@ -203,13 +203,14 @@ export function viewBars(bars: HistBar[], view: PnlView, dayStart: number, k0 = 
   return out;
 }
 
-/** A bar's P&L split into market making, inventory, hedge and the rest, each stacked away from 0 by sign:
+/** A bar's P&L split into market making, inventory, hedge, rebates and the rest, each stacked away from 0 by sign:
  *  for each part, the far edge of its segment (later parts outside earlier ones). */
 function stackParts(b: HistBar): { pos: number[]; neg: number[] } {
   const mm = b.mm ?? 0;
   const inv = b.pi != null && b.mm != null ? b.pi - b.mm : 0;
   const he = b.hedge ?? 0;
-  const parts = [mm, inv, he, b.c - (b.pi ?? 0) - he];
+  const rb = b.rebates ?? 0;
+  const parts = [mm, inv, he, rb, b.c - (b.pi ?? 0) - he - rb];
   const pos: number[] = [], neg: number[] = [];
   let p = 0, n = 0;
   for (const v of parts) {
@@ -229,6 +230,7 @@ type DeskSeries = {
   mm: ISeriesApi<"Line">;
   ip: ISeriesApi<"Line">;
   he: ISeriesApi<"Line">;
+  rb: ISeriesApi<"Line">;
 };
 
 /** The P&L series of one view: candles and lines ("day"), a Day PnL line and the parts ("cum"), stacked
@@ -242,8 +244,9 @@ function draw(x: DeskSeries, vb: HistBar[], view: PnlView) {
   x.mm.setData(lines ? vb.flatMap((b) => pt(b, b.mm)) : []);
   x.ip.setData(lines ? vb.flatMap((b) => pt(b, b.pi == null || b.mm == null ? null : b.pi - b.mm)) : []);
   x.he.setData(lines ? vb.flatMap((b) => pt(b, b.hedge)) : []);
+  x.rb.setData(lines ? vb.flatMap((b) => pt(b, b.rebates)) : []);
   const st = view === "bar" ? vb.map(stackParts) : [];
-  for (let k = 0; k < 4; k++)
+  for (let k = 0; k < 5; k++)
     for (const sgn of [0, 1])
       x.stack[k * 2 + sgn]!.setData(vb.flatMap((b, i) => (view === "bar" ? [{ time: sec(b.t), value: (sgn ? st[i]!.neg : st[i]!.pos)[k]! }] : [])));
 }
@@ -255,7 +258,7 @@ function drawLast(x: DeskSeries, b: HistBar, view: PnlView) {
   if (view === "cum") x.pl.update({ time: t, value: b.c });
   if (view === "bar") {
     const st = stackParts(b);
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < 5; k++) {
       x.stack[k * 2]!.update({ time: t, value: st.pos[k]! });
       x.stack[k * 2 + 1]!.update({ time: t, value: st.neg[k]! });
     }
@@ -265,12 +268,13 @@ function drawLast(x: DeskSeries, b: HistBar, view: PnlView) {
   if (b.mm != null) x.mm.update({ time: t, value: b.mm });
   if (b.pi != null && b.mm != null) x.ip.update({ time: t, value: b.pi - b.mm });
   if (b.hedge != null) x.he.update({ time: t, value: b.hedge });
+  if (b.rebates != null) x.rb.update({ time: t, value: b.rebates });
 }
 
 /** Today's live figures as the newest bar. Within a day each running total is the last bar before the day
  *  start (yesterday's close, in the same running total) plus today's own figure; `prev` is the newest bar. */
 function liveBar(bars: HistBar[], prev: HistBar | null, dayStart: number, stepMs: number, now: number,
-                 v: { pnl: number; pi: number; mm: number; hedge: number | null; inventory: number; futures: number }): HistBar | null {
+                 v: { pnl: number; pi: number; mm: number; hedge: number | null; rebates: number; inventory: number; futures: number }): HistBar | null {
   const last = bars[bars.length - 1];
   if (!last) return null;
   let k = bars.length - 1;
@@ -296,6 +300,7 @@ function liveBar(bars: HistBar[], prev: HistBar | null, dayStart: number, stepMs
     mm: base((b) => b.mm) + v.mm,
     realized: open?.realized ?? null,
     hedge: v.hedge == null ? (open?.hedge ?? null) : base((b) => b.hedge) + v.hedge,
+    rebates: base((b) => b.rebates) + v.rebates,
     inventory: v.inventory,
     futures: v.futures,
     volume: open ? open.volume : 0,
@@ -383,11 +388,12 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
   const s = useRef<{
     candle: ISeriesApi<"Candlestick">;
     pl: ISeriesApi<"Line">;
-    stack: ISeriesApi<"Histogram">[]; // [part][sign]: market making, inventory, hedge, other × up, down
+    stack: ISeriesApi<"Histogram">[]; // [part][sign]: market making, inventory, hedge, rebates, other × up, down
     pi: ISeriesApi<"Line">;
     mm: ISeriesApi<"Line">;
     ip: ISeriesApi<"Line">;
     he: ISeriesApi<"Line">;
+    rb: ISeriesApi<"Line">;
     vol: ISeriesApi<"Histogram">;
     inv: ISeriesApi<"Line">;
     fut: ISeriesApi<"Line">;
@@ -434,12 +440,13 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
       c.addSeries(LineSeries, { color, lineWidth: 1, crosshairMarkerVisible: false, priceFormat: usdFmt, ...quiet, ...extra }, pane);
     const right = {};
     // per-bar view: outer segments first, so each part's inner edge is painted over by the part inside it
-    const stackColors = [MM_COLOR, INVPNL_COLOR, HEDGE, OTHER_COLOR];
-    const stack: ISeriesApi<"Histogram">[] = new Array(8);
-    for (let k = 3; k >= 0; k--)
+    const stackColors = [MM_COLOR, INVPNL_COLOR, HEDGE, REBATE_COLOR, OTHER_COLOR];
+    const stack: ISeriesApi<"Histogram">[] = new Array(10);
+    for (let k = 4; k >= 0; k--)
       for (const sgn of [0, 1])
         stack[k * 2 + sgn] = c.addSeries(HistogramSeries, { color: stackColors[k], priceFormat: usdFmt, ...quiet, visible: false }, 0);
     const pl = line(C.ink, 0, { visible: false });
+    const rb = line(REBATE_COLOR, 0, right);
     const he = line(HEDGE, 0, right);
     const ip = line(INVPNL_COLOR, 0, right);
     const mm = line(MM_COLOR, 0, right);
@@ -459,7 +466,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
       x.attachPrimitive(p);
       return p;
     });
-    s.current = { candle, pl, stack, pi, mm, ip, he, vol, inv, fut, seps, labels };
+    s.current = { candle, pl, stack, pi, mm, ip, he, rb, vol, inv, fut, seps, labels };
     return () => {
       c.remove();
       chart.current = null;
@@ -507,7 +514,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
     const x = s.current;
     if (!x || !sm || !expo || !bars.length) return;
     const b = liveBar(bars, live.current, sm.day_start, step * 1000, serverNow(), {
-      pnl: sm.pnl_day, pi: sm.pnl.trading, mm: sm.pnl.mm, hedge: expo.hedge_day?.hedge_pnl ?? null,
+      pnl: sm.pnl_day, pi: sm.pnl.trading, mm: sm.pnl.mm, hedge: expo.hedge_day?.hedge_pnl ?? null, rebates: sm.rebates,
       inventory: sm.inventory_value, futures: expo.futures_notional,
     });
     if (!b) return;
@@ -524,12 +531,13 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
 
   const at = hover ?? bars.length - 1;
   const b = liveB && (hover == null || liveB.t === bars[at]?.t || at >= bars.length) ? liveB : shown.current[at];
-  const has = (k: "pi" | "mm" | "hedge") => bars.some((x) => x[k] != null);
+  const has = (k: "pi" | "mm" | "hedge" | "rebates") => bars.some((x) => x[k] != null);
   const names = [
     "Day PnL",
     ...(has("pi") ? ["Trading PnL"] : []),
     ...(has("mm") ? ["Market making", "Inventory PnL"] : []),
     ...(has("hedge") ? ["Hedge"] : []),
+    ...(has("rebates") ? ["Rebates"] : []),
     ...(view === "bar" ? ["Other"] : []),
     "Volume",
     "Inventory",
@@ -548,7 +556,8 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
       "Market making": [x.mm, x.stack[0]!, x.stack[1]!],
       "Inventory PnL": [x.ip, x.stack[2]!, x.stack[3]!],
       Hedge: [x.he, x.stack[4]!, x.stack[5]!],
-      Other: [x.stack[6]!, x.stack[7]!],
+      Rebates: [x.rb, x.stack[6]!, x.stack[7]!],
+      Other: [x.stack[8]!, x.stack[9]!],
       Volume: [x.vol],
       Inventory: [x.inv],
       Futures: [x.fut],
@@ -589,7 +598,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
               <span className={"hl-v " + sgn(b.c)}>{pnl(b.c)}</span>
             )}
             {view === "bar" && (
-              <KV k={w("Other", OTHER_COLOR)} off={off("Other")}>{pnl(b.c - (b.pi ?? 0) - (b.hedge ?? 0))}</KV>
+              <KV k={w("Other", OTHER_COLOR)} off={off("Other")}>{pnl(b.c - (b.pi ?? 0) - (b.hedge ?? 0) - (b.rebates ?? 0))}</KV>
             )}
           </div>
           <div className="hl-row">
@@ -601,6 +610,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
               </KV>
             )}
             {has("hedge") && <KV k={w("Hedge", HEDGE)} off={off("Hedge")}>{pnl(b.hedge)}</KV>}
+            {has("rebates") && <KV k={w("Rebates", REBATE_COLOR)} off={off("Rebates")}>{pnl(b.rebates)}</KV>}
             <KV k={w("Volume", VOL_WORD)} off={off("Volume")}>{usdShort(b.volume)}</KV>
             <KV k="Fills">{int(b.fills)}</KV>
             <KV k={w("Inventory", INV_COLOR)} off={off("Inventory")}>{b.inventory == null ? DASH : usdShort(b.inventory)}</KV>

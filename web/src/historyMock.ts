@@ -34,7 +34,7 @@ export function activity(m: number): number {
 }
 
 // ---- desk ----
-// Cumulative since ORIGIN: pi trading, mm market making, re realized, he hedge legs, ot other, fd the inventory's
+// Cumulative since ORIGIN: pi trading, mm market making, re realized, he hedge legs, rb rebates, ot other, fd the inventory's
 // factor drift. Levels at the minute close: inv spot inventory value, fut futures notional. Per minute: vol, fills,
 // and hx / lx, how far the day PnL went above the higher and below the lower of the minute's open and close.
 export interface DeskMinute {
@@ -42,6 +42,7 @@ export interface DeskMinute {
   mm: number;
   re: number;
   he: number;
+  rb: number;
   ot: number;
   fd: number;
   inv: number;
@@ -52,7 +53,7 @@ export interface DeskMinute {
   lx: number;
 }
 type Key = keyof DeskMinute;
-const KEYS: Key[] = ["pi", "mm", "re", "he", "ot", "fd", "inv", "fut", "vol", "fills", "hx", "lx"];
+const KEYS: Key[] = ["pi", "mm", "re", "he", "rb", "ot", "fd", "inv", "fut", "vol", "fills", "hx", "lx"];
 const FLOW: Key[] = ["vol", "fills", "hx", "lx"]; // per minute, not carried over
 export const desk = { n: 0 } as Record<Key, number[]> & { n: number };
 for (const k of KEYS) desk[k] = [];
@@ -68,6 +69,11 @@ const gen = {
 };
 const INV_LEVEL = 2600;
 const HEDGE_RATIO = 1;
+
+/** The market-maker rebates credited in minute m: five accounts' last hour, a few minutes after it closes. */
+export function rebate(m: number): number {
+  return m % 60 === 4 ? 5 * (0.2 + 0.15 * hash(Math.floor(m / 60), 33)) : 0;
+}
 
 function generate(m: number): DeskMinute {
   const at = (k: Key) => desk[k][m - 1] ?? (k === "inv" ? INV_LEVEL : k === "fut" ? -HEDGE_RATIO * INV_LEVEL : 0);
@@ -117,6 +123,7 @@ function generate(m: number): DeskMinute {
     mm: at("mm") + mm,
     re: at("re") + mm + 0.7 * (fd + idio + ddMove) + g(9) * 0.05,
     he,
+    rb: at("rb") + rebate(m),
     ot,
     fd: at("fd") + fd,
     inv,
@@ -166,9 +173,9 @@ function history(from: number, to: number, step: number): History {
   const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN / sm) * sm);
   const m1 = Math.min(now, Math.floor((to - ORIGIN) / MIN));
   const base = (xs: number[]) => (m0 > 0 ? xs[m0 - 1]! : 0);
-  const tot = (m: number) => desk.pi[m]! + desk.he[m]! + desk.ot[m]!;
+  const tot = (m: number) => desk.pi[m]! + desk.he[m]! + desk.rb[m]! + desk.ot[m]!;
   const b0 = m0 > 0 ? tot(m0 - 1) : 0;
-  const [bpi, bre, bmm, bhe] = [base(desk.pi), base(desk.re), base(desk.mm), base(desk.he)];
+  const [bpi, bre, bmm, bhe, brb] = [base(desk.pi), base(desk.re), base(desk.mm), base(desk.he), base(desk.rb)];
   const bars: HistBar[] = [];
   let prev = 0;
   for (let s = m0; s <= m1; s += sm) {
@@ -196,6 +203,7 @@ function history(from: number, to: number, step: number): History {
       realized: desk.re[e]! - bre,
       mm: desk.mm[e]! - bmm,
       hedge: desk.he[e]! - bhe,
+      rebates: desk.rb[e]! - brb,
       inventory: desk.inv[e]!,
       futures: desk.fut[e]!,
       volume: vol,

@@ -156,10 +156,17 @@ export function KeyStrip() {
         />
         <Op g="+" />
         <Fig
+          label="Rebates"
+          value={pnl(sm.rebates)}
+          v={sm.rebates}
+          tip="Market-maker rebates Binance credited since the day start, hourly per account; trading fees do not show them."
+        />
+        <Op g="+" />
+        <Fig
           label="Other"
           value={sm.other != null ? pnl(sm.other) : "—"}
           v={sm.other}
-          tip="Day PnL minus trading PnL and the hedge."
+          tip="Day PnL minus trading PnL, the hedge and the rebates."
         />
       </div>
       <Fig

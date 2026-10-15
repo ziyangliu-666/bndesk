@@ -50,6 +50,7 @@ export interface DayPnl {
   realized_old: number | null;
   floating: number | null;
   hedge: number | null;
+  rebates: number | null;
   other: number | null;
   mm: number | null;
   inventory: number | null;
@@ -104,7 +105,8 @@ export interface Summary {
   equity: number;
   pnl_day: number;
   pnl_1h: number;
-  other: number | null; // day PnL − Π − hedge legs' P&L
+  rebates: number; // market-maker rebates credited today
+  other: number | null; // day PnL − Π − hedge legs' P&L − rebates
   pnl: PnlSummary;
   markout_net_bps_1h: number | null; // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number;
@@ -167,6 +169,7 @@ export interface Account {
   fees: AccountFee[];
   user_stream: "up" | "down" | "n/a";
   updated: number;
+  rebates: number; // market-maker rebates credited today
 }
 
 export interface SymbolRow {

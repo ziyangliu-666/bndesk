@@ -108,6 +108,7 @@ function total(rows: Account[]): Row {
     fees: [],
     user_stream: "n/a",
     updated: 0,
+    rebates: sum("rebates"),
   };
 }
 
@@ -123,6 +124,7 @@ export function AccountsGrid({ full = false, wide = true }: { full?: boolean; wi
       n({ field: "equity", headerName: "Equity", headerTooltip: "Spot balances at mid (stablecoins at 1) plus futures margin balance, USDT", width: 80, valueFormatter: fUsd }),
       n({ field: "pnl_day", headerName: "Day PnL", headerTooltip: "Equity now − equity at the day start − net transfers in since then, USDT", width: 74, valueFormatter: fPnl, cellClass: signCls }),
       n({ field: "transfers_day", headerName: "Transfers", headerTooltip: "Net transfers in since the day start, USDT", width: 80, valueFormatter: fPnl, hide: !full }),
+      n({ field: "rebates", headerName: "Rebates", headerTooltip: "Market-maker rebates credited since the day start, part of Day PnL, USDT", width: 70, valueFormatter: fPnl, cellClass: signCls, hide: !full }),
       n({ field: "equity_open", headerName: "Equity open", headerTooltip: "Equity at the day start, USDT", width: 90, valueFormatter: fUsd, hide: !full || !wide }),
       n({ field: "quote_free", headerName: "USDT free", headerTooltip: "Free spot quote balance, USDT", width: 80, valueFormatter: fUsd }),
       n({ field: "quote_locked", headerName: "Locked", headerTooltip: "Spot quote balance locked in open orders, USDT", width: 70, valueFormatter: fUsd }),

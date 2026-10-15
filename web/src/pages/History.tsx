@@ -48,7 +48,7 @@ function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
   const j = full.findIndex((b) => b.t === tail[0]!.t);
   if (j < 0) return full;
   const off: Record<string, number> = { c: full[j]!.o - tail[0]!.o };
-  for (const k of ["pi", "mm", "realized", "hedge"] as const) {
+  for (const k of ["pi", "mm", "realized", "hedge", "rebates"] as const) {
     for (let i = j; i < full.length - 1 && i - j < tail.length; i++) {
       const a = full[i]![k], b = tail[i - j]![k];
       if (a != null && b != null) {
@@ -64,6 +64,7 @@ function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
     ...tail.map((b) => ({
       ...b, o: b.o + c, h: b.h + c, l: b.l + c, c: b.c + c,
       pi: add(b.pi, "pi"), mm: add(b.mm, "mm"), realized: add(b.realized, "realized"), hedge: add(b.hedge, "hedge"),
+      rebates: add(b.rebates, "rebates"),
     })),
   ];
 }

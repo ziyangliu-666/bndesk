@@ -25,7 +25,7 @@ import type {
   Summary,
   SymbolRow,
 } from "./protocol";
-import { MIN, activity as minuteActivity, desk, deskAt, minuteOf, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
+import { MIN, activity as minuteActivity, desk, deskAt, minuteOf, rebate, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
 
 type Emit = (m: Msg) => void;
 
@@ -259,6 +259,8 @@ let base: DeskMinute; // the desk's cumulative values at the day start
 let mmLiveSpread = 0; // Σ edge × notional − fees, since the mock started
 let mmSpread0 = 0;
 let other = 0;
+let rebates = 0; // today's, desk-wide; each account has its share
+const REBATE_SHARE: Record<string, number> = { main: 0.1, "sub-a": 0.25, "sub-b": 0.3, "sub-c": 0.2, "sub-d": 0.15 };
 let realizedOld = 0;
 let regime = 0; // log intensity of fill clusters, AR(1)
 let minVol = 0; // this minute's notional filled
@@ -605,6 +607,7 @@ function buildHistory() {
   const mm0 = e.mm - base.mm;
   const fd0 = e.fd - base.fd;
   other = e.ot - base.ot;
+  rebates = e.rb - base.rb + rebate(curMin);
 
   // inventory: about half the names hold some, summing to the desk's inventory value
   const held = insts.filter(() => rnd() < 0.45);
@@ -697,7 +700,7 @@ function buildHistory() {
       const w = (k + 1) / 12;
       const lerp = (key: keyof DeskMinute) => (p == null ? at(m, key) * w : at(p, key) + (at(m, key) - at(p, key)) * w);
       const pi = lerp("pi") + walk[k]! - walk[11]! * w;
-      const pnl = pi + lerp("he") + lerp("ot");
+      const pnl = pi + lerp("he") + lerp("rb") + lerp("ot");
       series.push({
         t: dayStart + (m - d0) * MIN + k * SLOT,
         equity: BASE_EQUITY + pnl,
@@ -813,7 +816,7 @@ function pnlParts() {
   const fd = sumOf(insts, (i) => i.fd);
   const hedge = sumOf(legs, legPnl);
   const floating = sumOf(insts, (i) => (i.cost != null ? i.inv * (midOf(i) - i.cost) : 0));
-  return { trading, mm, fd, hedge, floating, pnlDay: trading + hedge + other };
+  return { trading, mm, fd, hedge, floating, pnlDay: trading + hedge + rebates + other };
 }
 
 function deskRow(): DeskMinute {
@@ -823,6 +826,7 @@ function deskRow(): DeskMinute {
     mm: base.mm + p.mm,
     re: base.re + p.trading - p.floating,
     he: base.he + p.hedge,
+    rb: base.rb + rebates,
     ot: base.ot + other,
     fd: base.fd + p.fd,
     inv: sumOf(insts, invValue),
@@ -878,6 +882,7 @@ function summary(): Summary {
     equity: BASE_EQUITY + p.pnlDay,
     pnl_day: p.pnlDay,
     pnl_1h: p.pnlDay - (hourAgo?.pnl_day ?? 0),
+    rebates,
     other,
     pnl: {
       trading: p.trading,
@@ -1022,7 +1027,8 @@ const acctStream: Record<string, "up" | "down"> = {};
 function account(a: (typeof ACCOUNTS)[number]): Account {
   const mine = insts.filter((i) => i.account === a.id);
   const isMain = a.id === "main";
-  const pnl = sumOf(mine, tradingOf) + (isMain ? sumOf(legs, legPnl) + other : 0);
+  const rb = rebates * (REBATE_SHARE[a.id] ?? 0);
+  const pnl = sumOf(mine, tradingOf) + rb + (isMain ? sumOf(legs, legPnl) + other : 0);
   const inv = sumOf(mine, invValue);
   const futU = isMain ? sumOf(legs, (l) => l.q * (legMark(l) - l.entry)) : 0;
   const futW = isMain ? 6200 + sumOf(legs, (l) => l.cash + l.q * l.entry - l.qLive0 * l.entry) : 0;
@@ -1074,6 +1080,7 @@ function account(a: (typeof ACCOUNTS)[number]): Account {
     ],
     user_stream: acctStream[a.id] ?? "up",
     updated: now,
+    rebates: rb,
   };
 }
 function accounts(): Account[] {
@@ -1347,11 +1354,12 @@ function buildDays() {
       volume: vol,
       covered_s: k === 9 ? 70_200 : 86_400 - Math.floor(rnd() * 300),
       backfilled_s: k === 9 ? 16_200 : 0,
-      pnl_day: kept ? tr + d("he") + d("ot") : null,
+      pnl_day: kept ? tr + d("he") + d("rb") + d("ot") : null,
       realized: kept ? d("re") : null,
       realized_old: kept ? tr * 0.08 : null,
       floating: kept ? tr - d("re") : null,
       hedge: kept ? d("he") : null,
+      rebates: kept ? d("rb") : null,
       other: kept ? d("ot") : null,
       mm: kept ? d("mm") : null,
       inventory: kept ? tr - d("mm") : null,
@@ -1377,6 +1385,7 @@ function days(sum: Summary): DayPnl[] {
     realized_old: p.realized_old,
     floating: p.floating,
     hedge: sumOf(legs, legPnl),
+    rebates: sum.rebates,
     other: sum.other,
     mm: p.mm,
     inventory: p.inventory,
@@ -1463,6 +1472,7 @@ export function startMock(emit: Emit): () => void {
     if (m !== curMin) {
       writeLive(curMin, deskRow());
       curMin = m;
+      rebates += rebate(m);
       minVol = 0;
       minFills = 0;
       minOpen = minHi = minLo = pnlParts().pnlDay;

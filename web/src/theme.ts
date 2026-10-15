@@ -108,5 +108,6 @@ export const gridTheme = themeQuartz.withParams({
 export const MM_COLOR = S3;
 export const INVPNL_COLOR = "#a47ef0";
 export const HEDGE_COLOR = "#9aa3b2";
+export const REBATE_COLOR = "#4fb8c9";
 export const INV_COLOR = "#c98500";
 export const FUT_COLOR = "#d55181";
