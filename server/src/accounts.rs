@@ -947,6 +947,30 @@ pub async fn dividends(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
+/// The market-maker rebates credited in [from, to), for a past day: each row goes to on_dividend (the store
+/// keeps it), and the rebates are summed at the asset's price now (stablecoins at 1).
+pub async fn rebates_between(acct: &AccountRef, rest: &impl RestGet, from: i64, to: i64) -> Result<f64> {
+    let q: Params = params!["startTime" => from, "endTime" => to - 1, "limit" => 500];
+    let r = rest.get_json("/sapi/v1/asset/assetDividend", &q, 10, true).await?;
+    let a = acct.borrow();
+    let mut m = a.market.as_ref().map(|m| m.borrow_mut());
+    let mut sum = 0.0;
+    for x in r.get("rows").and_then(Value::as_array).into_iter().flatten() {
+        let d = Dividend {
+            ts: to_i(get(x, "divTime")?)?,
+            asset: s(x, "asset")?.to_string(),
+            amount: f(x, "amount")?,
+            info: first(x, &["enInfo"]).and_then(Value::as_str).unwrap_or("").to_string(),
+        };
+        (a.on_dividend)(&a, &id_str(get(x, "id")?), &d);
+        if d.rebate() {
+            let px = if STABLES.contains(&d.asset.as_str()) { Some(1.0) } else { m.as_mut().and_then(|m| m.asset_price(&d.asset)) };
+            sum += d.amount * px.unwrap_or(0.0);
+        }
+    }
+    Ok(sum)
+}
+
 /// No key of its own: `master_rest` carries the master's credentials and this account's `rest_feed`.
 pub fn start_via_master(acct: &AccountRef, master_rest: Rest, delay: f64) -> Vec<JoinHandle<()>> {
     vec![
@@ -1914,6 +1938,22 @@ mod tests {
         assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.75);
         a.borrow_mut().day_start = 7_000_000;
         assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.5);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_past_day_sums_its_rebates_and_keeps_every_row() {
+        let (mut a, _m) = acct();
+        let kept: Rc<RefCell<Vec<String>>> = Rc::default();
+        let k2 = kept.clone();
+        a.on_dividend = Rc::new(move |_, id, _| k2.borrow_mut().push(id.to_string()));
+        let a = a.shared();
+        let r = DivRest(json!({"rows": [
+            {"id": 1, "asset": "USDT", "amount": "0.25", "divTime": 3_700_000, "enInfo": "Spot MM Rebate-Spot 26-10-13 07:00"},
+            {"id": 2, "asset": "X", "amount": "2", "divTime": 3_800_000, "enInfo": "Launchpool distribution"},
+        ]}));
+        assert_relative_eq!(rebates_between(&a, &r, 3_600_000, 3_600_000 + 86_400_000).await.unwrap(), 0.25);
+        assert_eq!(*kept.borrow(), ["1", "2"]);
+        assert!(a.borrow().dividends.is_empty());   // a past day's rows do not count today
     }
 
     #[test]

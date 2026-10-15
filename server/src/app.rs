@@ -1191,6 +1191,45 @@ async fn shutdown_signal() {
     info!("signal: shutting down");
 }
 
+/// Past days kept from before the desk read rebates: each account's rebates of the day, once (the day then
+/// keeps them), and Other less them. A day an account cannot be asked about is left for the next start.
+/// One request at a time, 2 s apart, a minute after the start.
+async fn rebate_days(desk: DeskRef, keyed: Vec<(AccountRef, Rest)>) {
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let (days, start_min) = {
+        let d = desk.borrow();
+        let today = crate::pnl::utc_day(d.day_start());
+        let days: Vec<String> = d.day_real.iter().filter(|(k, r)| r.rebates.is_none() && **k != today).map(|(k, _)| k.clone()).collect();
+        (days, d.cfg.day_start_min)
+    };
+    for day in days {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d") else { continue };
+        let ds = date.and_hms_opt(0, 0, 0).expect("midnight").and_utc().timestamp_millis() + start_min * 60_000;
+        let mut sum = 0.0;
+        let mut all = true;
+        for (a, rest) in &keyed {
+            match accounts::rebates_between(a, rest, ds, ds + DAY).await {
+                Ok(x) => sum += x,
+                Err(e) => {
+                    warn!("rebates of {day}, {}: {e:#}", a.borrow().id);
+                    all = false;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        if !all {
+            continue;
+        }
+        let mut d = desk.borrow_mut();
+        if let Some(r) = d.day_real.get_mut(&day) {
+            r.rebates = Some(sum);
+            r.other = r.other.map(|o| o - sum);
+            info!("rebates of {day}: {sum:.2} USDT");
+        }
+        d.put_day_real(ds);
+    }
+}
+
 fn is_local(listen: &str) -> bool {
     let host = listen.rsplit_once(':').map_or("", |x| x.0).trim_matches(|c| c == '[' || c == ']');
     matches!(host, "127.0.0.1" | "localhost" | "::1")
@@ -1263,6 +1302,19 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         for e in &d.engines {
             tasks.push(tokio::task::spawn_local(engine::run(e.clone(), http.clone())));
         }
+    }
+    if !simulate {
+        let d = desk.borrow();
+        let keyed: Vec<(AccountRef, Rest)> = d
+            .accounts
+            .iter()
+            .filter(|a| a.borrow().creds.is_some())
+            .map(|a| {
+                let ab = a.borrow();
+                (a.clone(), Rest::new(http.clone(), govs.clone(), ab.creds.clone(), Some(ab.rest_feed.clone())))
+            })
+            .collect();
+        tasks.push(tokio::task::spawn_local(rebate_days(desk.clone(), keyed)));
     }
     tasks.push(tokio::task::spawn_local(ticker(desk.clone())));
     tasks.push(tokio::task::spawn_local(resync(public.clone())));

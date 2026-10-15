@@ -56,6 +56,7 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
   from corrects that opening instead of Q. `/fapi/v1/userTrades`, `/fapi/v1/income`, `/fapi/v1/markPriceKlines`
   60 s for the futures day. `/sapi/v1/asset/assetDividend` (10) every 5 min, the whole day each time:
   asset distributions, among them the hourly market-maker rebate, which trading commissions do not show.
+  A past day kept from before then is asked about once, a minute after the start, and keeps its rebates.
 - Master key (read; `[master] show = false` keeps the master's own balances off the desk):
   `/sapi/v1/sub-account/list` hourly, `/sapi/v1/sub-account/universalTransfer`
   history every 60 s, so per-account PnL excludes transfers. The user streams show a transfer seconds
