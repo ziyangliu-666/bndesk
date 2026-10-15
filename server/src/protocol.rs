@@ -115,7 +115,9 @@ pub struct Summary {
     pub equity: f64,
     pub pnl_day: f64,
     pub pnl_1h: f64,
-    /// day PnL − Π − hedge legs' P&L
+    /// market-maker rebates credited today (commissions do not show them)
+    pub rebates: f64,
+    /// day PnL − Π − hedge legs' P&L − rebates
     pub other: Option<f64>,
     pub pnl: PnlSummary,
     pub markout_net_bps_1h: Option<f64>,
@@ -181,6 +183,8 @@ pub struct Account {
     pub fees: Vec<FeeRate>,
     pub user_stream: UserStream,
     pub updated: i64,
+    /// market-maker rebates credited today
+    pub rebates: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -455,6 +459,7 @@ pub struct DayPnl {
     pub realized_old: Option<f64>,
     pub floating: Option<f64>,
     pub hedge: Option<f64>,
+    pub rebates: Option<f64>,
     pub other: Option<f64>,
     pub mm: Option<f64>,
     pub inventory: Option<f64>,
@@ -524,6 +529,7 @@ pub struct HistoryBar {
     pub realized: Option<f64>,
     pub mm: Option<f64>,
     pub hedge: Option<f64>,
+    pub rebates: Option<f64>,
     pub inventory: Option<f64>,
     pub futures: Option<f64>,
     pub volume: f64,

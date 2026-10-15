@@ -54,7 +54,8 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
   where the last sweep reached less 15 min (the day start at first): fills the user stream missed (the monitor
   down, a dropped stream) join with the stream's ids. A fill from before the balance an opening quantity came
   from corrects that opening instead of Q. `/fapi/v1/userTrades`, `/fapi/v1/income`, `/fapi/v1/markPriceKlines`
-  60 s for the futures day.
+  60 s for the futures day. `/sapi/v1/asset/assetDividend` (10) every 5 min, the whole day each time:
+  asset distributions, among them the hourly market-maker rebate, which trading commissions do not show.
 - Master key (read; `[master] show = false` keeps the master's own balances off the desk):
   `/sapi/v1/sub-account/list` hourly, `/sapi/v1/sub-account/universalTransfer`
   history every 60 s, so per-account PnL excludes transfers. The user streams show a transfer seconds
@@ -156,7 +157,8 @@ All times are exchange event times (ms).
 `desk.db` (SQLite WAL): `fills` (with edge, markouts and toxicity when matured), `equity` (5 s rows
 per account and for the desk, account `*`; the desk's rows also carry Π and S so far today in `trading`,
 `hedged`, and the real-money split in `realized` (realized + realized_old), `floating` and `hedge` (the
-futures legs' P&L), NULL in per-account rows and in rows older than the columns), `transfers`, `alerts`, `pnl_hours` (hourly P&L blocks, upserted each minute), `kv`
+futures legs' P&L) and `rebates`, NULL in per-account rows and in rows older than the columns), `transfers`,
+`dividends` (each account's asset distributions), `alerts`, `pnl_hours` (hourly P&L blocks, upserted each minute), `kv`
 (opening equity, fees, betas, and the day's P&L state: booked spans, M_k(D), H_k, last marks). Today's
 rows and 60 days of hourly blocks are reloaded on start; per-account series are served on a 45 s grid.
 
@@ -173,7 +175,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 - `drawdown`: day PnL below `day_drawdown_usd`, or a drop over 15 min larger than `drop_15m_usd`.
 - `inventory`: total inventory value > `inventory_cap_usd`, or one asset > `asset_cap_usd`.
 - `exposure_gap`: |gap| > band for > 60 s (when configured); inside a hedge pause, info: hedge left to close.
-- `reconcile`: |day PnL − Π − hedge legs| > `reconcile_usd` (1) for > 5 min: a fill, transfer or asset the desk does not see.
+- `reconcile`: |day PnL − Π − hedge legs − rebates| > `reconcile_usd` (1) for > 5 min: a fill, transfer or asset the desk does not see.
 - `markout`: rolling 30-min volume-weighted 10 s net markout < `markout_floor_bps` with >= 30 fills.
 - `dust`: a balance below the symbol's min notional (info).
 - `engine`: kill active, state not running, metrics stale > 5 s, reject spike.
@@ -184,7 +186,8 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   s q (M(t + h) − p) − fee, h = `mm_horizon_s` (60; one of the markout horizons 1, 10, 60, 300), the mid
   now for a fill younger than h; mm_spread the same at h = 0 against the fair at the fill; inventory =
   Π − mm (the opening inventory and each fill's position from h on). Day PnL = mm + inventory + hedge
-  legs + other.
+  legs + rebates + other. Rebates: today's distributions whose description has "MM Rebate", at the asset's
+  price when credited; other distributions (airdrops, rewards) are kept in `dividends` and stay in other.
 - Real-money split of Π, per base and summed, over today's spot fills in time order (USD at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
@@ -240,7 +243,7 @@ interface Snapshot {
           factor: number; factor_se: number | null; fills: number; volume: number;
           covered_s: number; backfilled_s: number;        // last 60, incl. today; seconds booked live / from klines
           pnl_day: number | null; realized: number | null; realized_old: number | null; floating: number | null;
-          hedge: number | null; other: number | null; mm: number | null; inventory: number | null }[];  // the day's real-money split at its end (kv dayreal:<day>);
+          hedge: number | null; rebates: number | null; other: number | null; mm: number | null; inventory: number | null }[];  // the day's real-money split at its end (kv dayreal:<day>);
                                                            // where kept, a past day's trading is its closed-form Π
   hours: { t: number; trading: number; hedged: number; factor: number; fills: number; volume: number;
            mm: number; inventory: number }[];   // today's UTC hours
@@ -249,7 +252,8 @@ interface Snapshot {
 
 interface Summary {
   equity: number; pnl_day: number; pnl_1h: number;
-  other: number | null;   // day PnL − Π − hedge legs' P&L: what neither explains (null while the hedge is unknown)
+  rebates: number;        // market-maker rebates credited today
+  other: number | null;   // day PnL − Π − hedge legs' P&L − rebates: what none explains (null while the hedge is unknown)
   pnl: { trading: number; trading_se: number | null; hedged: number; hedged_se: number | null;   // today: Π, S
          factor: number; factor_se: number | null;                                               // A
          ref_hedge: number; factor_hedge: number;                                                // H, Hm
@@ -279,6 +283,7 @@ interface Account {
   utilization: number;              // resting bids / (quote_free + resting bids)
   fees: { venue: "spot" | "usdm"; maker_bps: number; taker_bps: number; changed: boolean }[];
   user_stream: "up" | "down" | "n/a"; updated: number;
+  rebates: number;                  // market-maker rebates credited today
 }
 
 interface SymbolRow {
@@ -318,6 +323,7 @@ interface HistoryBar {
   t: number;                                // bar start
   o: number; h: number; l: number; c: number;   // day PnL summed across days since `from`
   pi: number | null; realized: number | null; mm: number | null; hedge: number | null;   // the same for Π, realized + realized_old, hedge legs; bar close
+  rebates: number | null;                   // the same for the rebates
   inventory: number | null; futures: number | null;   // last in the bar: inventory value, futures notional
   volume: number; fills: number;            // every fill in the bar
 }

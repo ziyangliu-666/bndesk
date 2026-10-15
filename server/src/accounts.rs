@@ -31,6 +31,8 @@ pub type AccountRef = Rc<RefCell<Account>>;
 pub type OnFill = Rc<dyn Fn(FillRec)>;
 /// Called with the first commission rate seen per (venue, symbol).
 pub type OnFee = Rc<dyn Fn(&Account, Venue, &str, (f64, f64))>;
+/// Called once per new asset distribution (the store keeps them).
+pub type OnDividend = Rc<dyn Fn(&Account, &str, &Dividend)>;
 
 /// A resting order: (symbol, venue, side, price, qty left).
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +57,24 @@ pub struct Move {
 impl Move {
     pub fn new(t: i64, asset: &str, d: f64) -> Self {
         Move { t, asset: asset.into(), d, px: None }
+    }
+}
+
+/// An asset distribution credited to the account (`/sapi/v1/asset/assetDividend`): an hourly market-maker
+/// rebate, an airdrop, a staking reward. Trading commissions do not show it, so Day PnL has it and Π does not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dividend {
+    pub ts: i64,
+    pub asset: String,
+    pub amount: f64,
+    pub info: String,
+}
+
+impl Dividend {
+    /// A market-maker rebate ("Spot MM Rebate-Spot 26-10-15 07:00"): the desk's Rebates line. Other
+    /// distributions are kept but stay in Other.
+    pub fn rebate(&self) -> bool {
+        self.info.contains("MM Rebate")
     }
 }
 
@@ -230,6 +250,8 @@ pub struct Account {
     pub market: Option<MarketRef>,
     pub via_master: bool,
     pub moves: Vec<Move>,   // balance changes apart from trading, from the user streams
+    pub dividends: BTreeMap<String, Dividend>,   // id -> today's asset distributions
+    pub on_dividend: OnDividend,
     pub no_order_counts: bool,
     pub new_ts: VecDeque<i64>,
 }
@@ -288,6 +310,8 @@ impl Account {
             market: None,
             via_master: false,
             moves: vec![],
+            dividends: BTreeMap::new(),
+            on_dividend: Rc::new(|_, _, _| {}),
             no_order_counts: false,
             new_ts: VecDeque::new(),
             cfg,
@@ -305,6 +329,23 @@ impl Account {
     /// Python's `valued` property (`self.market` passed in: the caller holds the market borrow).
     pub fn valued(&self, m: &mut Market) -> bool {
         self.ready() && self.spot_parts(m).3
+    }
+
+    /// Today's market-maker rebates, USD at each asset's price when credited.
+    pub fn rebates(&self, m: &mut Market) -> f64 {
+        self.dividends
+            .values()
+            .filter(|d| d.ts >= self.day_start && d.rebate())
+            .map(|d| d.amount * m.asset_price_at(&d.asset, d.ts).or_else(|| m.asset_price(&d.asset)).unwrap_or(0.0))
+            .sum()
+    }
+
+    /// Records a distribution not seen before.
+    pub fn add_dividend(&mut self, id: &str, d: Dividend) {
+        if !self.dividends.contains_key(id) {
+            (self.on_dividend)(self, id, &d);
+            self.dividends.insert(id.to_string(), d);
+        }
     }
 
     /// Notional of resting (bids, asks).
@@ -771,6 +812,7 @@ enum Job {
     FutAccount,
     FutToday,
     SpotTrades,
+    Dividends,
     MasterSpot,
     MasterFut,
 }
@@ -784,6 +826,7 @@ async fn run_job(job: Job, acct: &AccountRef, rest: &Rest) -> Result<()> {
         Job::FutAccount => fut_account(acct, rest).await,
         Job::FutToday => fut_today(acct, rest).await,
         Job::SpotTrades => spot_trades(acct, rest).await,
+        Job::Dividends => dividends(acct, rest).await,
         Job::MasterSpot => master_spot(acct, rest).await,
         Job::MasterFut => master_fut(acct, rest).await,
     }
@@ -820,6 +863,7 @@ pub fn start(acct: &AccountRef, rest: Rest) -> Vec<JoinHandle<()>> {
         p(Job::OpenOrders, 60.0, 0.0),
         p(Job::Commissions, 60.0, 5.0),
         p(Job::SpotTrades, 600.0, 20.0),
+        p(Job::Dividends, 300.0, 30.0),
     ];
     if futures {
         tasks.push(tokio::task::spawn_local(fut_user(acct.clone(), rest.clone())));
@@ -874,6 +918,31 @@ pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let mut a = acct.borrow_mut();
     if a.day_start == ds {
         a.trades_upto = started;
+    }
+    Ok(())
+}
+
+/// Today's asset distributions (the hourly market-maker rebate among them), the whole day each time: a day
+/// holds a row an hour per kind, so one request of weight 10 every few minutes; the first one backfills.
+pub async fn dividends(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+    let ds = acct.borrow().day_start;
+    if ds == 0 {
+        return Ok(());   // the desk has not set the day yet
+    }
+    let q: Params = params!["startTime" => ds, "endTime" => CLOCK.now(), "limit" => 500];
+    let r = rest.get_json("/sapi/v1/asset/assetDividend", &q, 10, true).await?;
+    let mut a = acct.borrow_mut();
+    if a.day_start != ds {
+        return Ok(());   // the day rolled while asking
+    }
+    for x in r.get("rows").and_then(Value::as_array).into_iter().flatten() {
+        let d = Dividend {
+            ts: to_i(get(x, "divTime")?)?,
+            asset: s(x, "asset")?.to_string(),
+            amount: f(x, "amount")?,
+            info: first(x, &["enInfo"]).and_then(Value::as_str).unwrap_or("").to_string(),
+        };
+        a.add_dividend(&id_str(get(x, "id")?), d);
     }
     Ok(())
 }
@@ -1808,6 +1877,43 @@ mod tests {
         assert!(rows[0].venue == Venue::Spot && !rows[0].changed);
         assert_relative_eq!(rows[0].maker_bps, 1.0);
         assert_relative_eq!(rows[0].taker_bps, 2.0);
+    }
+
+    struct DivRest(Value);
+
+    impl RestGet for DivRest {
+        async fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, _signed: bool) -> Result<Value> {
+            assert_eq!((path, weight), ("/sapi/v1/asset/assetDividend", 10));
+            assert_eq!(params[0], ("startTime".to_string(), "3600000".to_string()));
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dividends_book_the_day_rebates() {
+        let (mut a, m) = acct();
+        let kept: Rc<RefCell<Vec<String>>> = Rc::default();
+        let k2 = kept.clone();
+        a.on_dividend = Rc::new(move |_, id, _| k2.borrow_mut().push(id.to_string()));
+        let a = a.shared();
+        let row = |id: i64, t: i64, asset: &str, amount: &str, info: &str| {
+            json!({"id": id, "tranId": id * 10, "asset": asset, "amount": amount, "divTime": t, "enInfo": info})
+        };
+        let r = DivRest(json!({"rows": [
+            row(1, 3_700_000, "USDT", "0.25", "Spot MM Rebate-Spot 26-10-15 07:00"),
+            row(2, 7_300_000, "USDT", "0.5", "Spot MM Rebate-Spot 26-10-15 08:00"),
+            row(3, 7_300_000, "X", "2", "Launchpool distribution"),
+        ], "total": 3}));
+        dividends(&a, &r).await.unwrap();   // the desk has not set the day: nothing asked
+        assert!(a.borrow().dividends.is_empty());
+        a.borrow_mut().day_start = 3_600_000;
+        dividends(&a, &r).await.unwrap();
+        dividends(&a, &r).await.unwrap();   // the same rows again: kept once
+        assert_eq!(*kept.borrow(), ["1", "2", "3"]);
+        // the distribution of X is kept but is not a rebate
+        assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.75);
+        a.borrow_mut().day_start = 7_000_000;
+        assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.5);
     }
 
     #[test]

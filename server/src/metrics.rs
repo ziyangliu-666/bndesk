@@ -391,6 +391,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
         fees: acct.fee_rows(),
         user_stream: acct.user_stream(),
         updated: acct.updated,
+        rebates: acct.rebates(m),
     }
 }
 

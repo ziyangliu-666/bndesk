@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::accounts::{self, Account, AccountRef, MarketRef, OnFee, OnFill, Transfer, Transfers, TransfersRef};
+use crate::accounts::{self, Account, AccountRef, Dividend, MarketRef, OnDividend, OnFee, OnFill, Transfer, Transfers, TransfersRef};
 use crate::alerts::Alerts;
 use crate::backfill;
 use crate::beta::Betas;
@@ -37,7 +37,7 @@ use crate::pnl::{self, ALIVE_GAP_MS, ALIVE_STEP_MS, DAYS_SHOWN, PnlBook, PnlStat
 use crate::protocol::{self as P, Role, Venue};
 use crate::server::{self, DeskHealth, DeskSource, Hub, Patch};
 use crate::sessions;
-use crate::store::{AlertRow, EquityRow, Row, Store, TransferRow};
+use crate::store::{AlertRow, DividendRow, EquityRow, Row, Store, TransferRow};
 use crate::{auth, sim};
 
 pub const DAY: i64 = sessions::DAY_MS;
@@ -67,7 +67,7 @@ pub struct View {
 pub type DeskRef = Rc<RefCell<Desk>>;
 type Series3 = (Vec<i64>, Vec<f64>, Vec<f64>);
 
-/// A day's real-money split: day PnL, Π split FIFO, the hedge legs and what they leave unexplained.
+/// A day's real-money split: day PnL, Π split FIFO, the hedge legs, the rebates and what they leave unexplained.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct DayReal {
     pub pnl_day: f64,
@@ -81,6 +81,8 @@ pub struct DayReal {
     pub mm: Option<f64>,
     #[serde(default)]
     pub inventory: Option<f64>,
+    #[serde(default)]
+    pub rebates: Option<f64>,
 }
 
 /// Accounts' day PnL now against their last points: large moves that cancel across accounts are a
@@ -312,6 +314,17 @@ impl Desk {
         let on_fee: OnFee = Rc::new(move |a: &Account, venue: Venue, symbol: &str, v: (f64, f64)| {
             store.put(Row::Kv(format!("fee:{}:{venue}:{symbol}", a.id), format!("{},{}", repr(v.0), repr(v.1))));
         });
+        let store = self.store.clone();
+        let on_dividend: OnDividend = Rc::new(move |a: &Account, id: &str, d: &Dividend| {
+            store.put(Row::Dividend(DividendRow {
+                id: format!("{}:{id}", a.id),
+                ts: d.ts,
+                account: a.id.clone(),
+                asset: d.asset.clone(),
+                amount: d.amount,
+                info: d.info.clone(),
+            }));
+        });
         let spot_symbols: Vec<String> =
             self.cfg.markets.iter().filter(|m| m.venue == Venue::Spot).map(|m| m.symbol.clone()).collect();
         for a in &accounts {
@@ -319,6 +332,7 @@ impl Desk {
             a.market = Some(self.market.clone());
             a.on_fill = self.on_fill.clone();
             a.on_fee = on_fee.clone();
+            a.on_dividend = on_dividend.clone();
             a.spot_symbols = spot_symbols.clone();
         }
         let master = accounts.iter().find(|a| a.borrow().role == Role::Master).cloned();
@@ -509,6 +523,11 @@ impl Desk {
         }
         for a in &self.accounts {   // opening equity of today, saved when first set
             let mut a = a.borrow_mut();
+            let pre = format!("{}:", a.id);
+            for r in data.dividends.iter().filter(|r| r.id.starts_with(&pre)) {
+                let id = r.id[pre.len()..].to_string();
+                a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone() });
+            }
             if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
             }
@@ -557,6 +576,7 @@ impl Desk {
         ps.inventory = ps.trading - mm.total;
         expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge));
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
+        let rebates: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.rebates).sum();
         let equity: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.equity).sum();
         let rf = self.series.iter().rev().find(|p| p.t <= now - HOUR).or(self.series.first());
         let ds = self.day_start();
@@ -565,7 +585,8 @@ impl Desk {
             equity,
             pnl_day,
             pnl_1h: rf.map_or(pnl_day, |r| pnl_day - r.pnl_day),
-            other: expo.hedge_day.as_ref().and_then(|h| h.hedge_pnl).map(|h| pnl_day - ps.trading - h),
+            rebates,
+            other: expo.hedge_day.as_ref().and_then(|h| h.hedge_pnl).map(|h| pnl_day - ps.trading - h - rebates),
             pnl: ps,
             markout_net_bps_1h: agg.mk10_1h.value(),
             fills_1h: agg.fills_1h,
@@ -598,6 +619,7 @@ impl Desk {
                 other: summary.other,
                 mm: Some(summary.pnl.mm),
                 inventory: Some(summary.pnl.inventory),
+                rebates: Some(rebates),
             });
         }
         for d in days.iter_mut() {
@@ -610,6 +632,7 @@ impl Desk {
                 d.realized_old = Some(r.realized_old);
                 d.floating = Some(r.floating);
                 d.hedge = r.hedge;
+                d.rebates = r.rebates;
                 d.other = r.other;
                 d.mm = r.mm;
                 d.inventory = r.inventory;
@@ -827,6 +850,7 @@ impl Desk {
             floating: some(s.pnl.floating),
             hedge: v.exposure.hedge_day.as_ref().and_then(|h| h.hedge_pnl).filter(|_| fresh),
             mm: some(s.pnl.mm),
+            rebates: some(s.rebates),
         }));
         let mut rows = vec![];
         {
@@ -896,6 +920,7 @@ impl Desk {
         for a in &self.accounts {
             let mut a = a.borrow_mut();
             a.transfers_day = 0.0;
+            a.dividends.retain(|_, d| d.ts >= ds);
             if a.no_order_counts {
                 a.orders_1d = 0;
             }

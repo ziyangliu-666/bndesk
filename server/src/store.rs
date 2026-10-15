@@ -26,38 +26,42 @@ CREATE TABLE IF NOT EXISTS transfers (id TEXT PRIMARY KEY, ts INTEGER, from_emai
 CREATE TABLE IF NOT EXISTS alerts (id TEXT, since INTEGER, rule TEXT, level TEXT, text TEXT, active INTEGER,
   PRIMARY KEY (id, since));
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS dividends (id TEXT PRIMARY KEY, ts INTEGER, account TEXT, asset TEXT, amount REAL,
+  info TEXT);
 CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedged REAL, factor REAL,
   ref_hedge REAL, factor_hedge REAL, fills INTEGER, volume REAL, covered_s INTEGER);
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 11] = [
+pub const MIGRATIONS: [(&str, &str, &str); 12] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
-    ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"),
+    ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
     ref0, has_ref, mk, mk_raw, mk_fast, tox, refs";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
-    realized, floating, hedge, mm";
+    realized, floating, hedge, mm, rebates";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
 const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
     maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
-    futures_notional, trading, hedged, realized, floating, hedge, mm) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
     volume, covered_s, backfilled_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
 // a record is written when first seen and again once valued: the value is set once, the rest never changes
 const SQL_TRANSFER: &str = "INSERT INTO transfers (id, ts, from_email, to_email, asset, amount, usd) VALUES (?,?,?,?,?,?,?) \
     ON CONFLICT(id) DO UPDATE SET usd = COALESCE(transfers.usd, excluded.usd)";
+const SQL_DIVIDEND: &str = "INSERT OR IGNORE INTO dividends (id, ts, account, asset, amount, info) VALUES (?,?,?,?,?,?)";
 const SQL_ALERT: &str = "INSERT OR REPLACE INTO alerts VALUES (?,?,?,?,?,?)";
 const SQL_KV: &str = "INSERT OR REPLACE INTO kv VALUES (?,?)";
 
 /// equity row; `trading` / `hedged` are NULL in rows written before those columns existed. `realized`
 /// (realized + realized_old), `floating` and `hedge` (the futures legs' P&L) are the desk row's ("*")
-/// real-money split so far today: NULL in per-account rows and in rows written before the columns existed.
+/// real-money split so far today, `rebates` with them: NULL in per-account rows and in rows written before the
+/// columns existed.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EquityRow {
     pub t: i64,
@@ -73,6 +77,7 @@ pub struct EquityRow {
     pub floating: Option<f64>,
     pub hedge: Option<f64>,
     pub mm: Option<f64>,
+    pub rebates: Option<f64>,
 }
 
 /// pnl_hours row; `backfilled_s` is NULL in rows written before that column existed.
@@ -102,6 +107,17 @@ pub struct TransferRow {
     pub usd: Option<f64>,
 }
 
+/// dividends row: an asset distribution credited to an account; `id` is `<account>:<Binance id>`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DividendRow {
+    pub id: String,
+    pub ts: i64,
+    pub account: String,
+    pub asset: String,
+    pub amount: f64,
+    pub info: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AlertRow {
     pub id: String,
@@ -119,6 +135,7 @@ pub enum Row {
     Equity(EquityRow),
     PnlHour(HourRow),
     Transfer(TransferRow),
+    Dividend(DividendRow),
     Alert(AlertRow),
     Kv(String, String),
 }
@@ -136,6 +153,7 @@ pub struct Loaded {
     pub equity: Vec<EquityRow>,
     pub hours: Vec<HourRow>,
     pub transfers: Vec<TransferRow>,
+    pub dividends: Vec<DividendRow>,
     pub alerts: Vec<AlertRow>,
     pub kv: HashMap<String, String>,
 }
@@ -304,6 +322,7 @@ impl Store {
                     floating: f64_opt(r, 10)?,
                     hedge: f64_opt(r, 11)?,
                     mm: f64_opt(r, 12)?,
+                    rebates: f64_opt(r, 13)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -335,6 +354,19 @@ impl Store {
                     asset: str_at(r, 4)?,
                     amount: f64_at(r, 5)?,
                     usd: f64_opt(r, 6)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut st = c.prepare("SELECT id, ts, account, asset, amount, info FROM dividends WHERE ts >= ?")?;
+        out.dividends = st
+            .query_map([since], |r| {
+                Ok(DividendRow {
+                    id: str_at(r, 0)?,
+                    ts: i64_at(r, 1)?,
+                    account: str_at(r, 2)?,
+                    asset: str_at(r, 3)?,
+                    amount: f64_at(r, 4)?,
+                    info: str_at(r, 5)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -404,6 +436,7 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
                 c.execute("DELETE FROM equity WHERE t < ?", [keep])?;
                 c.execute("DELETE FROM fills WHERE ts < ?", [keep])?;
                 c.execute("DELETE FROM transfers WHERE ts < ?", [keep])?;
+                c.execute("DELETE FROM dividends WHERE ts < ?", [keep])?;
                 c.execute("DELETE FROM alerts WHERE active = 0 AND since < ?", [keep])?;
                 c.execute("DELETE FROM pnl_hours WHERE t < ?", [keep])?;
             }
@@ -413,7 +446,7 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::Equity(e)) => {
                 c.prepare_cached(SQL_EQUITY)?.execute(params![e.t, e.account, e.equity, e.pnl_day, e.markout_pnl,
                                                               e.inventory, e.futures_notional, e.trading, e.hedged,
-                                                              e.realized, e.floating, e.hedge, e.mm])?;
+                                                              e.realized, e.floating, e.hedge, e.mm, e.rebates])?;
             }
             Item::Row(Row::PnlHour(h)) => {
                 c.prepare_cached(SQL_HOUR)?.execute(params![h.t, h.trading, h.hedged, h.factor, h.ref_hedge,
@@ -423,6 +456,9 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::Transfer(t)) => {
                 c.prepare_cached(SQL_TRANSFER)?.execute(params![t.id, t.ts, t.from_email, t.to_email, t.asset,
                                                                 t.amount, t.usd])?;
+            }
+            Item::Row(Row::Dividend(d)) => {
+                c.prepare_cached(SQL_DIVIDEND)?.execute(params![d.id, d.ts, d.account, d.asset, d.amount, d.info])?;
             }
             Item::Row(Row::Alert(a)) => {
                 c.prepare_cached(SQL_ALERT)?.execute(params![a.id, a.since, a.rule, a.level, a.text,
@@ -517,6 +553,10 @@ mod tests {
                                           asset: "USDT".into(), amount: 10.0, usd: None }));
         s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, usd: Some(10.0), ..Default::default() }));
         s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, usd: Some(12.0), ..Default::default() }));
+        let dv = DividendRow { id: "a:7".into(), ts: 200, account: "a".into(), asset: "USDT".into(), amount: 0.25,
+                               info: "Spot MM Rebate-Spot 26-10-15 07:00".into() };
+        s.put(Row::Dividend(dv.clone()));
+        s.put(Row::Dividend(DividendRow { amount: 9.0, ..dv.clone() }));   // seen again: the first stays
         s.put(Row::Alert(AlertRow { id: "al".into(), since: 1, rule: "r".into(), level: "warn".into(),
                                     text: "t".into(), active: true }));
         s.start().unwrap();
@@ -528,6 +568,7 @@ mod tests {
         assert_eq!(l.transfers.len(), 0); // ts 5 < since 100
         let t = &s.load(0, 1).unwrap().transfers[0];
         assert_eq!((t.amount, t.usd), (10.0, Some(10.0))); // kept as first written; the value set once
+        assert_eq!(l.dividends, vec![dv]);
         assert!(l.alerts[0].active); // active alerts come back whatever their age
     }
 
