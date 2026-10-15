@@ -224,7 +224,6 @@ function stackParts(b: HistBar): { pos: number[]; neg: number[] } {
 
 type DeskSeries = {
   candle: ISeriesApi<"Candlestick">;
-  pl: ISeriesApi<"Line">;
   stack: ISeriesApi<"Histogram">[];
   pi: ISeriesApi<"Line">;
   mm: ISeriesApi<"Line">;
@@ -233,13 +232,12 @@ type DeskSeries = {
   rb: ISeriesApi<"Line">;
 };
 
-/** The P&L series of one view: candles and lines ("day"), a Day PnL line and the parts ("cum"), stacked
- *  per-bar parts ("bar"). The series a view does not use are left empty. */
+/** The P&L series of one view: candles and the parts' lines ("day", "cum"), stacked per-bar parts ("bar").
+ *  The series a view does not use are left empty. */
 function draw(x: DeskSeries, vb: HistBar[], view: PnlView) {
   const pt = (b: HistBar, v: number | null) => (v == null ? [] : [{ time: sec(b.t), value: v }]);
   const lines = view !== "bar";
-  x.candle.setData(view === "day" ? vb.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c })) : []);
-  x.pl.setData(view === "cum" ? vb.map((b) => ({ time: sec(b.t), value: b.c })) : []);
+  x.candle.setData(lines ? vb.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c })) : []);
   x.pi.setData(lines ? vb.flatMap((b) => pt(b, b.pi)) : []);
   x.mm.setData(lines ? vb.flatMap((b) => pt(b, b.mm)) : []);
   x.ip.setData(lines ? vb.flatMap((b) => pt(b, b.pi == null || b.mm == null ? null : b.pi - b.mm)) : []);
@@ -254,8 +252,7 @@ function draw(x: DeskSeries, vb: HistBar[], view: PnlView) {
 /** The newest bar of a view, as an update. */
 function drawLast(x: DeskSeries, b: HistBar, view: PnlView) {
   const t = sec(b.t);
-  if (view === "day") x.candle.update({ time: t, open: b.o, high: b.h, low: b.l, close: b.c });
-  if (view === "cum") x.pl.update({ time: t, value: b.c });
+  if (view !== "bar") x.candle.update({ time: t, open: b.o, high: b.h, low: b.l, close: b.c });
   if (view === "bar") {
     const st = stackParts(b);
     for (let k = 0; k < 5; k++) {
@@ -387,7 +384,6 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
   const chart = useRef<IChartApi | null>(null);
   const s = useRef<{
     candle: ISeriesApi<"Candlestick">;
-    pl: ISeriesApi<"Line">;
     stack: ISeriesApi<"Histogram">[]; // [part][sign]: market making, inventory, hedge, rebates, other × up, down
     pi: ISeriesApi<"Line">;
     mm: ISeriesApi<"Line">;
@@ -445,7 +441,6 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
     for (let k = 4; k >= 0; k--)
       for (const sgn of [0, 1])
         stack[k * 2 + sgn] = c.addSeries(HistogramSeries, { color: stackColors[k], priceFormat: usdFmt, ...quiet, visible: false }, 0);
-    const pl = line(C.ink, 0, { visible: false });
     const rb = line(REBATE_COLOR, 0, right);
     const he = line(HEDGE, 0, right);
     const ip = line(INVPNL_COLOR, 0, right);
@@ -466,7 +461,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
       x.attachPrimitive(p);
       return p;
     });
-    s.current = { candle, pl, stack, pi, mm, ip, he, rb, vol, inv, fut, seps, labels };
+    s.current = { candle, stack, pi, mm, ip, he, rb, vol, inv, fut, seps, labels };
     return () => {
       c.remove();
       chart.current = null;
@@ -551,7 +546,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
     const c = chart.current;
     if (!x || !c) return;
     const by: Record<string, { applyOptions: (o: { visible: boolean }) => void }[]> = {
-      "Day PnL": [x.candle, x.pl],
+      "Day PnL": [x.candle],
       "Trading PnL": [x.pi],
       "Market making": [x.mm, x.stack[0]!, x.stack[1]!],
       "Inventory PnL": [x.ip, x.stack[2]!, x.stack[3]!],
@@ -582,7 +577,7 @@ export function DeskChart({ bars, days, step, tz, fitKey, onOlder, view }: {
           <div className="hl-row">
             <span className="hl-time">{barTime(b.t, tz, step)}</span>
             <span className={"hl-kv" + (off("Day PnL") ? " off" : "")}>{w("Day PnL", C.ink)}</span>
-            {view === "day" ? (
+            {view !== "bar" ? (
               <>
                 <KV k="O" off={off("Day PnL")}>{pnl(b.o)}</KV>
                 <KV k="H" off={off("Day PnL")}>{pnl(b.h)}</KV>
