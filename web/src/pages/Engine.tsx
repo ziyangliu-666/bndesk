@@ -119,7 +119,6 @@ function EngineCard({ e }: { e: EngineT }) {
           </tbody>
         </table>
       </div>
-      <div className="muted eng-url">{e.url}</div>
     </Panel>
   );
 }

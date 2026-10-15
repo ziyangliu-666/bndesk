@@ -52,7 +52,7 @@ export function FillsTape({ showAccount = true, title = "Fills" }: { showAccount
     return [
       n({ field: "ts", headerName: "Time", width: 66, valueFormatter: fTime, initialSort: "desc", type: undefined, cellClass: "num", headerTooltip: "Fill time (exchange event time)" }),
       ...(showAccount ? [{ field: "account", headerName: "Acct", width: 48, headerTooltip: "Account" } as ColDef<Fill>] : []),
-      { field: "symbol", headerName: "Symbol", width: 50, valueFormatter: (p) => String(p.value).replace(/USDT$/, ""), headerTooltip: "Base asset; quote is USDT" },
+      { field: "symbol", headerName: "Symbol", width: 64, minWidth: 64, valueFormatter: (p) => String(p.value).replace(/USDT$/, ""), headerTooltip: "Base asset; quote is USDT" },
       // fixed, wide enough for "− sell taker"; the leftover width goes to the other columns
       { field: "side", headerName: "Side", width: 80, minWidth: 80, flex: 0, resizable: false, cellRenderer: SideCell, headerTooltip: "Own side of the fill; taker fills are marked, the rest are maker" },
       n({

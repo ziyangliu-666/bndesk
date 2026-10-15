@@ -114,7 +114,7 @@ export function KeyStrip() {
 
   return (
     <div className="keystrip" ref={row}>
-      <div className="ksum" title="Day PnL = Market making + Inventory PnL + Hedge + Other">
+      <div className="ksum" title="Day PnL = Market making + Inventory PnL + Hedge + Rebates + Other">
         <Fig
           lead
           label="Day PnL"
@@ -133,12 +133,7 @@ export function KeyStrip() {
           label="Market making"
           value={pnl(p.mm)}
           v={p.mm}
-          sub={
-            <>
-              spread <span className={signClass(p.mm_spread)}>{pnl(p.mm_spread)}</span>
-            </>
-          }
-          tip="Each fill against the mid 60 s after it, minus fees; spread is the same against the fair at the fill."
+          tip={`Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${pnl(p.mm_spread)} USDT.`}
         />
         <Op g="+" />
         <Fig
@@ -169,12 +164,6 @@ export function KeyStrip() {
           tip="Day PnL minus trading PnL, the hedge and the rebates."
         />
       </div>
-      <Fig
-        label="Inventory"
-        drop={3}
-        value={usd(sm.inventory_value)}
-        tip={`Free plus locked balances of non-quote assets across accounts, valued at mid; ${sm.inventory_assets} assets.`}
-      />
       <Fig label={ex.label} value={ex.value} v={ex.v} tone={ex.tone} wide tip={ex.tip} />
       <Fig
         label="Volume"

@@ -833,10 +833,6 @@ kbd {
   gap: 24px;
   align-items: start;
 }
-.eng-url {
-  font-size: 11px;
-}
-
 /* thin dark scrollbars */
 * {
   scrollbar-width: thin;

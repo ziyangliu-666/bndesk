@@ -72,7 +72,8 @@ function MarkoutTables() {
       ),
     ]);
   }, [toxKey]);
-  const hours = useMemo<HourRow[]>(() => (mk ? mk.by_hour.slice().sort((a, b) => a.hour - b.hour) : []), [mk]);
+  // hours without fills (those still to come) are left out
+  const hours = useMemo<HourRow[]>(() => (mk ? mk.by_hour.filter((h) => h.fills > 0).sort((a, b) => a.hour - b.hour) : []), [mk]);
   const hzCols = useMemo<ColDef<HzRow>[]>(() => {
     const h = (field: "h1" | "h10" | "h60" | "h300", name: string, lim: number): ColDef<HzRow> => ({
       field, headerName: name, type: "rightAligned", width: 64, valueFormatter: fBps, cellClass: signCls, cellStyle: tint(lim),
@@ -137,7 +138,9 @@ function SymbolMarkouts() {
         pinned: "left",
         cellRenderer: (p: { data?: SymbolRow }) => (p.data ? <InstrumentName symbol={p.data.symbol} venue={p.data.venue} /> : null),
       },
-      { field: "reference", headerName: "Reference", headerTooltip: "Reference instrument the net markouts use", width: 100, valueFormatter: (p) => refLabel(p.value), cellClass: "muted" },
+      { field: "reference", headerName: "Reference", headerTooltip: "Reference instrument the net markouts use", width: 72,
+        // the instrument's own perp, the usual reference, reads "perp"
+        valueFormatter: (p) => (!p.value ? "—" : p.value === `usdm:${p.data?.symbol}` || p.value === p.data?.symbol ? "perp" : refLabel(p.value)), cellClass: "muted" },
       n({ field: "fills_day", headerName: "Fills", headerTooltip: "Number of fills today", width: 48, valueFormatter: fInt }),
       {
         headerName: "PnL USDT",
