@@ -1,11 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 
 // Backend for the dev proxy; override with DESK_API=http://host:port.
 const api = process.env.DESK_API ?? "http://127.0.0.1:8710";
 
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
+
 export default defineConfig({
   plugins: [react()],
+  // shown on the phone's More page
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILT__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ")),
+  },
   server: {
     port: 5173,
     proxy: {

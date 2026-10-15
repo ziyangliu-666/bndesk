@@ -416,3 +416,53 @@ account (one line per account, labelled at its end).
 
 Dark slate ground for long sessions; gains teal-green, losses coral, every signed figure carries
 its sign; amber for warnings; one accent for selection.
+
+### Phone
+
+`responsive.ts` decides once per layout change: a viewport under 48em wide, or a touch screen whose short
+side is under 30em (a phone held sideways), gets the phone layout. The decision holds while a text field has
+focus, so an on-screen keyboard that shrinks the viewport does not swap the tree. The phone has its own tree,
+`components/mobile` and `pages/mobile`, on the same store, protocol and `format.ts`. Tablets from 768 to
+1199 px get the desktop tree, reflowed by CSS (wrapping heads, one column under 62em, fixed panel heights
+where the page scrolls); 1200 px and up is unchanged.
+
+```
++------------------------------------+
+| Desk                    * Live     |   title, or < and a detail's title; connection state
+| ! active alert               >     |
+| Day PnL  +51.44     1h +7.19       |   one hero, a sparkline with its times and range
+| Market making  ----   +9.65        |   the split as a waterfall under it
+| ...                                |
+| Risk: exposure gap, orders         |   limit bars
+| best / worst, accounts,            |   lists; a row opens its detail
+| the day, latest fills              |
++------------------------------------+
+| Desk Alerts Accounts History More  |
++------------------------------------+
+```
+
+Routes live in the URL hash, so a link opens a given screen: `#/desk` `#/alerts` `#/accounts` `#/history`
+`#/more` `#/markouts` `#/orders` `#/engine` `#/fills` `#/instruments`, and the details
+`#/instrument/<symbol>/<spot|usdm>` `#/account/<id>` `#/day/<YYYY-MM-DD>` `#/alert/<id>`
+`#/history/<symbol>/<venue>`. The desktop reads the same hash and shows a phone-only page as the nearest of its
+own (the detail's page; alerts on Engine; More, fills and instruments on Desk). Each tab keeps its own stack of pages with their scroll offsets. Back steps down
+the current tab's stack, then to the Desk, then out of the app; an open sheet takes one Back of its own. The
+browser's history only ever holds the current tab's stack.
+
+A phone freezes a background tab and its socket can die without a close, so on return to the page, or a page
+restored from the back-forward cache, the WebSocket reconnects unless messages are still arriving. Timers
+pause while the page is hidden. Every page is a lazy chunk, on both trees. After a deploy an open
+tab may ask for chunks that are gone: `LoadBoundary` reloads once, then shows one line with a Reload button.
+
+Charts on touch: Lightweight Charts runs with `vertTouchDrag` off, so a vertical swipe scrolls the page. The
+Desk's day chart does not pan or zoom; a sideways drag reads the minutes into its legend. History pans with a
+drag and zooms with a pinch, and a Reset button brings back the live view. uPlot charts get a touch cursor: a
+sideways drag scrubs, and the values show on a line above the plot instead of a tooltip.
+
+`public/manifest.webmanifest` and 180, 192 and 512 px icons let it be added to the home screen, standalone and
+black. There is no service worker.
+
+The rules are the desktop's: one value per slot, a figure once per screen, where it leads (parts under a
+total do not repeat it); gain and loss colours only for P&L figures and the side of a fill; amber and red only
+for alerts and limits. Lists instead of grids, sections split by rules, no cards. Definitions sit behind the
+labels: a dotted underline opens the same text the desktop shows on hover.

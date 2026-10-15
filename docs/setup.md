@@ -15,6 +15,8 @@ Binance counts request weight per IP address. Run the desk from a machine your t
 
 If the server listens on anything other than localhost it asks for a password. `cargo run --release -- --new-password` prints one along with the hash to put in `DESK_PASSWORD_HASH`.
 
+The manifest and icons sit behind the login too, so add the desk to a phone's home screen after logging in.
+
 ## Docker
 
 The [Dockerfile](../Dockerfile) builds the server and the web UI into one image. It reads the whole config from `DESK_CONFIG` and listens on port 8080:

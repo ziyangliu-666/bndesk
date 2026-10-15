@@ -3,7 +3,7 @@ import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, ICellRendererParams } from "ag-grid-community";
 import { useStore } from "../store";
 import type { Account } from "../protocol";
-import { gridTheme } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { fAge, fInt, fPnl, fUsd, signCls, DEFAULT_COL } from "../grid";
 import { flexCols } from "../grid";
 import { int, num, pct, usd } from "../format";

@@ -110,8 +110,8 @@ const NONE: string[] = [];
  * Show / hide a chart's series from its legend words, kept per chart in the store.
  * Click toggles one; Alt-click or double-click shows only that one, and again shows all.
  */
-export function useSeriesToggle(chart: string, names: string[]) {
-  const hidden = useStore((s) => s.hidden[chart] ?? NONE);
+export function useSeriesToggle(chart: string, names: string[], initial: string[] = NONE) {
+  const hidden = useStore((s) => s.hidden[chart] ?? initial);
   const before = useRef<string[]>(hidden);
   const set = (h: string[]) => useStore.getState().setHidden(chart, h);
   const solo = (name: string, from: string[]) => {

@@ -3,7 +3,7 @@ import type { OpenOrder, SymbolRow } from "../protocol";
 import { useStore } from "../store";
 import { C, SANS } from "../theme";
 import { bps, MINUS, price, usd } from "../format";
-import { EChart, type EChartsType } from "./EChart";
+import { EChart, phoneDpr, type EChartsType } from "./EChart";
 
 /** One row per instrument, x in bps from fair. The market's bid-ask is a thin bar, own bids and asks
  *  are dots with area ~ notional, orders through fair carry an amber ring, orders beyond the x range
@@ -43,6 +43,7 @@ const clamp = (v: number, r: number) => Math.max(-r, Math.min(r, v));
 
 const ROW_H = 17; // target row pitch when the list scrolls
 const ROW_MAX = 34; // tallest row when the list fits
+const ROW_PHONE = 28; // a phone shows every row at this pitch and the page scrolls
 const TOP = 22;
 const BOTTOM = 4;
 const LEFT = 66;
@@ -53,6 +54,11 @@ const GAP = 16;
 
 // bps ranges ctrl + wheel steps through; the preset buttons are three of them
 const LADDER = [2, 4, 6, 10, 16, 25, 35, 50, 75, 100, 150, 200];
+/** The bps ranges, for a chip row where there is no ctrl + wheel (touch). */
+export const QMAP_RANGES: readonly number[] = LADDER;
+
+/** A touch screen drags the rows: there is no wheel and the slider is too thin for a finger. */
+const coarse = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 
 const BAND = "rgba(195,202,213,0.14)";
 const BAND_EDGE = "rgba(195,202,213,0.6)";
@@ -112,6 +118,7 @@ export function QuoteMap({
   account,
   selected,
   onSelect,
+  phone = false,
 }: {
   range: number;
   onRange: (r: number) => void;
@@ -119,6 +126,9 @@ export function QuoteMap({
   account: string | null;
   selected: string;
   onSelect: (name: string) => void;
+  /** Every row at a fixed pitch with the box as tall as the rows (the page scrolls, no zoom or slider), no
+   *  tooltip (a tap calls onSelect), canvas at 2× at most. Off: the desktop map. Fixed per mount. */
+  phone?: boolean;
 }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const orders = useStore((s) => s.snap?.orders);
@@ -133,6 +143,7 @@ export function QuoteMap({
   );
   const chart = useRef<EChartsType | null>(null);
   const top = useRef(0); // first visible row, kept across updates
+  const touch = useRef(coarse()).current;
   const live = useRef({ rows, range, onRange, onSelect, span: 0, n: 0 });
   live.current.rows = rows;
   live.current.range = range;
@@ -156,7 +167,7 @@ export function QuoteMap({
     const n = rows.length;
     const avail = Math.max(ROW_H, size.h - TOP - BOTTOM);
     const fit = Math.max(1, Math.floor(avail / ROW_H));
-    const scroll = n > fit;
+    const scroll = !phone && n > fit;
     const span = scroll ? fit : Math.max(n, 1);
     const plotH = scroll ? avail : Math.min(avail, span * ROW_MAX);
     const bottom = size.h - TOP - plotH;
@@ -221,7 +232,8 @@ export function QuoteMap({
       animation: false,
       textStyle: { fontFamily: SANS },
       axisPointer: { link: [{ yAxisIndex: "all" }] },
-      tooltip: {
+      // a phone taps a row instead (onSelect); the tip would cover the screen
+      tooltip: phone ? { show: false, triggerOn: "none" } : {
         trigger: "axis",
         axisPointer: { type: "shadow", axis: "y" },
         className: "qmap-etip",
@@ -361,7 +373,7 @@ export function QuoteMap({
           endValue: top.current + span - 1,
           zoomOnMouseWheel: false,
           moveOnMouseWheel: true,
-          moveOnMouseMove: false,
+          moveOnMouseMove: touch,
           disabled: !scroll,
         },
         {
@@ -512,6 +524,12 @@ export function QuoteMap({
     };
   };
 
+  if (phone)
+    return (
+      <div className="qmap qmap-phone" style={{ height: TOP + BOTTOM + Math.max(1, rows.length) * ROW_PHONE }}>
+        <EChart onInit={onInit} onResize={() => renderRef.current()} devicePixelRatio={phoneDpr()} />
+      </div>
+    );
   return (
     <div className="qmap">
       <EChart onInit={onInit} onResize={() => renderRef.current()} />

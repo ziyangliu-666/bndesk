@@ -1,8 +1,20 @@
-import { AllCommunityModule, ModuleRegistry, type CellClassParams, type ValueFormatterParams } from "ag-grid-community";
+import {
+  AllCommunityModule,
+  ModuleRegistry,
+  provideGlobalGridOptions,
+  type CellClassParams,
+  type GridOptions,
+  type ValueFormatterParams,
+} from "ag-grid-community";
 import { age, bps, hms, int, pnl, price, qty, usd, signClass } from "./format";
 import { useStore } from "./store";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+// Touch screens (tablets on the desktop pages too): a header dragged while scrolling sideways would move its
+// column. Resizing stays: its handle is a deliberate target.
+if (typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches)
+  provideGlobalGridOptions({ suppressMovableColumns: true, suppressColumnMoveAnimation: true });
 
 type VF = (p: ValueFormatterParams) => string;
 const v = (p: ValueFormatterParams) => p.value as number | null | undefined;
@@ -46,6 +58,24 @@ export function tint(limit = 4) {
 
 /** One stable object for every grid: an inline literal is a new prop each render and resets the columns. */
 export const DEFAULT_COL = { sortable: true, resizable: true, suppressHeaderMenuButton: true, cellDataType: false } as const;
+
+/** Phones: no resize handles or header drags (they fire by accident while scrolling), no long-press header menu. */
+export const DEFAULT_COL_PHONE = {
+  ...DEFAULT_COL,
+  resizable: false,
+  suppressMovable: true,
+  suppressHeaderContextMenu: true,
+} as const;
+
+/** Spread on a phone's AgGridReact with `theme={gridThemePhone}` and `defaultColDef={DEFAULT_COL_PHONE}`. Hover
+ *  tooltips never show on touch: put the headerTooltip text behind an Info label instead. */
+export const PHONE_GRID_PROPS = {
+  suppressMovableColumns: true,
+  suppressColumnMoveAnimation: true,
+  suppressDragLeaveHidesColumns: true,
+  suppressCellFocus: true,
+  enableCellTextSelection: false,
+} as const satisfies GridOptions;
 
 export const numCol = { type: "rightAligned", cellClass: "num" } as const;
 

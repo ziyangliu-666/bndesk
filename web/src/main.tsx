@@ -6,10 +6,18 @@ import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
 import "@mantine/core/styles.css";
 import "./styles.css";
+import "./mobile.css";
 import { theme } from "./theme";
 import { App } from "./App";
 import { useStore } from "./store";
 import { connect } from "./ws";
+import { reloadOnce } from "./components/LoadBoundary";
+
+// A chunk (or its CSS) of an older build is gone after a deploy: reload once for the new one. When that was
+// just tried, the error goes on to the page's boundary, which shows a line with Reload.
+window.addEventListener("vite:preloadError", (e) => {
+  if (reloadOnce()) e.preventDefault();
+});
 
 if (import.meta.env.VITE_MOCK === "1") {
   void import("./mock").then(({ startMock }) => {
@@ -28,16 +36,25 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
-// An open dashboard reloads itself when a new build of the page is deployed.
+// An open dashboard reloads itself when a new build of the page is deployed: every 30 s while shown, and at
+// once when the tab (or the phone) comes back, before a tap asks for a chunk the deploy removed.
 if (import.meta.env.VITE_MOCK !== "1") {
   let build: number | null | undefined;
-  setInterval(async () => {
+  let busy = false;
+  const check = async () => {
+    if (document.visibilityState === "hidden" || busy) return;
+    busy = true;
     try {
       const h = (await (await fetch("/api/health", { cache: "no-store" })).json()) as { web_build?: number | null };
       if (build === undefined) build = h.web_build ?? null;
       else if (h.web_build != null && h.web_build !== build) location.reload();
     } catch {
       /* server restarting */
+    } finally {
+      busy = false;
     }
-  }, 30_000);
+  };
+  void check();
+  setInterval(check, 30_000);
+  document.addEventListener("visibilitychange", () => void check());
 }

@@ -7,6 +7,13 @@ async function inflate(buf: ArrayBuffer): Promise<string> {
   return new Response(body).text();
 }
 
+let kick: (() => void) | null = null;
+
+/** Drop the socket and open a fresh one now, skipping any backoff wait. */
+export function reconnectNow() {
+  kick?.();
+}
+
 /** WebSocket client: snapshot on connect, then patch/fills/series; reconnect with backoff. */
 export function connect(): () => void {
   const { apply, setConn } = useStore.getState();
@@ -76,19 +83,51 @@ export function connect(): () => void {
         .then(handle, () => sock?.close()); // undecodable frame: reconnect for a fresh snapshot
     };
     ws.onclose = () => {
-      if (ws === sock) ws = null;
+      if (ws !== sock) return; // replaced by reconnectNow
+      ws = null;
       schedule();
     };
-    ws.onerror = () => {
-      ws?.close();
-    };
+    // an error is followed by close; closing this socket (not whichever is current by then) makes sure of it
+    ws.onerror = () => sock?.close();
   };
+
+  /** A replaced socket says nothing more: no close to schedule a retry, no messages to apply. */
+  const drop = (old: WebSocket | null) => {
+    if (!old) return;
+    old.onopen = old.onmessage = old.onclose = old.onerror = null;
+    old.close();
+  };
+
+  kick = () => {
+    if (closed) return;
+    attempt = 0;
+    clearTimeout(timer);
+    const old = ws;
+    ws = null;
+    drop(old);
+    setConn("reconnecting");
+    open();
+  };
+  // A phone freezes a background tab and its socket may be dead without a close; on return, start over
+  // unless messages are still arriving. Same for a page restored from the back-forward cache.
+  const onVisible = () => {
+    if (document.visibilityState === "visible" && Date.now() - lastMsg > 3000) kick?.();
+  };
+  const onShow = (e: PageTransitionEvent) => {
+    if (e.persisted) kick?.();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("pageshow", onShow);
 
   open();
   return () => {
     closed = true;
+    kick = null;
     clearTimeout(timer);
     clearInterval(watchdog);
-    ws?.close();
+    document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("pageshow", onShow);
+    drop(ws);
+    ws = null;
   };
 }

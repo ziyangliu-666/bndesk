@@ -1,9 +1,57 @@
 import { create } from "zustand";
-import type { AccountSeries, Fill, Msg, SeriesPoint, Snapshot } from "./protocol";
+import type { AccountSeries, Fill, Msg, SeriesPoint, Snapshot, Venue } from "./protocol";
 import type { TzMode } from "./format";
+import { isPhoneLayout } from "./responsive";
 
 export type Conn = "connecting" | "live" | "reconnecting";
-export type Page = "desk" | "history" | "markouts" | "orders" | "accounts" | "engine";
+/** The desktop's six pages, then the phone-only ones. */
+export type Page =
+  | "desk"
+  | "history"
+  | "markouts"
+  | "orders"
+  | "accounts"
+  | "engine"
+  | "alerts"
+  | "more"
+  | "fills"
+  | "instruments";
+export type DeskPage = "desk" | "history" | "markouts" | "orders" | "accounts" | "engine";
+
+/** A single thing a page drills into; on the phone each is a full page with a back button. */
+export type Detail =
+  | { kind: "instrument"; symbol: string; venue: Venue }
+  | { kind: "account"; id: string }
+  | { kind: "day"; date: string } // YYYY-MM-DD
+  | { kind: "alert"; id: string }
+  | { kind: "history-instrument"; symbol: string; venue: Venue };
+
+/** A page in a tab's stack, with the scroll offset it was left at. */
+export interface NavEntry {
+  route: Route;
+  scroll: number;
+}
+
+export interface Route {
+  page: Page;
+  detail?: Detail;
+  /** Fills only: one account's fills (`#/fills/<account>`). */
+  account?: string;
+  /** Orders only: one instrument's orders (`#/orders/<SYMBOL>/<venue>`). */
+  symbol?: string;
+  venue?: Venue;
+}
+
+/** One sample of the figures an alert page draws a trend of, kept on this device (none of them has a history
+ *  on the wire): at most one every RING_STEP ms, for the last RING_SPAN ms. */
+export interface RingPoint {
+  t: number; // server time, ms
+  gap: number | null;
+  band: number | null;
+  hedge: number; // hedge symbols' futures notional
+}
+const RING_STEP = 5_000;
+const RING_SPAN = 3_600_000;
 
 export const MAX_FILLS = 2000;
 
@@ -13,13 +61,23 @@ interface State {
   lastMsg: number; // local clock, ms
   skew: number; // server now - local now at last message
   tz: TzMode;
+  /** route.page, kept as its own field for the desktop. */
   page: Page;
+  route: Route;
+  /** Phone: the tab shown, and each tab's stack of pages (its own page first, the route shown last). */
+  tab: Tab;
+  stacks: Record<Tab, NavEntry[]>;
+  /** USD amounts show as ••• on the phone (signs and colors stay). */
+  hideAmounts: boolean;
   /** Series names hidden per chart, from the legend words. */
   hidden: Record<string, string[]>;
+  /** Exposure samples since this page opened (last hour). */
+  ring: RingPoint[];
   setHidden: (chart: string, names: string[]) => void;
   setConn: (c: Conn) => void;
   setTz: (tz: TzMode) => void;
   setPage: (p: Page) => void;
+  setHideAmounts: (v: boolean) => void;
   apply: (m: Msg) => void;
 }
 
@@ -88,6 +146,16 @@ function appendAccountSeries(cur: AccountSeries[], add: AccountSeries[]): Accoun
   return next;
 }
 
+/** The ring with the snapshot's exposure added, when a step has passed since the last sample. */
+function sample(ring: RingPoint[], s: Snapshot): { ring: RingPoint[] } | null {
+  const last = ring[ring.length - 1];
+  if (last && s.now - last.t < RING_STEP && s.now >= last.t) return null;
+  const x = s.exposure;
+  const keep = last && s.now >= last.t ? ring.filter((p) => p.t > s.now - RING_SPAN) : [];
+  keep.push({ t: s.now, gap: x.gap, band: x.band, hedge: x.hedge_notional });
+  return { ring: keep };
+}
+
 function savedHidden(): Record<string, string[]> {
   try {
     const v = JSON.parse((typeof localStorage !== "undefined" && localStorage.getItem("desk.hidden")) || "{}");
@@ -98,6 +166,109 @@ function savedHidden(): Record<string, string[]> {
 }
 
 const savedTz = (typeof localStorage !== "undefined" && localStorage.getItem("desk.tz")) as TzMode | null;
+const savedHide = typeof localStorage !== "undefined" && localStorage.getItem("desk.hideAmounts") === "1";
+
+// ---- routes: the page lives in the URL hash, so a reload, a shared link or the back button keeps it ----
+
+const PAGES: Page[] = ["desk", "history", "markouts", "orders", "accounts", "engine", "alerts", "more", "fills", "instruments"];
+const DETAIL_PAGE: Record<Detail["kind"], Page> = {
+  instrument: "desk",
+  account: "accounts",
+  day: "history",
+  alert: "alerts",
+  "history-instrument": "history",
+};
+// The desktop has no page for these: the nearest one.
+const ON_DESKTOP: Record<Page, DeskPage> = {
+  desk: "desk",
+  history: "history",
+  markouts: "markouts",
+  orders: "orders",
+  accounts: "accounts",
+  engine: "engine",
+  alerts: "engine",
+  more: "desk",
+  fills: "desk",
+  instruments: "desk",
+};
+export const deskPage = (p: Page): DeskPage => ON_DESKTOP[p];
+
+/** The bottom-bar tab a route belongs to. */
+export type Tab = "desk" | "alerts" | "accounts" | "history" | "more";
+export function tabOf(r: Route): Tab {
+  switch (r.page) {
+    case "desk":
+    case "instruments":
+      return "desk";
+    case "alerts":
+    case "accounts":
+    case "history":
+      return r.page;
+    default:
+      return "more";
+  }
+}
+
+/** A route below a tab's own page: it gets a back button, and opening it pushes a history entry. */
+export const isSub = (r: Route) => r.detail != null || !["desk", "alerts", "accounts", "history", "more"].includes(r.page);
+
+const venueOf = (v: string | undefined): Venue => (v === "usdm" || v === "perp" ? "usdm" : "spot");
+const enc = encodeURIComponent;
+
+export function routeFromHash(hash: string): Route {
+  const [head = "", a, b] = hash
+    .replace(/^#\/?/, "")
+    .split("/")
+    .map((x) => {
+      try {
+        return decodeURIComponent(x);
+      } catch {
+        return x;
+      }
+    });
+  const detail = (d: Detail): Route => ({ page: DETAIL_PAGE[d.kind], detail: d });
+  if (head === "instrument" && a) return detail({ kind: "instrument", symbol: a, venue: venueOf(b) });
+  if (head === "account" && a) return detail({ kind: "account", id: a });
+  if (head === "day" && a && /^\d{4}-\d{2}-\d{2}$/.test(a)) return detail({ kind: "day", date: a });
+  if (head === "alert" && a) return detail({ kind: "alert", id: a });
+  if (head === "history" && a) return detail({ kind: "history-instrument", symbol: a, venue: venueOf(b) });
+  if (head === "fills" && a) return { page: "fills", account: a };
+  if (head === "orders" && a) return { page: "orders", symbol: a, venue: venueOf(b) };
+  return { page: PAGES.includes(head as Page) ? (head as Page) : "desk" };
+}
+
+export function hashOf(r: Route): string {
+  const d = r.detail;
+  if (!d) {
+    if (r.page === "orders" && r.symbol) return `#/orders/${enc(r.symbol)}/${r.venue ?? "spot"}`;
+    return "#/" + r.page + (r.page === "fills" && r.account ? "/" + enc(r.account) : "");
+  }
+  switch (d.kind) {
+    case "instrument":
+      return `#/instrument/${enc(d.symbol)}/${d.venue}`;
+    case "account":
+      return `#/account/${enc(d.id)}`;
+    case "day":
+      return `#/day/${d.date}`;
+    case "alert":
+      return `#/alert/${enc(d.id)}`;
+    case "history-instrument":
+      return `#/history/${enc(d.symbol)}/${d.venue}`;
+  }
+}
+
+/** Same page and detail: hash round-trip is the identity. */
+export const sameRoute = (a: Route, b: Route) => hashOf(a) === hashOf(b);
+
+/** Where back goes when there is no entry of ours to go back to (a deep link opened cold). */
+export function parentOf(r: Route): Route {
+  if (r.detail) return { page: r.page };
+  if (r.page === "instruments") return { page: "desk" };
+  if (isSub(r)) return { page: "more" };
+  return r;
+}
+
+const initialRoute: Route = typeof location !== "undefined" ? routeFromHash(location.hash) : { page: "desk" };
 
 export const useStore = create<State>((set, get) => ({
   snap: null,
@@ -105,8 +276,13 @@ export const useStore = create<State>((set, get) => ({
   lastMsg: 0,
   skew: 0,
   tz: savedTz === "local" ? "local" : "utc",
-  page: "desk",
+  page: initialRoute.page,
+  route: initialRoute,
+  tab: tabOf(initialRoute), // and stacks: set from the saved ones below (initialNav)
+  stacks: {} as Record<Tab, NavEntry[]>,
+  hideAmounts: savedHide,
   hidden: savedHidden(),
+  ring: [],
   setHidden: (chart, names) => {
     const hidden = { ...get().hidden, [chart]: names };
     localStorage.setItem("desk.hidden", JSON.stringify(hidden));
@@ -117,21 +293,30 @@ export const useStore = create<State>((set, get) => ({
     localStorage.setItem("desk.tz", tz);
     set({ tz });
   },
-  setPage: (page) => set({ page }),
+  setPage: (page) => navigate({ page }, { push: false }),
+  setHideAmounts: (hideAmounts) => {
+    localStorage.setItem("desk.hideAmounts", hideAmounts ? "1" : "0");
+    set({ hideAmounts });
+  },
   apply: (m) => {
     const now = Date.now();
     const snap = get().snap;
     switch (m.type) {
       case "snapshot": {
         const s = m.data;
-        set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live" });
+        set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s) });
         fillListeners.forEach((fn) => fn({ kind: "reset", fills: s.fills }));
         return;
       }
       case "patch": {
         if (!snap) return;
         const next = { ...snap, ...m.data };
-        set({ snap: next, lastMsg: now, skew: m.data.now != null ? m.data.now - now : get().skew });
+        set({
+          snap: next,
+          lastMsg: now,
+          skew: m.data.now != null ? m.data.now - now : get().skew,
+          ...(m.data.exposure ? sample(get().ring, next) : null),
+        });
         if (m.data.fills) fillListeners.forEach((fn) => fn({ kind: "reset", fills: next.fills }));
         return;
       }
@@ -158,3 +343,241 @@ export const useStore = create<State>((set, get) => ({
 
 /** Server time estimate, ms. */
 export const serverNow = () => Date.now() + useStore.getState().skew;
+
+// ---- navigation ----
+
+/**
+ * Phone navigation: each tab keeps its own stack of pages (with the scroll offset each was left at), like an
+ * app's tab bar. Coming back to a tab shows the page it was left on; back steps down the current tab's stack,
+ * then to the Desk's own page, then leaves the app.
+ *
+ * The browser's history always holds the current tab's stack only: the Desk's own page at the bottom (depth 0),
+ * then, for another tab, that tab's pages above it; for the Desk, the Desk's pages. A tab switch drops the
+ * entries above the bottom one (history.go, async: it completes on its popstate) and pushes the new tab's
+ * stack, so back never lands on another tab's page. An open sheet adds an entry of its own (`sheet`), so back
+ * closes it first. Each entry carries its depth (`bn`: our entries below it) and its tab.
+ */
+export type NavState = { bn?: number; sheet?: string; tab?: Tab } | null;
+const navState = () => history.state as NavState;
+const depth = () => navState()?.bn ?? 0;
+
+const TABS: Tab[] = ["desk", "alerts", "accounts", "history", "more"];
+const rootOf = (tab: Tab): Route => ({ page: tab });
+const isRoot = (r: Route, tab: Tab) => sameRoute(r, rootOf(tab));
+
+/** The stack a route opened on its own (a link, a reload without a saved stack) sits on: its tab's page below. */
+const chainOf = (r: Route, tab: Tab): NavEntry[] =>
+  isRoot(r, tab) ? [{ route: r, scroll: 0 }] : [{ route: rootOf(tab), scroll: 0 }, { route: r, scroll: 0 }];
+
+const freshStacks = (): Record<Tab, NavEntry[]> =>
+  Object.fromEntries(TABS.map((t) => [t, [{ route: rootOf(t), scroll: 0 }]])) as Record<Tab, NavEntry[]>;
+
+const STACKS_KEY = "desk.navStacks";
+
+/** The tab and stacks at load: the saved ones when this is an entry of ours (a reload, back into the app),
+ *  cut at the page shown; else the route on its tab. */
+function initialNav(r: Route): { tab: Tab; stacks: Record<Tab, NavEntry[]> } {
+  const stacks = freshStacks();
+  if (typeof window === "undefined") return { tab: tabOf(r), stacks };
+  const st = navState();
+  const tab = st?.tab && TABS.includes(st.tab) ? st.tab : tabOf(r);
+  if (st?.bn != null) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(STACKS_KEY) ?? "null") as Record<Tab, NavEntry[]> | null;
+      if (saved) {
+        for (const t of TABS) if (Array.isArray(saved[t]) && saved[t].length && isRoot(saved[t][0]!.route, t)) stacks[t] = saved[t];
+        const i = findRoute(stacks[tab], r);
+        if (i >= 0) {
+          stacks[tab] = stacks[tab].slice(0, i + 1);
+          return { tab, stacks };
+        }
+      }
+    } catch {
+      /* no saved stacks */
+    }
+  }
+  stacks[tab] = chainOf(r, tab);
+  return { tab, stacks };
+}
+
+function findRoute(stack: NavEntry[], r: Route): number {
+  for (let i = stack.length - 1; i >= 0; i--) if (sameRoute(stack[i]!.route, r)) return i;
+  return -1;
+}
+
+const initialStacks = initialNav(initialRoute);
+useStore.setState({ tab: initialStacks.tab, stacks: initialStacks.stacks });
+if (typeof window !== "undefined") {
+  // tag the entry the app opened on (a cold link has nothing of ours below it)
+  if (navState()?.bn == null) history.replaceState({ ...(history.state ?? {}), bn: 0, tab: initialStacks.tab } satisfies NavState, "", location.href);
+  useStore.subscribe((s, prev) => {
+    if (s.stacks === prev.stacks) return;
+    try {
+      sessionStorage.setItem(STACKS_KEY, JSON.stringify(s.stacks));
+    } catch {
+      /* private mode */
+    }
+  });
+}
+
+let lastNav: "push" | "replace" | "pop" | "tab" = "replace";
+
+/** Remember the current page's scroll offset in its stack entry (no re-render: nothing draws it). */
+function leave() {
+  const s = useStore.getState();
+  const stack = s.stacks[s.tab];
+  const top = stack[stack.length - 1];
+  if (top && sameRoute(top.route, s.route)) top.scroll = window.scrollY;
+}
+
+/** How the current route was reached, and its scroll offset when last left (back and tabs restore it). */
+export function arrival(r: Route) {
+  const s = useStore.getState();
+  const stack = s.stacks[s.tab];
+  const top = stack[stack.length - 1];
+  return { how: lastNav, scroll: top && sameRoute(top.route, r) ? top.scroll : 0 };
+}
+
+/** Show the top of a tab's stack. */
+function show(tab: Tab, stack: NavEntry[]) {
+  const s = useStore.getState();
+  const to = stack[stack.length - 1]!.route;
+  useStore.setState({ tab, stacks: { ...s.stacks, [tab]: stack }, route: to, page: to.page });
+}
+
+/**
+ * Go to a route. On a phone, opening something below a tab (a detail, an instrument list) pushes it on the
+ * current tab's stack, with a history entry so the phone's back gesture returns; a tab's own page goes
+ * through switchTab (its stack starts again there). `push: false` replaces the current page. The desktop
+ * never adds entries: its pages are tabs.
+ */
+export function navigate(to: Route, opts: { push?: boolean } = {}) {
+  const hash = hashOf(to);
+  const overSheet = navState()?.sheet != null;
+  if (!isPhoneLayout()) {
+    lastNav = "replace";
+    const tab = tabOf(to);
+    if (hash !== location.hash) history.replaceState({ bn: 0, tab } satisfies NavState, "", hash);
+    return show(tab, chainOf(to, tab));
+  }
+  if (opts.push == null && !isSub(to)) return switchTab(tabOf(to), to);
+  const s = useStore.getState();
+  if (sameRoute(to, s.route)) {
+    // the page asked for is the one under the open sheet: going there is closing the sheet
+    if (overSheet) history.back();
+    return;
+  }
+  const push = opts.push ?? true;
+  leave();
+  lastNav = push ? "push" : "replace";
+  const stack = s.stacks[s.tab];
+  const entry = { route: to, scroll: 0 };
+  // from inside an open sheet, the page replaces the sheet's entry: back then skips the closed sheet
+  if (push && !overSheet) history.pushState({ bn: depth() + 1, tab: s.tab } satisfies NavState, "", hash);
+  else history.replaceState({ bn: overSheet && push ? depth() + 1 : depth(), tab: s.tab } satisfies NavState, "", hash);
+  show(s.tab, push ? stack.concat(entry) : stack.slice(0, -1).concat(entry));
+}
+
+// A tab switch waiting for history.go to land on the bottom entry.
+let pending: { tab: Tab; stack: NavEntry[] } | null = null;
+
+/** The browser's entries for a tab's stack, from the bottom one (which must be current): the Desk's own page,
+ *  then the stack's pages. */
+function writeEntries(tab: Tab, stack: NavEntry[]) {
+  const routes = stack.map((e) => e.route);
+  const list = tab === "desk" ? routes : [rootOf("desk"), ...routes];
+  list.forEach((r, bn) => {
+    const st = { bn, tab: bn === 0 && tab !== "desk" ? "desk" : tab } satisfies NavState;
+    if (bn === 0) history.replaceState(st, "", hashOf(r));
+    else history.pushState(st, "", hashOf(r));
+  });
+}
+
+/**
+ * Phone: go to a tab. Without `to`, the tab shows the page it was left on; with it (a link to a tab's own
+ * page, a tap on the current tab), its stack starts again at `to`.
+ */
+export function switchTab(tab: Tab, to?: Route) {
+  const s = useStore.getState();
+  const stack = to ? chainOf(to, tab) : s.stacks[tab];
+  if (pending) {
+    // a second tap while the first switch is under way: it wins
+    pending = { tab, stack };
+    return show(tab, stack);
+  }
+  const st = navState();
+  const top = stack[stack.length - 1]!.route;
+  if (tab === s.tab && sameRoute(top, s.route) && st?.sheet == null) return;
+  leave();
+  lastNav = "tab";
+  // our entries above the bottom one, counting an open sheet's
+  const at = (st?.bn ?? 0) + (st?.sheet != null ? 1 : 0);
+  show(tab, stack);
+  if (at > 0) {
+    pending = { tab, stack };
+    history.go(-at);
+    return;
+  }
+  writeEntries(tab, stack);
+}
+
+/** Back one step in the current tab, then to the Desk: the browser's own back when the entry below is ours,
+ *  else (a link opened cold) the page below, in place. */
+export function back() {
+  if (depth() > 0) return history.back();
+  const s = useStore.getState();
+  const stack = s.stacks[s.tab];
+  leave();
+  lastNav = "pop";
+  if (stack.length > 1) {
+    const below = stack.slice(0, -1);
+    history.replaceState({ bn: 0, tab: s.tab } satisfies NavState, "", hashOf(below[below.length - 1]!.route));
+    return show(s.tab, below);
+  }
+  if (s.tab !== "desk") {
+    history.replaceState({ bn: 0, tab: "desk" } satisfies NavState, "", hashOf(rootOf("desk")));
+    show("desk", [s.stacks.desk[0]!]);
+  }
+}
+
+if (typeof window !== "undefined") {
+  history.scrollRestoration = "manual";
+  window.addEventListener("popstate", () => {
+    const p = pending;
+    if (p) {
+      // the drop for a tab switch has landed (or, under a sheet, not yet all the way)
+      const at = depth() + (navState()?.sheet != null ? 1 : 0);
+      if (at > 0) return history.go(-at);
+      pending = null;
+      writeEntries(p.tab, p.stack);
+      const s = useStore.getState();
+      if (s.tab !== p.tab || !sameRoute(s.route, p.stack[p.stack.length - 1]!.route)) show(p.tab, p.stack);
+      return;
+    }
+    const r = routeFromHash(location.hash);
+    const st = navState();
+    const s = useStore.getState();
+    if (st?.bn == null) {
+      // a link or a typed hash: a new entry above the current one, on the route's own tab (alert → Alerts,
+      // account → Accounts, instrument → Desk, day → History, orders → More): on top of that tab's stack when
+      // it is the current tab, else the tab starts again below it
+      if (sameRoute(r, s.route)) return;
+      const bn = s.stacks[s.tab].length - (s.tab === "desk" ? 1 : 0) + 1;
+      const tab = tabOf(r);
+      history.replaceState({ bn, tab } satisfies NavState, "", location.href);
+      leave();
+      lastNav = "push";
+      return show(tab, tab === s.tab && isSub(r) ? s.stacks[tab].concat({ route: r, scroll: 0 }) : chainOf(r, tab));
+    }
+    const tab = st.tab && TABS.includes(st.tab) ? st.tab : tabOf(r);
+    if (tab === s.tab && sameRoute(r, s.route)) return; // a sheet's entry came and went
+    leave();
+    lastNav = "pop";
+    // back to the bottom entry from another tab: the Desk's own page
+    if (st.bn === 0 && tab === "desk" && isRoot(r, "desk")) return show("desk", [s.stacks.desk[0]!]);
+    const stack = s.stacks[tab];
+    const i = findRoute(stack, r);
+    // forward to a page dropped from the stack: it goes back on top
+    show(tab, i >= 0 ? stack.slice(0, i + 1) : stack.concat({ route: r, scroll: 0 }));
+  });
+}

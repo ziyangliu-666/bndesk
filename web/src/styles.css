@@ -54,9 +54,14 @@ kbd {
 /* ---- app frame ---- */
 .app {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-  min-width: 1200px;
+}
+@media (min-width: 75em) {
+  .app {
+    min-width: 1200px;
+  }
 }
 .app-main {
   flex: 1;
@@ -118,6 +123,27 @@ kbd {
 .waiting {
   padding: 40px;
   color: var(--ink-2);
+}
+/* a page that could not be loaded (LoadBoundary): one line and Reload */
+.load-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 40px;
+  color: var(--ink-2);
+}
+.load-error button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.load-error button:hover {
+  filter: brightness(1.2);
 }
 .app-head {
   flex: none;
@@ -1173,4 +1199,395 @@ kbd {
 }
 .demo-notice-body a {
   color: var(--accent);
+}
+
+/* ---- tablet and narrow windows ---- */
+/* 48em-75em keeps the desktop pages, reflowed; 75em (1200 px) and up is unchanged. Under 62em the two-column
+   pages fall to one column and the page scrolls instead of fitting the window. */
+@media (max-width: 74.99em) {
+  .tab-label kbd {
+    display: none;
+  }
+  .app-head {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 38px;
+    row-gap: 4px;
+    padding-block: 4px;
+  }
+  .head-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 4px;
+  }
+  .keystrip {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 36px;
+    row-gap: 4px;
+    padding-block: 5px;
+  }
+  .ksum {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .history {
+    grid-template-rows: auto minmax(0, 1fr) clamp(230px, 36vh, 400px);
+  }
+  .hist-bar {
+    flex-wrap: wrap;
+    min-height: 34px;
+    row-gap: 4px;
+    padding-block: 4px;
+  }
+  .hist-status {
+    margin-left: 0;
+  }
+  .panel-head {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 30px;
+    row-gap: 2px;
+    padding-block: 4px;
+  }
+  .panel-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 2px;
+  }
+  .legend {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  /* the hover legend over the History chart wraps inside the plot */
+  .hist-legend {
+    right: 56px;
+  }
+  .hist-legend .hl-row {
+    flex-wrap: wrap;
+    column-gap: 10px;
+  }
+  .desk-mid {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  }
+  .acct-strip {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
+  .eng-figs {
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  }
+  .eng-tables {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .eng-tables > .wide {
+    grid-column: 1 / -1;
+  }
+}
+
+/* narrow or short: the page scrolls; panels that fill a box get a height of their own */
+@media (max-width: 61.99em), (max-width: 74.99em) and (max-height: 56.24em) {
+  .app-main {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .desk,
+  .page {
+    height: auto;
+    min-height: 100%;
+  }
+  .desk-mid > .panel {
+    height: 440px;
+  }
+  .history {
+    grid-template-rows: auto 440px auto;
+  }
+  .hist-days > .panel {
+    height: 360px;
+  }
+  .markouts {
+    grid-template-rows: auto;
+  }
+  .curve-panel {
+    height: 620px;
+  }
+  .symmk-panel {
+    height: 620px;
+  }
+  .orders {
+    grid-template-rows: auto 560px;
+  }
+  /* the page sets fr rows inline; in a page that scrolls they would grow with the charts row */
+  .page.accounts {
+    grid-template-rows: auto auto auto !important;
+  }
+  .acc-full {
+    height: 236px; /* six accounts and the total */
+  }
+  .hedge-legs {
+    height: 120px;
+  }
+  .acc-row.three > .panel {
+    height: 240px;
+  }
+  .engine {
+    overflow: visible;
+  }
+}
+
+/* narrow: one column */
+@media (max-width: 61.99em) {
+  .desk-mid,
+  .markouts,
+  .orders,
+  .hist-days,
+  .acc-row,
+  .acc-row.three,
+  .eng-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .markouts {
+    grid-template-rows: auto auto;
+  }
+  .symmk-panel {
+    height: 560px;
+  }
+  .orders {
+    grid-template-rows: auto 560px 480px;
+  }
+}
+
+/* touch screens: bigger targets for the small controls */
+@media (pointer: coarse) {
+  .tabs-lab {
+    padding: 6px 12px;
+  }
+  .tz-toggle span {
+    padding: 4px 9px;
+  }
+  .mini-seg .mantine-SegmentedControl-label {
+    padding: 0 11px;
+    line-height: 28px;
+  }
+  .quick-filter input,
+  .hist-select input {
+    height: 30px;
+    min-height: 30px;
+    font-size: 16px; /* iOS zooms the page on focus of smaller text */
+  }
+  .logout button {
+    padding: 5px 10px;
+  }
+  .sw {
+    padding-block: 3px;
+  }
+  .sw:hover {
+    text-decoration: none;
+  }
+  .ag-header-cell,
+  .ag-cell {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ---- charts in phone mode (the `phone` props of DayChart, DeskChart, InstrumentChart, QuoteMap; UPlot strip) ---- */
+.lwc-phone {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.lwc-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+/* the phone's one toggle look (mobile.css .m-seg): a dark track, the active segment raised, no frames */
+.lwc-chips {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 0 3px;
+}
+.lwc-chips::before {
+  content: "";
+  position: absolute;
+  inset: 3px 0;
+  z-index: -1;
+  border-radius: 6px;
+  background: #10141a;
+}
+.lwc-chips button {
+  position: relative;
+  isolation: isolate;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 48px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.lwc-chips button::before {
+  content: "";
+  position: absolute;
+  inset: 6px 0;
+  z-index: -1;
+  border-radius: 4px;
+}
+.lwc-chips button:active::before {
+  background: var(--raised);
+}
+.lwc-chips button.on {
+  color: var(--ink);
+}
+.lwc-chips button.on::before {
+  background: #232a35;
+}
+.lwc-chips button:focus-visible,
+.lwc-reset:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.lwc-legend {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ink-2);
+}
+/* a wrapped line sits as close as the first */
+.lwc-legend .hl-row {
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 0;
+}
+/* at rest: the series names, 44 px toggles */
+.lwc-legend .lwc-words {
+  column-gap: 0;
+  margin-left: -10px;
+}
+.lwc-word {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-2);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* the series' colour in a swatch; off: a hollow swatch and muted words, still readable */
+.lwc-swatch {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+.lwc-word.off {
+  color: var(--muted);
+}
+.lwc-word.off .lwc-swatch {
+  background: transparent;
+  color: var(--muted) !important;
+}
+/* the TradingView credit stays in view, but a thumb on the chart never opens it */
+.lwc-phone a[href*="tradingview"],
+.lwc-phone #tv-attr-logo {
+  pointer-events: none;
+}
+/* and off the data: in the corner under the price axis, right of the time axis (the charts keep that axis in
+   place, without figures, while amounts are hidden) */
+.lwc-phone #tv-attr-logo {
+  left: calc(100% + 5px);
+  top: calc(100% + 3px);
+  bottom: auto;
+}
+.lwc-word:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.lwc-plot {
+  position: relative;
+  flex: none;
+}
+.lwc-host {
+  position: absolute;
+  inset: 0;
+}
+.lwc-reset {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 4;
+  min-height: 30px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: rgba(18, 22, 29, 0.92);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.u-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 20px;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.u-strip.over {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: rgba(7, 9, 12, 0.85);
+}
+.u-strip-title {
+  color: var(--ink);
+}
+.u-strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.u-strip-val {
+  color: var(--ink);
+  font-weight: 600;
+}
+.u-strip-val.masked {
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: normal;
+}
+.qmap.qmap-phone {
+  position: relative;
+  inset: auto;
 }

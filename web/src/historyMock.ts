@@ -7,6 +7,11 @@ import { useStore } from "./store";
 export const MIN = 60_000;
 const DAY = 86_400_000;
 export const ORIGIN = Math.floor(Date.now() / DAY) * DAY - 20 * DAY;
+/** The first day the monitor recorded the desk's P&L split. The days before it have their Trading PnL only,
+ *  rebuilt from the fills, as on a desk that started recording late: the snapshot's days list them without the
+ *  split (mock.ts), and /api/history still has their bars (the equity rows are there; pi, mm, hedge, rebates and
+ *  realized are null), so the History page's chart covers the same days as its list. */
+export const RECORDED_FROM = ORIGIN + 6 * DAY;
 
 function hash(a: number, b: number): number {
   let h = (Math.imul(a | 0, 0x9e3779b1) ^ Math.imul(b | 0, 0x85ebca77)) >>> 0;
@@ -170,9 +175,13 @@ function history(from: number, to: number, step: number): History {
   const now = nowMin();
   extendDesk(now);
   const sm = step / 60;
-  const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN / sm) * sm);
+  // from the first whole day the snapshot's days list has (mock.ts: the day after ORIGIN)
+  const m0 = Math.max(1440, Math.floor((from - ORIGIN) / MIN / sm) * sm);
   const m1 = Math.min(now, Math.floor((to - ORIGIN) / MIN));
-  const base = (xs: number[]) => (m0 > 0 ? xs[m0 - 1]! : 0);
+  // the split counts from its first recorded minute in the range; before it, null
+  const rec = Math.max(m0, minuteOf(RECORDED_FROM));
+  const base = (xs: number[]) => (rec > 0 ? xs[rec - 1]! : 0);
+  const split = (e: number, xs: number[], b: number) => (e >= rec ? xs[e]! - b : null);
   const tot = (m: number) => desk.pi[m]! + desk.he[m]! + desk.rb[m]! + desk.ot[m]!;
   const b0 = m0 > 0 ? tot(m0 - 1) : 0;
   const [bpi, bre, bmm, bhe, brb] = [base(desk.pi), base(desk.re), base(desk.mm), base(desk.he), base(desk.rb)];
@@ -199,11 +208,11 @@ function history(from: number, to: number, step: number): History {
       h,
       l,
       c,
-      pi: desk.pi[e]! - bpi,
-      realized: desk.re[e]! - bre,
-      mm: desk.mm[e]! - bmm,
-      hedge: desk.he[e]! - bhe,
-      rebates: desk.rb[e]! - brb,
+      pi: split(e, desk.pi, bpi),
+      realized: split(e, desk.re, bre),
+      mm: split(e, desk.mm, bmm),
+      hedge: split(e, desk.he, bhe),
+      rebates: split(e, desk.rb, brb),
       inventory: desk.inv[e]!,
       futures: desk.fut[e]!,
       volume: vol,
@@ -216,7 +225,7 @@ function history(from: number, to: number, step: number): History {
 
 function days(): HistDay[] {
   const out: HistDay[] = [];
-  for (let t = ORIGIN; t <= Date.now(); t += DAY) out.push({ day: new Date(t).toISOString().slice(0, 10), start: t });
+  for (let t = ORIGIN + DAY; t <= Date.now(); t += DAY) out.push({ day: new Date(t).toISOString().slice(0, 10), start: t });
   return out;
 }
 
@@ -255,7 +264,11 @@ function minuteBar(p: Path, m: number, basis: number): [number, number, number, 
 
 const STEP: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
 
+/** A symbol the mock's snapshot carries: others have no klines or fills (a real server has none for them). */
+const tracked = (symbol: string) => useStore.getState().snap?.symbols.some((s) => s.symbol === symbol) ?? false;
+
 function klines(symbol: string, venue: string, interval: string, from: number, to: number): Kline[] {
+  if (!tracked(symbol)) return [];
   const p = path(symbol);
   const basis = venue === "usdm" ? 1.0002 : 1;
   const sm = STEP[interval] ?? 1;
@@ -281,6 +294,7 @@ function klines(symbol: string, venue: string, interval: string, from: number, t
 
 const ACCTS = ["sub-a", "sub-b", "sub-c", "sub-d"];
 function fills(symbol: string, from: number, to: number): HistFill[] {
+  if (!tracked(symbol)) return [];
   const p = path(symbol);
   const isPerpHedged = symbol === "BTCUSDT" || symbol === "ETHUSDT";
   const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN));

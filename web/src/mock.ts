@@ -25,7 +25,7 @@ import type {
   Summary,
   SymbolRow,
 } from "./protocol";
-import { MIN, activity as minuteActivity, desk, deskAt, minuteOf, rebate, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
+import { MIN, RECORDED_FROM, activity as minuteActivity, desk, deskAt, minuteOf, rebate, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
 
 type Emit = (m: Msg) => void;
 
@@ -154,6 +154,7 @@ interface Leg {
   fees: number;
   funding: number;
   fills: number;
+  buys: number;
   volume: number;
   hOff: number;
   row: SymbolRow | null;
@@ -272,7 +273,8 @@ let deskDirty = false;
 const series: SeriesPoint[] = [];
 let fills: Fill[] = [];
 let fillSeq = 0;
-const pending: { f: Fill; i: Inst }[] = []; // fills with markouts still to mature
+const pending: { f: Fill; i: Inst }[] = [];
+const pendingLeg: { f: Fill; l: Leg }[] = []; // hedge fills with markouts still to mature (against the perp's own mark)
 const due: { at: number; i: Inst; side: "buy" | "sell" }[] = []; // the rest of a fill cluster
 const requote = new Set<Inst>();
 const byHourMk: { s10: number; w10: number; s60: number; w60: number; mk10: number | null; mk60: number | null }[] = Array.from(
@@ -507,6 +509,24 @@ function mature(): Fill[] {
     }
     if (age >= 300) pending.splice(k, 1);
   }
+  for (let k = pendingLeg.length - 1; k >= 0; k--) {
+    const p = pendingLeg[k]!;
+    const age = (now - p.f.ts) / 1000;
+    let mk: Markouts | null = null;
+    for (const h of HORIZONS) {
+      if (p.f.mk[h] != null || age < Number(h)) continue;
+      mk ??= { ...p.f.mk };
+      mk[h] = (p.f.side === "buy" ? 1 : -1) * ((legMark(p.l) - p.f.price) / p.f.price) * 1e4;
+    }
+    if (mk) {
+      const nf: Fill = { ...p.f, mk, mk_raw: { ...mk }, mk_fast: { ...mk } };
+      p.f = nf;
+      out.push(nf);
+      const idx = fills.findIndex((x) => x.id === nf.id);
+      if (idx >= 0) fills[idx] = nf;
+    }
+    if (age >= 300) pendingLeg.splice(k, 1);
+  }
   return out;
 }
 function settle(i: Inst, f: Fill, h: (typeof HORIZONS)[number], v: number) {
@@ -539,16 +559,44 @@ let hedgeOrder: { leg: Leg; qty: number; at: number; o: OpenOrder } | null = nul
 const BAND = (target: number) => Math.max(150, 0.08 * Math.abs(target));
 const betaValue = () => sumOf(insts, (i) => invValue(i) * i.beta);
 
-function hedger() {
+/** A hedge fill on a perp, as the server books it: fair = the perp's mark, edge against it; markouts only if `ageS` is given (a past fill). */
+function perpFill(l: Leg, side: "buy" | "sell", ts: number, price: number, notional: number, maker: boolean, fair: number, ageS?: number): Fill {
+  const s = side === "buy" ? 1 : -1;
+  const mk = emptyMk();
+  if (ageS != null) for (const [h, sd] of [["1", 0.6], ["10", 2], ["60", 4.5], ["300", 9]] as const) if (ageS >= Number(h)) mk[h] = gauss() * sd;
+  return {
+    id: `main-${l.symbol}-usdm-${++fillSeq}`,
+    ts,
+    account: "main",
+    symbol: l.symbol,
+    venue: "usdm",
+    side,
+    price,
+    qty: notional / price,
+    notional,
+    fee: (notional * (maker ? 2 : 5)) / 1e4,
+    fee_asset: "USDT",
+    maker,
+    fair,
+    edge_bps: s * ((fair - price) / fair) * 1e4,
+    mk,
+    mk_raw: { ...mk },
+    mk_fast: { ...mk },
+  };
+}
+
+function hedger(): Fill | null {
   if (hedgeOrder) {
     if (now >= hedgeOrder.at) {
       const { leg, qty } = hedgeOrder;
       const maker = rnd() < 0.5;
-      const price = legMark(leg) * (1 + (maker ? -1 : 1) * Math.sign(qty) * 0.2e-4);
+      const fair = legMark(leg);
+      const price = Math.round((fair * (1 + (maker ? -1 : 1) * Math.sign(qty) * 0.2e-4)) / leg.tick) * leg.tick;
       leg.q += qty;
       leg.cash -= qty * price;
       leg.fees += (Math.abs(qty * price) * (maker ? 0.2 : 0.5)) / 1e3; // 2 / 5 bps
       leg.fills++;
+      if (qty > 0) leg.buys++;
       leg.volume += Math.abs(qty * price);
       leg.entry = leg.q !== 0 ? price : leg.entry;
       leg.row = null;
@@ -557,12 +605,13 @@ function hedger() {
       hedgeOrder = null;
       acctTouched.add("main");
       deskDirty = true;
+      return perpFill(leg, qty > 0 ? "buy" : "sell", now, price, Math.abs(qty * price), maker, fair);
     }
-    return;
+    return null;
   }
   const target = -betaValue();
   const gap = target - futNotional();
-  if (Math.abs(gap) <= BAND(target)) return;
+  if (Math.abs(gap) <= BAND(target)) return null;
   const leg = rnd() < 0.7 ? legs[0]! : legs[1]!;
   const qty = gap / legMark(leg);
   hedgeOrder = {
@@ -586,6 +635,7 @@ function hedger() {
   eng2.orders++;
   if (rnd() < 0.15) eng2.cancels++;
   sent("main");
+  return null;
 }
 
 // ---- history: the day so far, from historyMock's minutes ----
@@ -681,6 +731,7 @@ function buildHistory() {
       fees: 0,
       funding: 0,
       fills: Math.round(eng2.fills * share),
+      buys: Math.round(eng2.fills * share * 0.35), // the hedge mostly sold today, against the inventory bought
       volume: eng2.fills * share * 260,
       hOff: (e.he - base.he) * share,
       row: null,
@@ -737,8 +788,27 @@ function buildHistory() {
     }
     tape.push(...inMin.sort((a, b) => b.ts - a.ts));
   }
-  fills = tape.slice(0, 2000);
+  // the hedger's perp fills in the same window: their share of the day's leg fills (a few at least)
+  const from = tape.length ? tape[Math.min(tape.length, 2000) - 1]!.ts : dayStart;
+  const perp: Fill[] = [];
+  for (const l of legs) {
+    const n = Math.min(l.fills, Math.max(4, Math.round((l.fills * (now - from)) / Math.max(1, now - dayStart))));
+    for (let k = 0; k < n; k++) {
+      const ts = from + Math.floor(rnd() * Math.max(1, now - 5000 - from));
+      const ageS = (now - ts) / 1000;
+      const fair = legMark(l) * Math.exp(gauss() * 4e-4 * Math.sqrt(ageS / 600 + 0.05));
+      const side = rnd() < l.buys / Math.max(1, l.fills) ? "buy" : "sell";
+      const maker = rnd() < 0.5;
+      const price = Math.round((fair * (1 + (maker ? -1 : 1) * (side === "buy" ? 1 : -1) * 0.2e-4)) / l.tick) * l.tick;
+      perp.push(perpFill(l, side, ts, price, (l.volume / Math.max(1, l.fills)) * (0.6 + 0.8 * rnd()), maker, fair, ageS));
+    }
+  }
+  fills = tape.slice(0, 2000 - perp.length).concat(perp).sort((a, b) => b.ts - a.ts);
   for (const f of fills) {
+    if (f.venue === "usdm") {
+      if (now - f.ts < 300_000) pendingLeg.push({ f, l: legs.find((l) => l.symbol === f.symbol)! });
+      continue;
+    }
     const i = bySymbol.get(f.symbol)!;
     i.last = Math.max(i.last ?? 0, f.ts);
     if (now - f.ts < 300_000) pending.push({ f, i });
@@ -981,8 +1051,8 @@ function legRow(l: Leg): SymbolRow {
     avg_cost: l.entry,
     upnl: l.q * (mark - l.entry),
     fills_day: l.fills,
-    buys_day: Math.ceil(l.fills / 2),
-    sells_day: Math.floor(l.fills / 2),
+    buys_day: l.buys,
+    sells_day: l.fills - l.buys,
     volume_day: l.volume,
     edge_bps: null,
     mk10_bps: null,
@@ -1341,7 +1411,7 @@ function buildDays() {
       vol += desk.vol[m]!;
     }
     const tr = d("pi");
-    const kept = k <= 3;
+    const kept = dayStart - k * 24 * H >= RECORDED_FROM; // the split recorded (historyMock's bars before it have none)
     pastDays.push({
       day: new Date(dayStart - k * 24 * H).toISOString().slice(0, 10),
       trading: tr,
@@ -1354,6 +1424,7 @@ function buildDays() {
       volume: vol,
       covered_s: k === 9 ? 70_200 : 86_400 - Math.floor(rnd() * 300),
       backfilled_s: k === 9 ? 16_200 : 0,
+      // as on a server, a day from before the split was kept (kv dayreal:<day>) has no Day PnL either
       pnl_day: kept ? tr + d("he") + d("rb") + d("ot") : null,
       realized: kept ? d("re") : null,
       realized_old: kept ? tr * 0.08 : null,
@@ -1514,8 +1585,14 @@ export function startMock(emit: Emit): () => void {
         pending.push({ f, i: d.i });
       }
     }
+    // the hedger: a perp fill when its order is done
+    const hf = hedger();
+    if (hf) {
+      newFills.push(hf);
+      pendingLeg.push({ f: hf, l: legs.find((l) => l.symbol === hf.symbol)! });
+    }
     // requotes after fills, one tick later
-    if (!newFills.length) {
+    if (!newFills.some((f) => f.venue === "spot")) {
       for (const i of requote) ensureQuotes(i);
       requote.clear();
     }
@@ -1523,8 +1600,6 @@ export function startMock(emit: Emit): () => void {
     const updated = mature();
     const out = newFills.concat(updated);
     if (out.length) emit({ type: "fills", data: out });
-
-    hedger();
 
     // a stream flap on sub-a now and then
     if (tick % 4800 === 1200) acctStream["sub-a"] = "down";
@@ -1583,6 +1658,7 @@ export function startMock(emit: Emit): () => void {
       patch.engines = engineCache;
       patch.feeds = feeds();
       patch.alerts = alerts.map((x) => ({ ...x }));
+      // every fill of the last hour, as the server's mk10_1h (no venue filter)
       const w = fills.filter((f) => f.ts > now - H && f.mk["10"] != null);
       const wn = sumOf(w, (f) => f.notional);
       mkNet1h = wn > 0 ? sumOf(w, (f) => f.mk["10"]! * f.notional) / wn : null;

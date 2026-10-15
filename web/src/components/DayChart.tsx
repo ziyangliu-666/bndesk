@@ -18,16 +18,17 @@ import {
   type ISeriesPrimitive,
   type Logical,
   type SeriesAttachedParameter,
+  type PaneAttachedParameter,
   type SeriesType,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useStore, serverNow } from "../store";
 import { hm, pnl, usdShort, type TzMode } from "../format";
-import { FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1, S2, SANS } from "../theme";
+import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1, S2, SANS } from "../theme";
 import { getJSON, type HistBar, type History } from "../api";
 import type { Fill, SeriesPoint, Summary } from "../protocol";
-import { KV, capAt, chartOptions, quiet, usdFmt } from "./HistoryChart";
+import { KV, PhoneWords, capAt, maskAxis, useHeldHeight, chartOptions, phonePlotHeight, quiet, usdFmt, useMask } from "./HistoryChart";
 import { Panel, SeriesWord, useSeriesToggle } from "./ui";
 
 export { timeAxis, usdTicks, usdAxis } from "./uplotAxes";
@@ -107,10 +108,15 @@ class SessionBands implements ISeriesPrimitive<Time> {
   private chart: IChartApi | null = null;
   private request: (() => void) | null = null;
   private sm: Summary | undefined;
-  constructor(private labels: boolean) {}
+  /** `plate`: each name on a plate of the panel's colour (a phone's small type is unreadable crossed by a line). */
+  constructor(
+    private labels: boolean,
+    private plate = false,
+  ) {}
   // bands and hairlines under the grid; labels above it, so an hour line never cuts through a name
   private view: IPrimitivePaneView = { zOrder: () => "bottom", renderer: () => this.renderer(false) };
-  private labelView: IPrimitivePaneView = { zOrder: () => "normal", renderer: () => this.renderer(true) };
+  // (a phone's plated names go over the series too: a volume spike never runs through one)
+  private labelView: IPrimitivePaneView = { zOrder: () => (this.plate ? "top" : "normal"), renderer: () => this.renderer(true) };
   private renderer(labelsOnly: boolean): IPrimitivePaneRenderer {
     return {
       draw: (target) => {
@@ -142,6 +148,10 @@ class SessionBands implements ISeriesPrimitive<Time> {
             const l = Math.max(a, 0) + 5 * hpr;
             const r = Math.min(b, bitmapSize.width);
             if (r - l < ctx.measureText(s.name).width + 6 * hpr) return;
+            if (this.plate) {
+              ctx.fillStyle = C.panel;
+              ctx.fillRect(l - 3 * hpr, 2 * vpr, ctx.measureText(s.name).width + 6 * hpr, 14 * vpr);
+            }
             ctx.fillStyle = "rgba(138,148,165,0.7)";
             ctx.fillText(s.name, l, 4 * vpr);
           });
@@ -157,7 +167,8 @@ class SessionBands implements ISeriesPrimitive<Time> {
       },
     };
   }
-  attached(p: SeriesAttachedParameter<Time, SeriesType>) {
+  // on a series (desk: one per pane) or on a pane (phone: the bands stay whichever series are shown)
+  attached(p: SeriesAttachedParameter<Time, SeriesType> | PaneAttachedParameter<Time>) {
     this.chart = p.chart as IChartApi;
     this.request = p.requestUpdate;
   }
@@ -174,12 +185,19 @@ class SessionBands implements ISeriesPrimitive<Time> {
   }
 }
 
-function options(tz: TzMode): DeepPartial<ChartOptions> {
-  const o = chartOptions(tz, 60);
+function options(tz: TzMode, phone = false): DeepPartial<ChartOptions> {
+  const o = chartOptions(tz, 60, phone);
   return {
     ...o,
     timeScale: { ...o.timeScale, rightOffset: 0, tickMarkFormatter: (t: Time) => hm((t as number) * 1000, tz) },
-    localization: { timeFormatter: (t: Time) => hm((t as number) * 1000, tz) },
+    localization: { ...o.localization, timeFormatter: (t: Time) => hm((t as number) * 1000, tz) },
+    // a phone shows the day as it is: a sideways drag reads the minutes (scrub below), nothing pans or zooms
+    ...(phone && {
+      handleScroll: false,
+      handleScale: false,
+      kineticScroll: { touch: false, mouse: false },
+      crosshair: { ...o.crosshair, horzLine: { ...o.crosshair?.horzLine, visible: false, labelVisible: false } },
+    }),
   };
 }
 
@@ -197,13 +215,43 @@ interface Series {
   bands: SessionBands[];
 }
 
-export function DayChart() {
+/** A phone shows one group of series at a time in a single pane. */
+export type DayGroup = "pnl" | "volume" | "inventory";
+const GROUPS: [DayGroup, string][] = [
+  ["pnl", "PnL"],
+  ["volume", "Volume"],
+  ["inventory", "Inventory"],
+];
+const GROUP_OF: Record<string, DayGroup> = { Volume: "volume", Inventory: "inventory", Futures: "inventory" };
+const MARGINS: Record<DayGroup, { top: number; bottom: number }> = {
+  pnl: { top: 0.1, bottom: 0.06 },
+  volume: { top: 0.15, bottom: 0 },
+  inventory: { top: 0.15, bottom: 0.1 },
+};
+
+export interface DayChartProps {
+  /** Touch layout: one pane with PnL / Volume / Inventory chips, the legend above the plot (the series names at
+   *  rest, the minute's figures while a finger drags sideways across the plot), page swipes pass through; no
+   *  pan or zoom. Fixed per mount. */
+  phone?: boolean;
+  /** Phone: the plot's height (px or a CSS length, not vh); chips and legend add about 70 px. Default 220. */
+  height?: number | string;
+  /** Phone: the group shown first. Default "pnl". */
+  group?: DayGroup;
+}
+
+export function DayChart(p: DayChartProps) {
+  return <DayChartIn key={p.phone ? "phone" : "desk"} {...p} />;
+}
+
+function DayChartIn({ phone = false, height = 220, group: group0 = "pnl" }: DayChartProps) {
   const summary = useStore((s) => s.snap?.summary);
   const series = useStore((s) => s.snap?.series);
   const fills = useStore((s) => s.snap?.fills);
   const dayStart = summary?.day_start ?? 0;
   const tz = useStore((s) => s.tz);
   const [full, setFull] = useState(false);
+  const [group, setGroup] = useState<DayGroup>(group0);
   const [bars, setBars] = useState<{ dayStart: number; bars: HistBar[] } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -222,18 +270,24 @@ export function DayChart() {
     if (!c || !dayStart) return;
     const last = (applied.current - dayStart) / MIN;
     const to = fullRef.current || applied.current < dayStart ? DAY_MIN - 0.5 : last + 2;
-    c.timeScale().setVisibleLogicalRange({ from: -0.5 - to * 0.012, to });
+    // a phone's plot starts at the screen edge: leave half a time label (18 px) left of the day start
+    const w = c.timeScale().width();
+    const lead = phone && w > 36 ? ((to + 0.5) * 18) / (w - 18) : to * 0.012;
+    // and the same right of the day's end, for its last label
+    const tail = phone && fullRef.current ? lead : 0;
+    c.timeScale().setVisibleLogicalRange({ from: -0.5 - lead, to: to + tail });
   };
 
   // ---- mount ----
   useEffect(() => {
     const el = host.current!;
-    const c = createChart(el, options(tz));
+    const c = createChart(el, options(tz, phone));
     chart.current = c;
     c.subscribeCrosshairMove((p) => setHover(p.time == null ? null : (p.time as number) * 1000));
     const axis = c.addSeries(LineSeries, { visible: false, ...quiet });
+    // a phone keeps every series in the one pane and shows one group at a time
     const line = (color: string, pane: number, width: 1 | 2 = 1) =>
-      c.addSeries(LineSeries, { color, lineWidth: width, priceFormat: usdFmt, crosshairMarkerRadius: 2.5, ...quiet }, pane);
+      c.addSeries(LineSeries, { color, lineWidth: width, priceFormat: usdFmt, crosshairMarkerRadius: 2.5, ...quiet }, phone ? 0 : pane);
     const invPnl = line(INVPNL_COLOR, 0);
     const mm = line(MM_COLOR, 0);
     const hedge = line(HEDGE, 0);
@@ -242,7 +296,7 @@ export function DayChart() {
     // the zero line on every P&L line, so it stays while any of them is shown
     for (const x of [invPnl, mm, hedge, trading, day])
       x.createPriceLine({ price: 0, color: "#4a5870", lineWidth: 1, lineStyle: LineStyle.Solid, axisLabelVisible: false });
-    day.priceScale().applyOptions({ scaleMargins: { top: 0.16, bottom: 0.06 } });
+    day.priceScale().applyOptions({ scaleMargins: phone ? MARGINS.pnl : { top: 0.16, bottom: 0.06 } });
     const vol = c.addSeries(
       HistogramSeries,
       {
@@ -256,31 +310,36 @@ export function DayChart() {
             : r;
         },
       },
-      1,
+      phone ? 0 : 1,
     );
-    vol.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0 } });
+    if (!phone) vol.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0 } });
     const inv = line(INV, 2);
     const fut = line(FUT, 2);
-    inv.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0.1 } });
+    if (!phone) inv.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0.1 } });
     const panes = c.panes();
     panes[0]!.setStretchFactor(4.5);
-    panes[1]!.setStretchFactor(1);
-    panes[2]!.setStretchFactor(1.2);
-    const bands = [day, vol, inv].map((x, i) => {
-      const p = new SessionBands(i === 0);
-      x.attachPrimitive(p);
-      return p;
-    });
+    panes[1]?.setStretchFactor(1);
+    panes[2]?.setStretchFactor(1.2);
+    const bands = phone
+      ? [new SessionBands(true, true)]
+      : [day, vol, inv].map((x, i) => {
+          const p = new SessionBands(i === 0);
+          x.attachPrimitive(p);
+          return p;
+        });
+    // a phone shows one group of series at a time: the bands belong to the pane, so every group has them
+    if (phone) c.panes()[0]!.attachPrimitive(bands[0]!);
     s.current = { axis, day, trading, mm, invPnl, hedge, vol, inv, fut, bands };
 
     const touched = () => (userView.current = true);
-    const drag = (e: PointerEvent) => e.buttons && touched();
+    // a phone's chart does not pan or zoom
+    const drag = (e: PointerEvent) => e.buttons && !phone && touched();
     const reset = () => {
       userView.current = false;
       c.panes().forEach((_, i) => c.priceScale("right", i).applyOptions({ autoScale: true }));
       defaultView();
     };
-    el.addEventListener("wheel", touched, { capture: true, passive: true });
+    if (!phone) el.addEventListener("wheel", touched, { capture: true, passive: true });
     el.addEventListener("pointermove", drag, { capture: true });
     el.addEventListener("dblclick", reset);
     const ro = new ResizeObserver(() => userView.current || requestAnimationFrame(defaultView));
@@ -298,8 +357,70 @@ export function DayChart() {
   }, []);
 
   useEffect(() => {
-    chart.current?.applyOptions(options(tz));
+    chart.current?.applyOptions(options(tz, phone));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tz]);
+
+  // phone: a finger dragged sideways across the plot scrubs the crosshair and the legend; a vertical swipe
+  // scrolls the page
+  const scrubRef = useRef({ dayStart, applied });
+  scrubRef.current = { dayStart, applied };
+  useEffect(() => {
+    const el = host.current;
+    const c = chart.current;
+    if (!phone || !el || !c) return;
+    el.style.touchAction = "pan-y";
+    let from: { x: number; y: number; id: number } | null = null;
+    let scrub = false;
+    const at = (clientX: number) => {
+      const { dayStart: d0, applied: last } = scrubRef.current;
+      const x = s.current;
+      const lg = c.timeScale().coordinateToLogical(clientX - el.getBoundingClientRect().left);
+      if (!x || !d0 || lg == null) return;
+      const t = Math.min(d0 + Math.max(0, Math.round(lg)) * MIN, Math.max(d0, last.current));
+      setHover(t);
+      c.setCrosshairPosition(rows.current.get(t)?.day ?? 0, ts(t), x.day);
+    };
+    const down = (e: PointerEvent) => {
+      if (e.pointerType === "mouse") return;
+      from = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      scrub = false;
+    };
+    const move = (e: PointerEvent) => {
+      if (!from || e.pointerId !== from.id) return;
+      if (!scrub) {
+        const dx = Math.abs(e.clientX - from.x);
+        const dy = Math.abs(e.clientY - from.y);
+        if (dy > 8 && dy >= dx) from = null;
+        if (!from || dx < 8 || dx < dy) return;
+        scrub = true;
+      }
+      at(e.clientX);
+    };
+    const up = (e: PointerEvent) => {
+      if (!from || e.pointerId !== from.id) return;
+      from = null;
+      if (!scrub) return;
+      scrub = false;
+      c.clearCrosshairPosition();
+      setHover(null);
+    };
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointermove", move);
+    for (const t of ["pointerup", "pointercancel"]) el.addEventListener(t, up as EventListener);
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointermove", move);
+      for (const t of ["pointerup", "pointercancel"]) el.removeEventListener(t, up as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const mask = useMask(phone);
+  const masked = mask("1") !== "1";
+  useEffect(() => {
+    if (phone) maskAxis(chart.current, masked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [masked]);
 
   // ---- history: today so far at one minute, every minute ----
   useEffect(() => {
@@ -310,7 +431,7 @@ export function DayChart() {
         .then((h) => setBars({ dayStart, bars: h.bars }))
         .catch(() => {});
     load();
-    const id = setInterval(load, REFETCH);
+    const id = setInterval(() => document.visibilityState !== "hidden" && load(), REFETCH);
     return () => {
       clearInterval(id);
       ac.abort();
@@ -424,7 +545,9 @@ export function DayChart() {
       Inventory: x.inv,
       Futures: x.fut,
     };
-    for (const [name, ser] of Object.entries(by)) ser.applyOptions({ visible: !tog.hidden.includes(name) });
+    for (const [name, ser] of Object.entries(by))
+      ser.applyOptions({ visible: !tog.hidden.includes(name) && (!phone || (GROUP_OF[name] ?? "pnl") === group) });
+    if (phone) x.day.priceScale().applyOptions({ scaleMargins: MARGINS[group] });
     // a pane with nothing shown folds away
     const off = (...n: string[]) => n.every((x) => tog.hidden.includes(x));
     const panes = c.panes();
@@ -432,7 +555,7 @@ export function DayChart() {
     panes[2]?.setStretchFactor(off("Inventory", "Futures") ? 0.001 : 1.2);
     panes.forEach((_, i) => c.priceScale("right", i).applyOptions({ autoScale: true }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hiddenKey]);
+  }, [hiddenKey, group]);
 
   // a view toggle returns to the default view
   useEffect(() => {
@@ -440,6 +563,56 @@ export function DayChart() {
     defaultView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [full]);
+
+  const held = useHeldHeight(phone && r != null);
+  if (phone) {
+    const inGroup = words.filter(([w]) => (GROUP_OF[w] ?? "pnl") === group);
+    const val = (w: string, x: Row): string => {
+      const v = { "Day PnL": x.day, "Trading PnL": x.trading, "Market making": x.mm, "Inventory PnL": x.invPnl, Hedge: x.hedge }[w];
+      return mask(w === "Volume" ? usdShort(x.vol) : w === "Inventory" ? usdShort(x.inv) : w === "Futures" ? usdShort(x.fut) : pnl(v));
+    };
+    return (
+      <div className="lwc-phone day-phone">
+        <div className="lwc-bar">
+          <div className="lwc-chips" role="radiogroup" aria-label="Series">
+            {GROUPS.map(([g, label]) => (
+              <button key={g} type="button" role="radio" aria-checked={g === group} className={g === group ? "on" : ""} onClick={() => setGroup(g)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="lwc-chips" role="radiogroup" aria-label="Time range">
+            <button type="button" role="radio" aria-checked={!full} className={full ? "" : "on"} onClick={() => setFull(false)}>
+              so far
+            </button>
+            <button type="button" role="radio" aria-checked={full} className={full ? "on" : ""} onClick={() => setFull(true)}>
+              24h
+            </button>
+          </div>
+        </div>
+        {/* at rest the series names (toggles); the figures only while a finger is on the chart */}
+        <div className="lwc-legend fig" {...held}>
+          {r ? (
+            <div className="hl-row">
+              <span className="hl-time">{hm(r.t, tz)}</span>
+              {inGroup
+                .filter(([w]) => !tog.off(w))
+                .map(([w, c]) => (
+                  <KV key={w} k={w} color={c}>
+                    {val(w, r)}
+                  </KV>
+                ))}
+            </div>
+          ) : (
+            <PhoneWords t={tog} words={inGroup.map(([w, c]) => [w, w, c] as const)} />
+          )}
+        </div>
+        <div className="lwc-plot" style={{ height: phonePlotHeight(height, 140) }}>
+          <div className="lwc-host" ref={host} />
+        </div>
+      </div>
+    );
+  }
 
 
   return (

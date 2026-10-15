@@ -88,7 +88,7 @@ function useFetch<T>(key: string | null, run: (signal: AbortSignal) => Promise<T
       );
     };
     go(true);
-    const id = live ? setInterval(() => go(false), every) : undefined;
+    const id = live ? setInterval(() => document.visibilityState !== "hidden" && go(false), every) : undefined;
     return () => {
       ac.abort();
       if (id) clearInterval(id);

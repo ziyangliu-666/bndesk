@@ -3,7 +3,7 @@ import { AgGridReact } from "ag-grid-react";
 import type { ColDef, ColGroupDef, GetRowIdParams } from "ag-grid-community";
 import { useStore } from "../store";
 import { bps, int } from "../format";
-import { gridTheme } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { InstrumentName, Panel, refLabel } from "../components/ui";
 import type { SymbolRow } from "../protocol";
 import { fBps, fInt, fPnl, fUsd, flashOn, flexCols, signCls, tint, DEFAULT_COL } from "../grid";

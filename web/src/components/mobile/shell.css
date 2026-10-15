@@ -1,0 +1,93 @@
+/* ---- phone shell additions (MobileShell, TopBar, Sheet) ---- */
+
+/* read by screen readers only */
+.m-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.m-back-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hide amounts is on: says so in the bar, and a tap shows them again */
+.m-hidden-on {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  border-radius: 6px;
+}
+.m-hidden-on:active {
+  background: var(--raised);
+}
+
+/* a sheet's body drags it down when scrolled to the top */
+.m-sheet-body.dragging {
+  overflow: hidden;
+}
+
+/* ---- landscape phone: lower bars, a readable column ---- */
+@media (min-aspect-ratio: 3/2) and (max-height: 30em) {
+  html.is-phone {
+    --m-bar-h: 40px;
+    --m-nav-h: 40px;
+  }
+  html.is-phone .m-tab {
+    flex-direction: row;
+    gap: 16px;
+  }
+  html.is-phone .m-tab-icon {
+    width: 30px;
+    height: 24px;
+  }
+  /* on the icon's corner, clear of the label beside it */
+  html.is-phone .m-badge {
+    top: -6px;
+    left: 13px;
+  }
+  html.is-phone .m-bar-row,
+  html.is-phone .m-asof,
+  html.is-phone .m-demo,
+  html.is-phone .m-main {
+    max-width: calc(640px + var(--m-pad-l) + var(--m-pad-r));
+    margin-inline: auto;
+  }
+}
+
+/* a page that could not be loaded: one line and Reload (LoadBoundary) */
+.m-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 0;
+  color: var(--ink-2);
+}
+.m-load-error button {
+  flex: none;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+}
+.m-load-error button:active {
+  filter: brightness(1.25);
+}
+
+/* focus rings for the keyboard only (useInputMode): none after a tap, also not on a button a sheet hands focus
+   back to when it closes */
+html.is-phone[data-input="touch"] :focus-visible {
+  outline: none !important;
+}

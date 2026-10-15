@@ -1,0 +1,1379 @@
+/* ---- phone ----
+   The phone shell and its primitives (components/mobile, pages/mobile). Every class is prefixed m-.
+   The phone tree mounts when isPhoneNow() says so (src/responsive.ts); html.is-phone marks it. */
+
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --m-bar-h: 48px; /* top bar, without the safe area */
+  --m-nav-h: 56px; /* bottom tab bar, without the safe area */
+  --m-pad-l: max(16px, var(--safe-l));
+  --m-pad-r: max(16px, var(--safe-r));
+  --m-radius: 6px; /* controls; nothing else is rounded but the sheet's top */
+  --m-font: 14px;
+  --m-sheet: #0c0f14; /* sheets sit a step above the cards */
+  --m-track: rgba(138, 148, 165, 0.16); /* empty part of a bar */
+  --m-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* the document scrolls on a phone (iOS collapses its toolbars only then), not the app frame */
+html.is-phone,
+html.is-phone body,
+html.is-phone #root {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+html.is-phone body {
+  font-size: var(--m-font);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overflow-x: hidden;
+}
+
+.m-app {
+  min-height: 100svh;
+  padding-bottom: calc(var(--m-nav-h) + var(--safe-b));
+  font-size: var(--m-font);
+  line-height: 1.35;
+  color: var(--ink);
+  background: var(--ground);
+}
+.m-app button,
+.m-app a,
+.m-app [role="button"],
+.m-nav *,
+.m-sheet * {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.m-app input,
+.m-app select,
+.m-app textarea,
+.m-sheet input {
+  font-size: 16px; /* no iOS zoom on focus */
+}
+.m-app :focus {
+  outline: none;
+}
+.m-app :focus-visible,
+.m-sheet :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+.m-fig {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- top bar ---- */
+.m-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: var(--safe-t);
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+}
+.m-bar-row {
+  height: var(--m-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 calc(var(--m-pad-r) - 4px) 0 var(--m-pad-l);
+}
+.m-bar-row.sub {
+  padding-left: max(4px, var(--safe-l));
+}
+/* below a tab's own page the chevron and the title are one back button */
+.m-back {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 88px;
+  height: 44px;
+  padding-right: 10px;
+  color: inherit;
+  font: inherit;
+  border-radius: 6px;
+}
+.m-back > svg {
+  flex: none;
+  width: 36px;
+  color: var(--accent);
+}
+.m-back:active {
+  background: var(--raised);
+}
+.m-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-title .m-title-sub {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.m-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-brand-mark {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* stale: the figures dim and the bar says how old they are */
+.m-asof {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px var(--m-pad-r) 6px var(--m-pad-l);
+  font-size: 12px;
+  color: var(--warn);
+}
+.m-asof .m-asof-text {
+  flex: 1;
+  min-width: 0;
+}
+.m-asof button {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(227, 165, 59, 0.45);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 500;
+}
+.m-asof button:active {
+  background: rgba(227, 165, 59, 0.14);
+}
+/* Every figure and word on the page greys towards one stale grey, by its colour (a colour mix, not opacity,
+   so the step is the same for big and small figures and the muted labels stay above 4.5:1 on black): ink
+   ~8:1, gains/losses ~7.6 / ~5.8:1 with their hue kept faint, muted labels ~5:1. Warnings and critical
+   figures, and everything inside a warn/crit row or the alert banner, keep the live colours: they are what to
+   look at. Marks that can't follow a colour (charts on a canvas, bars) dim by opacity (.m-dim). */
+.m-app {
+  --m-live-ink: var(--ink);
+  --m-live-ink-2: var(--ink-2);
+  --m-live-muted: var(--muted);
+  --m-live-up: var(--up);
+  --m-live-down: var(--down);
+  --m-stale: #7d8696;
+}
+.m-app.stale .m-main {
+  --ink: color-mix(in srgb, var(--m-live-ink) 30%, var(--m-stale));
+  --ink-2: color-mix(in srgb, var(--m-live-ink-2) 25%, var(--m-stale));
+  --muted: #737c8a;
+  --up: color-mix(in srgb, var(--m-live-up) 40%, var(--m-stale));
+  --down: color-mix(in srgb, var(--m-live-down) 40%, var(--m-stale));
+  color: var(--ink);
+}
+.m-app.stale .m-main :is(.warn, .crit, .warn-text, .m-acc-crit, .m-ops-crit, .m-row.warn, .m-row.crit, .m-desk-alert, .m-ops-alert) {
+  --ink: var(--m-live-ink);
+  --ink-2: var(--m-live-ink-2);
+  --muted: var(--m-live-muted);
+  --up: var(--m-live-up);
+  --down: var(--m-live-down);
+}
+/* outermost marks only, so nested ones don't dim twice */
+.m-app.stale .m-main .m-dim:not(.m-dim *):not(
+    :is(.warn, .crit, .warn-text, .m-acc-crit, .m-ops-crit, .m-row.warn, .m-row.crit, .m-desk-alert, .m-ops-alert) *
+  ) {
+  opacity: 0.45;
+  transition: opacity 0.2s;
+}
+
+/* ---- status pill ---- */
+.m-pill {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 4px 0 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.m-pill::after {
+  /* a 44 px target around the 28 px pill */
+  content: "";
+  position: absolute;
+  inset: -6px -4px;
+}
+.m-pill:active {
+  background: var(--raised);
+}
+.m-pill.lag,
+.m-pill.reconnecting,
+.m-pill.connecting {
+  color: var(--warn);
+}
+.m-pill.stale {
+  color: var(--down);
+}
+.m-led {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+.m-led.live {
+  background: var(--up);
+}
+.m-led.lag,
+.m-led.reconnecting,
+.m-led.connecting {
+  background: var(--warn);
+}
+.m-led.reconnecting,
+.m-led.connecting {
+  animation: pulse 1s ease-in-out infinite;
+}
+.m-led.stale {
+  background: var(--down);
+}
+/* ---- page ---- */
+.m-main {
+  padding: 4px var(--m-pad-r) 24px var(--m-pad-l);
+}
+.m-main.flush {
+  padding-left: 0;
+  padding-right: 0;
+}
+.m-waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 72px 24px;
+  color: var(--ink-2);
+  text-align: center;
+}
+.m-waiting .m-led {
+  width: 9px;
+  height: 9px;
+  color: var(--warn);
+  animation: pulse 1s ease-in-out infinite;
+}
+.m-loading {
+  height: 40svh;
+}
+.m-demo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 calc(var(--m-pad-r) - 8px) 0 var(--m-pad-l);
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.m-demo span {
+  flex: 1;
+  min-width: 0;
+}
+.m-demo b {
+  color: var(--warn);
+  font-weight: 500;
+}
+.m-demo button {
+  flex: none;
+  width: 40px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* ---- bottom tab bar ---- */
+.m-nav {
+  position: fixed;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  height: calc(var(--m-nav-h) + var(--safe-b));
+  padding: 0 var(--safe-r) var(--safe-b) var(--safe-l);
+  background: var(--ground);
+  border-top: 1px solid var(--rule);
+}
+.m-app.typing .m-nav {
+  display: none;
+}
+.m-tab {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.m-tab-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 28px;
+}
+.m-tab[aria-current="page"] {
+  color: var(--ink);
+}
+.m-tab[aria-current="page"] .m-tab-icon {
+  color: var(--accent);
+}
+.m-tab:active {
+  opacity: 0.6;
+}
+.m-badge {
+  position: absolute;
+  top: -3px;
+  left: 30px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  border: 2px solid var(--ground);
+  box-sizing: content-box;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--warn);
+  color: #1a1102;
+}
+.m-badge.crit {
+  background: var(--crit);
+  color: #fff;
+}
+
+/* ---- section: heading over rows on the ground; a full-width hairline above each but the first ----
+   No cards. A section's body (.m-body) bleeds to the screen edges so tap highlights do; everything inside it
+   pads itself back to the page's left line, and rows are split by rules inset to that line. */
+.m-section {
+  position: relative;
+  margin-top: 8px;
+}
+.m-section::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--m-pad-l));
+  right: calc(-1 * var(--m-pad-r));
+  border-top: 1px solid var(--rule);
+}
+.m-section:first-child:not(.m-hold > *) {
+  margin-top: 0;
+}
+.m-section:first-child:not(.m-hold > *)::before {
+  display: none;
+}
+.m-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.m-section-title {
+  display: flex;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.m-section-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+.m-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 44px;
+  margin: 0 -6px 0 0;
+  padding: 0 2px 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.m-link:active {
+  opacity: 0.6;
+}
+/* the body is a grid with the figure-row columns (label · bar · value): figure rows take them as a subgrid so
+   bars and values line up down the section; every other child spans the full width */
+.m-body,
+.m-card {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  display: grid;
+  grid-template-columns: var(--m-lab) minmax(0, 1fr) minmax(var(--m-val), max-content);
+  column-gap: 12px;
+}
+.m-body > *,
+.m-card > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.m-body > .m-split,
+.m-body > .m-lim:not(.compact),
+.m-card > .m-split,
+.m-card > .m-lim:not(.compact) {
+  grid-template-columns: subgrid;
+}
+.m-section > .m-body:last-child {
+  margin-bottom: 4px;
+}
+.m-pad {
+  padding: 12px var(--m-pad-r) 12px var(--m-pad-l);
+}
+.m-empty {
+  padding: 12px var(--m-pad-r) 14px var(--m-pad-l);
+  color: var(--muted);
+  font-size: 13px;
+}
+.m-coming {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px var(--m-pad-r) 16px var(--m-pad-l);
+  color: var(--muted);
+  font-size: 13px;
+}
+.m-coming b {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.m-note {
+  padding: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* one rule between consecutive rows, inset to the page's left and right lines */
+.m-split-row + .m-split-row::before,
+.m-row + .m-row::before,
+.m-lim + .m-lim::before,
+.m-set + .m-set::before,
+.m-body > * + .m-row::before,
+.m-body > * + .m-lim::before,
+.m-body > * + .m-split > .m-split-row:first-child::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: var(--m-pad-l);
+  right: var(--m-pad-r);
+  border-top: 1px solid var(--rule);
+}
+/* tap feedback on whole rows */
+.m-tap:active,
+button.m-row:active,
+a.m-row:active,
+.m-tap {
+  cursor: pointer;
+}
+
+/* ---- info: a label that opens its definition ---- */
+.m-info {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 32px;
+  margin: -8px -4px;
+  padding: 8px 4px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  border-radius: 4px;
+}
+.m-info.icon {
+  color: var(--muted);
+  min-width: 44px;
+  justify-content: center;
+}
+.m-info:active {
+  background: var(--raised);
+}
+/* a heading's definition fills the 44 px heading row */
+.m-section-title .m-info {
+  min-height: 44px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+/* a defined term: dotted underline, the phone's sign that a tap explains it. Whole px, so it never falls
+   between device pixels */
+.m-defined {
+  text-decoration: underline dotted;
+  text-decoration-color: rgba(138, 148, 165, 0.6);
+  text-decoration-thickness: 1px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+/* labels that clip for an ellipsis keep room below the text for the underline (no change to the layout) */
+.m-split-label,
+.m-lim-label,
+.m-kv-label {
+  padding-bottom: 4px;
+  margin-bottom: -4px;
+}
+.m-def {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.m-def p {
+  margin: 0 0 10px;
+}
+
+/* ---- hero ---- */
+.m-hero {
+  padding: 8px var(--m-pad-r) 12px var(--m-pad-l);
+}
+.m-hero-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.m-hero-label .m-info {
+  min-height: 44px;
+  margin: -10px -4px;
+}
+.m-hero-label .m-hero-right {
+  margin-left: auto;
+}
+.m-hero-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 12px;
+}
+.m-hero-value {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.m-hero-value .m-unit {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.m-hero-value .m-masked {
+  font-weight: 400;
+  color: var(--muted);
+}
+/* Hide amounts: the hero's "•••" at body size, muted, on the figure's line height */
+.m-hero-value.m-hero-hidden {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 24px;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.m-hero-value.warn {
+  color: var(--warn);
+}
+.m-hero-sub {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.m-hero-chart {
+  margin-top: 8px;
+}
+
+/* ---- figure rows: label · bar · value, one grid shared by split rows and limit bars ---- */
+:root {
+  --m-lab: 112px; /* label column, so bars and values line up from section to section */
+  --m-val: 124px; /* value column's least width: "−17.47 / ±150.00" fits, so tracks (and zero lines) of
+                     consecutive sections share their x */
+}
+.m-split {
+  display: grid;
+  grid-template-columns: var(--m-lab) minmax(0, 1fr) minmax(var(--m-val), max-content);
+  column-gap: 12px;
+}
+.m-split-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  position: relative;
+}
+.m-split-label {
+  min-width: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-split-label.warn {
+  color: var(--warn);
+}
+.m-split-value {
+  text-align: right;
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.m-split-row.total .m-split-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+.m-split-row.total .m-split-value {
+  font-weight: 600;
+}
+.m-dbar {
+  position: relative;
+  height: 10px;
+}
+.m-dbar::before {
+  /* zero, where it falls on the shared scale */
+  content: "";
+  position: absolute;
+  left: var(--zero, 50%);
+  top: -7px;
+  bottom: -7px;
+  width: 1px;
+  background: #3a424e;
+}
+.m-dbar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 1px;
+  background: var(--ink-2);
+}
+.m-dbar-fill.up {
+  background: var(--up);
+}
+.m-dbar-fill.down {
+  background: var(--down);
+}
+
+/* ---- limit bar ---- */
+.m-lim {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--m-lab) minmax(0, 1fr) minmax(var(--m-val), max-content);
+  column-gap: 12px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+}
+.m-lim:not(:has(.m-lim-label)) .m-lim-track {
+  grid-column: 1 / 3;
+}
+.m-lim-label {
+  min-width: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-lim-value {
+  text-align: right;
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* the account a Desk risk row reads (its name, in ink, before its figure) */
+.m-lim-value .m-lim-who {
+  margin-right: 6px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.m-lim-value .m-lim-of {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.m-lim-value.warn {
+  color: var(--warn);
+}
+.m-lim-value.crit {
+  color: var(--crit);
+}
+.m-lim-track {
+  position: relative;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--m-track);
+}
+.m-lim-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.m-lim.warn .m-lim-fill {
+  background: var(--warn);
+}
+.m-lim.crit .m-lim-fill {
+  background: var(--crit);
+}
+.m-lim.crit .m-lim-track {
+  background: rgba(240, 82, 82, 0.18);
+}
+.m-lim-track.centered::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -5px;
+  bottom: -5px;
+  width: 1px;
+  background: var(--ink-2);
+  opacity: 0.6;
+}
+.m-lim-track.centered .m-lim-fill {
+  border-radius: 0;
+}
+.m-lim-sub {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -6px;
+  padding-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.m-lim.compact {
+  display: block;
+  min-height: 0;
+  padding: 0;
+}
+.m-lim.compact .m-lim-track {
+  height: 4px;
+}
+
+/* ---- list row ---- */
+.m-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px calc(var(--m-pad-r) - 4px) 8px var(--m-pad-l);
+  color: inherit;
+  text-align: left;
+}
+.m-row:not(:has(.m-row-chev)) {
+  padding-right: var(--m-pad-r);
+}
+.m-row.dense {
+  min-height: 44px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.m-row-lead {
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+/* a status dot hangs in the left gutter, centred on the title's line; the text keeps the page's left line */
+.m-row-dot {
+  position: absolute;
+  left: max(3px, calc(var(--m-pad-l) - 12px));
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.m-row:has(.m-row-sub) > .m-row-dot {
+  bottom: auto;
+  top: 8px;
+  height: 22px;
+}
+.m-row-dot .dot {
+  margin: 0;
+}
+/* a navigable list keeps one right edge for its figures: rows without a chevron keep its slot empty */
+.m-body:has(> .m-row .m-row-chev) > .m-row:not(:has(.m-row-chev)) {
+  padding-right: calc(var(--m-pad-r) + 20px);
+}
+.m-row-main,
+.m-row-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.m-row-main {
+  flex: 1;
+}
+.m-row-side {
+  flex: none;
+  align-items: flex-end;
+  max-width: 55%;
+}
+.m-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-row-sub,
+.m-row-sec {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.m-row-sub.wrap {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.m-row-pri {
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.m-row-chev {
+  flex: none;
+  margin-left: -6px;
+  color: var(--muted);
+  opacity: 0.6;
+}
+.m-row.warn .m-row-title {
+  color: var(--warn);
+}
+.m-row.crit .m-row-title {
+  color: var(--crit);
+}
+/* a bare icon slot; no tile */
+.m-icon-tile {
+  width: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+/* a qualifier after a name, like the desktop's "perp" */
+.m-tag {
+  flex: none;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.m-tag.up {
+  color: var(--up);
+}
+.m-tag.down {
+  color: var(--down);
+}
+.m-tag.warn {
+  color: var(--warn);
+}
+.m-tag.crit {
+  color: var(--crit);
+}
+.m-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ---- key / value grid ---- */
+.m-kv {
+  display: grid;
+  grid-template-columns: repeat(var(--kv-cols, 2), minmax(0, 1fr));
+  gap: 10px 16px;
+  padding: 10px var(--m-pad-r) 12px var(--m-pad-l);
+}
+.m-kv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.m-kv-item.m-tap {
+  margin: -6px;
+  padding: 6px;
+  border-radius: 4px;
+}
+.m-kv-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-kv-value {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-kv-value.up {
+  color: var(--up);
+}
+.m-kv-value.down {
+  color: var(--down);
+}
+.m-kv-value.warn {
+  color: var(--warn);
+}
+.m-kv-value.crit {
+  color: var(--crit);
+}
+.m-kv-value .m-unit,
+.m-row-pri .m-unit {
+  margin-left: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* ---- toggles: one look, the desk's flat segments ----
+   A dark track, the active segment raised, no frame around each option. Buttons are 44 px tall for the thumb;
+   the track (.m-seg::before) and the active segment (button::before) are drawn inside them. Chip rows are the
+   same segments on a horizontal scroller that bleeds to the screen edges. */
+.m-chips {
+  display: flex;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  scroll-padding-inline: var(--m-pad-l);
+}
+/* overflowing chip rows fade at the edge they continue past (the page padding stays clear) */
+.m-chips.fade-r {
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+}
+.m-chips.fade-l {
+  mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+}
+.m-chips.fade-l.fade-r {
+  mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+}
+.m-chips::-webkit-scrollbar {
+  display: none;
+}
+.m-chips > .m-seg {
+  flex: none;
+}
+.m-seg {
+  --m-seg-h: 32px;
+  --m-seg-track: #10141a;
+  --m-seg-on: #232a35;
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  padding: 0 3px;
+  gap: 2px;
+}
+.m-seg::before {
+  content: "";
+  position: absolute;
+  inset: calc((44px - var(--m-seg-h)) / 2 - 3px) 0;
+  z-index: -1;
+  border-radius: 6px;
+  background: var(--m-seg-track);
+}
+.m-seg.full {
+  display: flex;
+}
+.m-seg button {
+  position: relative;
+  isolation: isolate;
+  flex: 1 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 48px;
+  height: 44px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.m-seg button::before {
+  content: "";
+  position: absolute;
+  inset: calc((44px - var(--m-seg-h)) / 2) 0;
+  z-index: -1;
+  border-radius: 4px;
+}
+.m-seg button:active::before {
+  background: var(--raised);
+}
+.m-seg button[aria-pressed="true"] {
+  color: var(--ink);
+}
+.m-seg button[aria-pressed="true"]::before {
+  background: var(--m-seg-on);
+}
+.m-chip-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+/* a wrapper that only listens (useHold): no box of its own */
+.m-hold {
+  display: contents;
+}
+
+/* a fill's or order's side word, coloured by the parent's up / down */
+.m-side {
+  flex: none;
+  font-weight: 500;
+}
+
+/* ---- sparkline ---- */
+.m-spark-plot {
+  display: flex;
+}
+.m-spark {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+.m-spark-range {
+  flex: none;
+  position: relative;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+}
+.m-spark-range > span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+.m-spark-range > .m-spark-pair {
+  line-height: 14px;
+  text-align: right;
+}
+.m-spark-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---- money ---- */
+/* Hide amounts: "•••" in the figure's own size, muted, so it never reads as a figure or a loader */
+.m-masked {
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: normal;
+}
+/* Hide amounts: a bar whose length (or lone zero tick) would give an amount away keeps its space, unseen */
+.m-veil {
+  visibility: hidden;
+}
+
+/* ---- settings rows (More) ---- */
+.m-set {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px var(--m-pad-r) 6px var(--m-pad-l);
+  font-size: 15px;
+  color: var(--ink);
+  text-align: left;
+}
+.m-set-label {
+  flex: 1;
+  min-width: 0;
+}
+.m-set-label small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+button.m-set:active {
+  background: var(--raised);
+}
+.m-set.danger {
+  color: var(--down);
+}
+.m-version {
+  position: relative;
+  margin-top: 8px;
+  padding-top: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.m-version::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--m-pad-l));
+  right: calc(-1 * var(--m-pad-r));
+  border-top: 1px solid var(--rule);
+}
+
+/* ---- sheet (Mantine Drawer at the bottom) ---- */
+.m-sheet {
+  flex: 0 0 100%;
+  height: auto;
+  max-height: 85svh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-sheet);
+  border-top: 1px solid var(--rule);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.6);
+  color: var(--ink);
+  font-size: var(--m-font);
+}
+.m-sheet-grip {
+  flex: none;
+  touch-action: none;
+  cursor: grab;
+  padding: 8px var(--m-pad-r) 0 var(--m-pad-l);
+}
+.m-sheet-grip::before {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 5px;
+  margin: 0 auto 4px;
+  border-radius: 3px;
+  background: #3a414c;
+}
+.m-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.m-sheet-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+/* a 32 px disc in a 44 px target */
+.m-sheet-close {
+  flex: none;
+  position: relative;
+  isolation: isolate;
+  width: 44px;
+  height: 44px;
+  margin-right: -10px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+}
+.m-sheet-close::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: -1;
+  border-radius: 50%;
+  background: var(--raised);
+}
+.m-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px var(--m-pad-r) calc(20px + var(--safe-b)) var(--m-pad-l);
+}
+.m-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 48px;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+}
+.m-btn.primary {
+  background: rgba(126, 166, 246, 0.16);
+  border-color: rgba(126, 166, 246, 0.5);
+  color: var(--ink);
+}
+.m-btn:active {
+  filter: brightness(1.25);
+}
+.m-status-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 14px;
+}
+.m-status-head .m-led {
+  width: 12px;
+  height: 12px;
+}
+.m-status-word {
+  font-size: 22px;
+  font-weight: 600;
+}
+.m-status-why {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-led.live,
+  .m-led.reconnecting,
+  .m-led.connecting,
+  .m-waiting .m-led {
+    animation: none;
+  }
+  .m-app .m-main * {
+    transition: none;
+  }
+}
+.m-btn:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+
+/* ---- markouts matrix: one look on Instrument, Markouts and the fill sheet (bps · Edge · 1 s … 300 s) ---- */
+.m-mk-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 0 var(--m-pad-r) 4px var(--m-pad-l);
+}
+.m-mk-wrap::-webkit-scrollbar {
+  display: none;
+}
+.m-mk {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+.m-mk th,
+.m-mk td {
+  height: 40px;
+  padding: 0 0 0 4px;
+  text-align: right;
+  white-space: nowrap;
+}
+.m-mk thead th {
+  height: 30px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.m-mk td {
+  font-size: 14px;
+  font-weight: 500;
+  border-top: 1px solid var(--rule);
+}
+.m-mk tbody th {
+  border-top: 1px solid var(--rule);
+}
+.m-mk th:first-child {
+  width: 76px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 0 6px 0 0;
+  text-align: left;
+  background: var(--ground);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+.m-mk thead th:first-child {
+  font-size: 12px;
+  color: var(--muted);
+}
+.m-sheet .m-mk th:first-child,
+.mantine-Drawer-content .m-mk th:first-child {
+  background: var(--m-sheet);
+}
+.m-mk tbody th .m-info {
+  min-height: 40px;
+  margin: 0;
+  padding: 0;
+}
+.m-mk tr.sub td {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}

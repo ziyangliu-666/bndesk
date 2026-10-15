@@ -1,0 +1,308 @@
+/* ---- alerts, alert detail, engine, orders, fills (phone) ---- */
+
+.m-ops-crit {
+  color: var(--crit);
+}
+
+/* alert rows: the text is the title and may take two lines */
+.m-ops-alert .m-row-lead {
+  align-self: flex-start;
+  padding-top: 2px;
+}
+.m-ops-alert .m-row-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.m-ops-age {
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 400;
+}
+.m-ops-clear {
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+}
+.m-ops-fold {
+  font-size: 13px;
+}
+
+/* alert detail head: the full text, then what the rule means */
+.m-ops-alert-text {
+  display: flex;
+  gap: 10px;
+  padding: 12px var(--m-pad-r) 4px var(--m-pad-l);
+}
+.m-ops-alert-text svg {
+  flex: none;
+  margin-top: 2px;
+}
+.m-ops-alert-text p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.m-ops-means {
+  margin: 8px 0 0;
+  padding: 0 var(--m-pad-r) 0 calc(var(--m-pad-l) + 30px);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.m-ops-spark {
+  padding: 4px var(--m-pad-r) 12px var(--m-pad-l);
+}
+.m-ops-kill {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  color: var(--crit);
+  font-weight: 600;
+}
+
+/* engine state word in a section head */
+.m-ops-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.m-ops-state .dot {
+  width: 8px;
+  height: 8px;
+}
+
+/* a small table: name, then right-aligned figures; rows split by inset rules */
+.m-ops-tbl {
+  padding: 0 var(--m-pad-r) 4px var(--m-pad-l);
+}
+.m-ops-tr {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 76px;
+  column-gap: 12px;
+  align-items: center;
+  min-height: 40px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.m-ops-tr.two {
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+.m-ops-tbl.mk .m-ops-tr {
+  grid-template-columns: minmax(0, 1fr) repeat(4, 52px);
+  column-gap: 8px;
+}
+.m-ops-tr > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-ops-tr > :not(:first-child) {
+  text-align: right;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.m-ops-tr.head {
+  min-height: 36px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.m-ops-tr.head > :not(:first-child) {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.m-ops-tr.head > .m-tap {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.m-ops-tr + .m-ops-tr::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--rule);
+}
+.m-ops-tr .up {
+  color: var(--up);
+}
+.m-ops-tr .down {
+  color: var(--down);
+}
+
+/* "N more up": a full-width row that unfolds the rest of a list */
+.m-ops-more {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.m-ops-more:active {
+  background: var(--raised);
+}
+.m-body > * + .m-ops-more::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--m-pad-l);
+  right: var(--m-pad-r);
+  border-top: 1px solid var(--rule);
+}
+
+/* order search: 16 px so iOS does not zoom */
+.m-ops-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 4px 0 4px;
+}
+.m-ops-search input {
+  width: 100%;
+  height: 44px;
+  padding: 0 44px 0 36px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.m-ops-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.m-ops-search input::placeholder {
+  color: var(--muted);
+}
+.m-ops-search input:focus {
+  border-color: #3a4352;
+}
+.m-ops-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.m-ops-search-clear {
+  position: absolute;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.m-ops-filters {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+}
+.m-ops-filters > .m-seg {
+  align-self: flex-start;
+}
+
+/* an account's order rate: its name and bid use, then its two meters under the section's column names */
+.m-ops-dist {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.m-ops-dist .m-unit {
+  margin-left: 2px;
+}
+
+/* definitions printed in a sheet (a sheet can't open the definition sheet) */
+.m-ops-defs {
+  margin: 0;
+  padding: 4px var(--m-pad-r) 12px var(--m-pad-l);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.m-section-title .m-tag {
+  margin-left: 6px;
+}
+.m-row-sec .m-unit {
+  margin-left: 3px;
+  font-size: 11px;
+}
+.m-ops-tr .warn-text {
+  color: var(--warn);
+}
+
+/* header labels that open a definition: the header row is 44 px, the label fills it */
+.m-ops-tr.head:has(> .m-tap),
+.m-ops-tr.head > .m-tap {
+  min-height: 44px;
+}
+
+/* an engine's venue connection: a sub-heading inside the engine's section, never larger than its heading */
+.m-ops-venue .m-row-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.m-ops-venue .m-row-pri {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* alert page: the text's as-of line, and the trends under the live figures */
+.m-ops-asof {
+  margin: 6px 0 0;
+  padding: 0 var(--m-pad-r) 0 calc(var(--m-pad-l) + 30px);
+  font-size: 12px;
+  color: var(--muted);
+}
+.m-ops-trend {
+  padding: 10px var(--m-pad-r) 10px var(--m-pad-l);
+}
+.m-ops-trend + .m-ops-trend {
+  border-top: 1px solid var(--rule);
+}
+.m-ops-trend-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.m-ops-trend-head > span:first-child {
+  color: var(--ink-2);
+}
+.m-ops-trend-wait {
+  padding: 0;
+}
+
+/* Orders with a symbol filter: the rate limits as one line under the orders */
+.m-ops-rateline {
+  font-size: 13px;
+  color: var(--ink-2);
+}

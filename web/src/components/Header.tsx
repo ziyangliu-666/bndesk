@@ -1,9 +1,9 @@
 import { SegmentedControl, UnstyledButton } from "@mantine/core";
-import { useStore, type Page } from "../store";
+import { deskPage, useStore, type DeskPage } from "../store";
 import { useNow } from "../hooks";
 import { countdown, dur, hm, hms } from "../format";
 
-const PAGES: { value: Page; label: string }[] = [
+const PAGES: { value: DeskPage; label: string }[] = [
   { value: "desk", label: "Desk" },
   { value: "history", label: "History" },
   { value: "markouts", label: "Markouts" },
@@ -12,7 +12,7 @@ const PAGES: { value: Page; label: string }[] = [
   { value: "engine", label: "Engine" },
 ];
 
-export const PAGE_KEYS: Record<string, Page> = Object.fromEntries(PAGES.map((p, i) => [String(i + 1), p.value]));
+export const PAGE_KEYS: Record<string, DeskPage> = Object.fromEntries(PAGES.map((p, i) => [String(i + 1), p.value]));
 
 export function Header() {
   const page = useStore((s) => s.page);
@@ -24,8 +24,8 @@ export function Header() {
       <div className="brand">bndesk</div>
       <SegmentedControl
         size="xs"
-        value={page}
-        onChange={(v) => setPage(v as Page)}
+        value={deskPage(page)}
+        onChange={(v) => setPage(v as DeskPage)}
         data={PAGES.map((p, i) => ({
           value: p.value,
           label: (
@@ -67,7 +67,7 @@ function Clock() {
 }
 
 /** "asia closes" after "asia" reads as "closes": the session name is already there. */
-const nextEvent = (ev: string | null, cur: string | null) =>
+export const nextEvent = (ev: string | null, cur: string | null) =>
   !ev ? "the next event" : cur && ev.startsWith(cur + " ") ? ev.slice(cur.length + 1) : ev;
 
 function Session() {

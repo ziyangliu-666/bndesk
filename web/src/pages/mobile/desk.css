@@ -1,0 +1,66 @@
+/* ---- desk, instruments, instrument (phone) ---- */
+
+/* alert strip: the alert's text may take two lines */
+.m-desk-alert .m-row-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+.m-desk-alert .m-row-lead {
+  align-self: flex-start;
+  padding-top: 2px;
+}
+.m-desk-alert .m-desk-more .m-row-title {
+  color: var(--accent);
+}
+
+/* the day chart sits in the padded column under its heading */
+.m-desk-chart {
+  padding: 4px 0 0;
+}
+/* the plot runs to the screen edges, like the rows' rules, rather than sitting as a box in the column */
+.m-desk-chart .lwc-plot {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+}
+
+
+/* instruments: the summary line with the venue filter sticks under the top bar */
+.m-inst-bar {
+  position: sticky;
+  top: calc(var(--m-bar-h) + var(--safe-t));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 4px var(--m-pad-r) 4px var(--m-pad-l);
+  min-height: 52px;
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.m-inst-bar .m-inst-sum {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-inst-bar .m-inst-sum b {
+  font-weight: 500;
+  color: var(--ink);
+}
+.m-inst-chips {
+  padding-top: 4px;
+}
+.m-section.m-inst-list {
+  margin-top: 0;
+}
+.m-section.m-inst-list::before {
+  display: none;
+}
+

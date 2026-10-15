@@ -4,7 +4,7 @@ import type { ColDef, ColGroupDef, GetRowIdParams, GridApi, GridReadyEvent, ICel
 import { SegmentedControl } from "@mantine/core";
 import { onFills, useStore } from "../store";
 import type { Fill } from "../protocol";
-import { gridTheme } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { fBps, fTime, fUsd, tint, DEFAULT_COL } from "../grid";
 import { price, qty } from "../format";
 import { flashOn, flexCols } from "../grid";
@@ -123,6 +123,7 @@ export function FillsTape({ showAccount = true, title = "Fills" }: { showAccount
         defaultColDef={DEFAULT_COL}
         getRowId={rowIdFill}
         onGridReady={onReady}
+        onGridPreDestroyed={() => (api.current = null)}
         asyncTransactionWaitMillis={100}
         suppressCellFocus
         animateRows={false}

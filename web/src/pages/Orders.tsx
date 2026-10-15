@@ -5,7 +5,7 @@ import { SegmentedControl, TextInput } from "@mantine/core";
 import { IconSearch, IconX } from "@tabler/icons-react";
 import { useStore } from "../store";
 import type { Account, OpenOrder } from "../protocol";
-import { gridTheme } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { pct, usd } from "../format";
 import { fAge, fBps, fPrice, fUsd, DEFAULT_COL } from "../grid";
 import { Meter, Panel } from "../components/ui";
@@ -151,6 +151,7 @@ function OrderList({ orders, q, setQ }: { orders: OpenOrder[]; q: string; setQ: 
         defaultColDef={DEFAULT_COL}
         getRowId={rowIdOpenOrder}
         onGridReady={(e) => (api.current = e.api)}
+        onGridPreDestroyed={() => (api.current = null)}
         suppressCellFocus
         animateRows={false}
         tooltipShowDelay={300}

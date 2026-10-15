@@ -25,8 +25,26 @@ export interface TipRow {
   dash?: boolean;
 }
 
+type Read = (u: uPlot, idx: number) => { title: string; rows: TipRow[] } | null;
+
+export interface TipOptions {
+  /** "float" (default): a tip beside the cursor. "strip": one line above the plot (phones: a floating tip covers
+   *  half the chart and the finger the rest), showing the latest point when there is no cursor. */
+  mode?: "float" | "strip";
+  /** Strip mode: the element to write into. Default: the `<UPlot strip>` line above the plot, else a line laid
+   *  over the top of the plot. */
+  strip?: HTMLElement | null;
+  /** Strip mode, what the line shows while no finger (or pointer) reads a point:
+   *  "latest" (default): the latest point, as a readout with its time;
+   *  "key": a key, each series' swatch and name with its latest value, no time (a chart of several lines);
+   *  "none": nothing (the latest values are on the page already). A finger on the plot replaces it with the
+   *  readout at that point, in the same line, so the plot never moves. */
+  rest?: "latest" | "key" | "none";
+}
+
 /** Crosshair tooltip: one readout listing every series at the cursor x. */
-export function tooltipPlugin(read: (u: uPlot, idx: number) => { title: string; rows: TipRow[] } | null): uPlot.Plugin {
+export function tooltipPlugin(read: Read, opts: TipOptions = {}): uPlot.Plugin {
+  if (opts.mode === "strip") return stripPlugin(read, opts.strip ?? null, opts.rest ?? "latest");
   let tip: HTMLDivElement;
   return {
     hooks: {
@@ -84,14 +102,116 @@ export function tooltipPlugin(read: (u: uPlot, idx: number) => { title: string; 
   };
 }
 
+/** The readout as one line: title, then each series' swatch, value and label. */
+function stripPlugin(read: Read, given: HTMLElement | null, rest: "latest" | "key" | "none"): uPlot.Plugin {
+  let el: HTMLElement;
+  let own = false;
+  const fill = (u: uPlot) => {
+    const n = u.data[0]?.length ?? 0;
+    const left = u.cursor.left ?? -1;
+    const reading = u.cursor.idx != null && left >= 0;
+    const idx = reading ? u.cursor.idx! : n - 1;
+    const r = idx >= 0 && (reading || rest !== "none") ? read(u, idx) : null;
+    const key = !reading && rest === "key";
+    el.replaceChildren();
+    el.classList.toggle("u-strip-key", key);
+    if (!r) return;
+    if (!key) {
+      const t = document.createElement("span");
+      t.className = "u-strip-title";
+      t.textContent = r.title;
+      el.appendChild(t);
+    }
+    for (const row of r.rows) {
+      const item = document.createElement("span");
+      item.className = "u-strip-item";
+      if (row.color) {
+        const key = document.createElement("span");
+        key.className = "u-tip-key";
+        key.style.background = row.color;
+        item.append(key);
+      }
+      const l = document.createElement("span");
+      l.className = "u-tip-lab";
+      l.textContent = row.label;
+      // a key names each line in its colour
+      const lc = row.labelColor ?? (key ? row.color : undefined);
+      if (lc) l.style.color = lc;
+      const v = document.createElement("span");
+      // Hide amounts: a masked figure reads muted, like the pages' masked money
+      v.className = row.value.includes("•••") ? "u-strip-val masked" : "u-strip-val";
+      v.textContent = row.value;
+      item.append(l, v);
+      el.appendChild(item);
+    }
+  };
+  return {
+    hooks: {
+      init: (u) => {
+        const sib = u.root.parentElement?.previousElementSibling;
+        if (given) el = given;
+        else if (sib instanceof HTMLElement && sib.classList.contains("u-strip")) el = sib;
+        else {
+          el = document.createElement("div");
+          el.className = "u-strip over";
+          u.over.appendChild(el);
+          own = true;
+        }
+      },
+      ready: (u) => fill(u),
+      setData: (u) => fill(u),
+      setCursor: (u) => fill(u),
+      destroy: () => {
+        if (own) el.remove();
+        else el.replaceChildren();
+      },
+    },
+  };
+}
+
+/** Touch: a finger dragged sideways scrubs the cursor and a vertical swipe scrolls the page; a tap elsewhere
+ *  clears it (touch has no mouseleave). Mouse input is left to uPlot. */
+export function touchCursorPlugin(): uPlot.Plugin {
+  let away: (e: PointerEvent) => void = () => {};
+  let raf = 0;
+  return {
+    hooks: {
+      init: (u) => {
+        const o = u.over;
+        o.style.touchAction = "pan-y";
+        const move = (e: PointerEvent) => {
+          if (e.pointerType === "mouse") return;
+          const r = o.getBoundingClientRect();
+          const left = Math.max(0, Math.min(r.width, e.clientX - r.left));
+          const top = Math.max(0, Math.min(r.height, e.clientY - r.top));
+          cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(() => u.setCursor({ left, top }));
+        };
+        o.addEventListener("pointerdown", move);
+        o.addEventListener("pointermove", move);
+        away = (e) => {
+          if (e.pointerType !== "mouse" && !o.contains(e.target as Node)) u.setCursor({ left: -10, top: -10 });
+        };
+        document.addEventListener("pointerdown", away, { passive: true });
+      },
+      destroy: () => {
+        cancelAnimationFrame(raf);
+        document.removeEventListener("pointerdown", away);
+      },
+    },
+  };
+}
+
 interface Props {
   options: (width: number, height: number) => uPlot.Options;
   data: uPlot.AlignedData;
   className?: string;
+  /** A one-line readout above the plot, for `tooltipPlugin(read, { mode: "strip" })`. */
+  strip?: boolean;
 }
 
 /** uPlot bound to its container size. Options identity rebuilds the chart; data identity calls setData. */
-export function UPlot({ options, data, className }: Props) {
+export function UPlot({ options, data, className, strip }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const dataRef = useRef(data);
@@ -121,7 +241,15 @@ export function UPlot({ options, data, className }: Props) {
     if (u && u.data !== data) u.setData(data, true);
   }, [data]);
 
-  return <div ref={ref} className={"uplot-host " + (className ?? "")} />;
+  const host = <div ref={ref} className={"uplot-host " + (className ?? "")} />;
+  return strip ? (
+    <>
+      <div className="u-strip fig" />
+      {host}
+    </>
+  ) : (
+    host
+  );
 }
 
 /** Bars as two series (gains, losses) so sign is carried by the axis and the color agrees. */

@@ -8,6 +8,8 @@ A high-performance, real-time dashboard for high-frequency market making on Bina
 
 ![Orders](docs/screenshots/orders.gif)
 
+![On a phone](docs/screenshots/phone.webp)
+
 ## Features
 
 - Live P&L, split into market making, inventory, hedge and other
@@ -17,6 +19,7 @@ A high-performance, real-time dashboard for high-frequency market making on Bina
 - Master and sub-accounts in one view
 - History with candles, volume and daily breakdowns
 - Trading engine metrics over Prometheus, and alerts
+- A phone layout of its own: the day, alerts, accounts and history as lists, with links to each screen
 - Read-only by design
 
 ## Built for speed

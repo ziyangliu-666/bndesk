@@ -4,7 +4,8 @@ import type { ColDef, GetRowIdParams, ICellRendererParams } from "ag-grid-commun
 import { IconAlertOctagon } from "@tabler/icons-react";
 import { useStore } from "../store";
 import type { Engine as EngineT, Feed } from "../protocol";
-import { C, gridTheme } from "../theme";
+import { C } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { int, num, pnl, usd } from "../format";
 import { Num, Panel, StateTag } from "../components/ui";
 import { fAge, DEFAULT_COL } from "../grid";

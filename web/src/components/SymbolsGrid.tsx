@@ -6,7 +6,7 @@ import { useElementSize } from "@mantine/hooks";
 import { IconSearch } from "@tabler/icons-react";
 import { useStore } from "../store";
 import type { SymbolRow } from "../protocol";
-import { gridTheme } from "../theme";
+import { gridTheme } from "../gridTheme";
 import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, signCls, tint, DEFAULT_COL } from "../grid";
 import { flashOn, flexCols } from "../grid";
 import { Panel, refLabel } from "./ui";
@@ -290,6 +290,7 @@ export function SymbolsGrid() {
           rowClassRules={DUST_ROW}
           quickFilterText={q}
           onGridReady={(e) => (api.current = e.api)}
+          onGridPreDestroyed={() => (api.current = null)}
           animateRows={false}
           suppressCellFocus
           cellFlashDuration={200}
