@@ -23,4 +23,5 @@ export { StatusFooter } from "./StatusFooter";
 export { useKlines, barStart, aggregate, INTERVAL_MS, type Candle, type KInterval, type KlinesState, type KlineSource } from "./klines";
 export { fillsByBar, fillMarkers, fillsText, fillsShort, type BarFills, type FillLike } from "./fills";
 export { useExPref, useExHidden } from "./prefs";
+export { useTicker24h, useTickers24h, watchTicker24h, tickerKey, type Ticker24h } from "./ticker";
 export { UP, DOWN, rgba, signColor } from "./palette";
