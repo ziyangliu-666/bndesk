@@ -173,3 +173,12 @@
   line-height: 16px;
   color: var(--muted);
 }
+
+/* the hero's figures at the right: a tappable one lines up with the others */
+.h-sum-r button.r-stat-tap {
+  align-items: flex-end;
+  text-align: right;
+}
+.h-sum-r .r-stat-l {
+  align-self: flex-end;
+}

@@ -450,8 +450,16 @@ Pages (keys 1 to 6): Desk (default), History, Markouts, Orders, Accounts, Engine
 Accounts page: the accounts grid, futures positions, exposure, desk equity, inventory, and day PnL by
 account (one line per account, labelled at its end).
 
-Dark slate ground for long sessions; gains teal-green, losses coral, every signed figure carries
-its sign; amber for warnings; one accent for selection.
+Pure-black ground for long sessions; gains teal-green, losses coral, every signed figure carries
+its sign; amber for warnings only; one accent for selection.
+
+Trading PnL is market making + inventory PnL, fees included, never the hedge, on every page and size: a
+spot market has one, a perp (the hedge) has none and shows its hedge leg's P&L under a Hedge figure or
+column. Day PnL = Trading PnL + hedge legs + rebates + other. The split has one palette on every chart and
+size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, Trading ink solid, market
+making blue solid, inventory PnL violet long dashes, hedge teal dashes, rebates light grey spaced dots,
+other grey dots; none of them green, red or amber, each with a stroke of its own so colour is not the only
+cue. Spot inventory takes the inventory hue and futures the hedge hue wherever they are drawn.
 
 Hiding an alert: a warning or info alert can be hidden on this browser (localStorage `desk.hiddenAlerts`),
 never a critical one. The key is the alert's id and `since`, so it stays hidden while its text's figures

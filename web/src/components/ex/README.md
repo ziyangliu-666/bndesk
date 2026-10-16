@@ -31,14 +31,14 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
   markers={fillMarkers(byBar, "k")}
   priceLines={[{ series: "k", key: "avg", price: avgCost, color: C.muted, title: "Avg cost", style: "large" }]}
   legendExtra={[{ key: "fills", label: "Fills", value: (t) => fillsText(byBar.get(t)), box: (t) => fillsShort(byBar.get(t)) }]}
-  chips={[{ key: "fills", label: "Fills", color: UP }, { key: "avg", label: "Avg cost" }, "|", { key: "vol", label: "Vol" }]}
+  chips={[{ key: "fills", label: "Fills", color: UP, ring: true }, { key: "avg", label: "Avg cost", color: C.muted, stroke: "large" }, "|", { key: "vol", label: "Vol" }]}
 />
 ```
 
 - **Series** (`ExSeries`): `kind` is `line | area | baseline | histogram | candles`. Each series also takes
   `label`, `color` (`colors` [up, down] for baseline and candles), `pane`, `format` (used by the axis and
   the legend), `signColor`, `legend` (line number, or `false`), `toggle`, `hiddenByDefault`, `width`,
-  `lineStyle`, `base` (baseline), `lastValue` (the axis tag; the default puts one on the first
+  `lineStyle` (`solid dashed dotted large sparse`, theme.ts `Stroke`; the P&L split's are `PNL_STROKES`), `base` (baseline), `lastValue` (the axis tag; the default puts one on the first
   non-histogram series of each pane), `scale` (an overlay scale id), `margins` and `options` (raw lwc
   options).
 - **Live data**: when you append or replace the last point and keep the earlier points as the same objects,
@@ -64,10 +64,14 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
   pass `boxRows(t)` (for example `Time / Day PnL / MM / Inv / Hedge / Reb`). A horizontal drag pans, a pinch
   zooms, and a vertical swipe scrolls the page.
 - **Chrome**: the right axis only, horizontal grid lines, and a `»` button that brings back the latest bar
-  when the view is panned away. The TradingView logo is off: put `<TvAttribution/>` (already in
+  when the view is panned away (with a page `view`, the page's view once the user has moved it). A tick label
+  a tag would half cover is not drawn (`AxisGuard` in rings.ts tells the build-patched tick loop, vite.config.ts
+  `lwc-axis-tags`, where the tags are). The TradingView logo is off: put `<TvAttribution/>` (already in
   `StatusFooter`) or an About link somewhere on every page.
-- **Markers**: `fillMarkers` gives at most one small circle per bar per side, at our VWAP for that bar, with
-  no text. All markers hide while bars are under 5 px apart. The legend and the box carry the figures
+- **Markers**: `fillMarkers` gives at most one hollow ring per bar per side (`shape: "ring"`, drawn by the
+  `FillRings` primitive in rings.ts: buy a little left of the bar's centre and sell a little right, under a
+  body's width, with a dark halo), at our VWAP for that bar, with no text. Other shapes are lwc's own markers.
+  All markers hide while bars are under 5 px apart. The legend and the box carry the figures
   (`B3 @ 2,480.64 · S1 @ 2,481.55`).
 - **Fullscreen**: with `fullscreen` (true), ⤢ opens `ChartFullscreen` with a copy of the chart. The overlay
   fills the viewport in any orientation and closes with ✕, Back or Escape. On Android it also enters the
@@ -75,9 +79,10 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
   `useLandscapeFullscreen(open, visible)` opens it when the phone turns sideways. Your own open handler must
   call `goFullscreen()` inside the click.
 - **Chips**: `chips` set to `true` gives one chip per toggleable series. You can also pass your own list,
-  with `"|"` for a divider.
-- **Escape hatch**: `chartRef` hands you the `IChartApi`, and `onCrosshair(t)` reports the hovered bar's
-  time.
+  with `"|"` for a divider. A chip is a key (`SeriesKey`: a line sample in the series' `stroke`, a `ring`, a
+  `bar`) and a label, no plate: ink when on, muted with a hollow key when off.
+- **Escape hatch**: `chartRef` hands you the `IChartApi`, `onCrosshair(t)` reports the hovered bar's
+  time and `onBarClick(t)` a clicked one.
 
 Chart heights follow the spec. The phone's inline plot is 260 to 300 px plus about 64 px of volume, the
 instrument plot about 360 + 80 px, and fullscreen takes everything (use `fill` in a flex column).
@@ -102,20 +107,20 @@ Helpers: `barStart(ms, interval)`, `aggregate(bars, interval)` and `INTERVAL_MS`
   and `right` places content at the right end of the row.
 - `TextToggle`: interval and mode toggles. The active one is ink, the rest are muted. `{ value: "|" }` draws
   a divider.
-- `ChipRow`: the flat, segmented chip row under a chart.
+- `ChipRow`: the chip row under a chart (keys and labels, no plates); `SeriesKey` is its key on its own
+  (legends, split lists); `useScrollFade` fades a sideways scroller at the edge it continues past.
 - `TickerStrip`: an optional `lead` slot for the big value, then pairs with a 12 px muted label over a
   12 px value (`size="md"` makes the value 14 px). `"|"` starts a new group, and `title` puts a dotted
   definition on a label.
 - `StatusFooter`: the 28 px desktop footer. It shows `● Live / Stale / Disconnected`, feeds n/n, the session
-  countdown, the clock, a UTC | Local toggle, a marquee of each instrument's trading P&L (`onInstrument` is
+  countdown, the clock, a UTC | Local toggle, a marquee of each instrument's P&L today (spot: Trading PnL; perp: its hedge leg, marked) (`onInstrument` is
   called on click), and "Charts by TradingView".
 - `useExPref(id, name, default, allowed?)` remembers a chart's interval or mode in localStorage.
 
 ## Format
 
 `format.compact(v, d = 2, sign = false)` writes large aggregates with an uppercase suffix: `9.50K`,
-`267.20M`, `1.23B`. Existing callers of `usd` and `usdShort` keep their lowercase `k` and `m` until their
-page is redone.
+`267.20M`, `1.23B`. A column of quantities takes one precision, `qtyDecimals(maxAbs)` with `qtyFixed`.
 
 ## 24h ticker
 

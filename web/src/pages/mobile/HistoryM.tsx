@@ -188,7 +188,7 @@ function DeskHistory() {
     ];
   };
 
-  const label = range === "all" ? "PnL, all days (USDT)" : `PnL, last ${range} days (USDT)`;
+  const label = range === "all" ? "PnL, all days (USDT)" : `PnL, ${range} days (USDT)`;
 
   return (
     <>
@@ -205,7 +205,7 @@ function DeskHistory() {
             {
               label: "Days up",
               info: "Finished days that made money, of the finished days in the range. Today is still moving: it counts in the total, not here, nor as the best or worst day.",
-              value: sum.finished ? `${sum.up} of ${sum.finished} finished` : "--",
+              value: sum.finished ? `${sum.up} of ${sum.finished}` : "--",
             },
             {
               label: "Best day",
@@ -285,15 +285,21 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
           {today && <span className="r-tag">Today</span>}
         </>
       }
-      sub={`${int(d.fills)} fills · Vol ${money(d.volume, "k")}`}
-      value={<Amt v={d.pnl} />}
-      valueSub={
-        d.split
-          ? `Trading ${money(d.pi)} · Hedge ${money(d.hedge)} · Rebates ${money(d.reb)}`
-          : d.pnl != null
-            ? "No split kept"
-            : `Trading ${money(d.pi)} · no Day PnL`
+      // what made the day: Trading and Hedge under the counts, Rebates under the figure (Other is small)
+      sub={
+        d.split ? (
+          <>
+            {int(d.fills)} fills · Vol {money(d.volume, "k")}
+            <br />
+            Trading {money(d.pi)} · Hedge {money(d.hedge)}
+          </>
+        ) : (
+          `${int(d.fills)} fills · Vol ${money(d.volume, "k")}`
+        )
       }
+      sub2={d.split}
+      value={<Amt v={d.pnl} />}
+      valueSub={d.split ? `Rebates ${money(d.reb)}` : d.pnl != null ? "No split kept" : `Trading ${money(d.pi)} · no Day PnL`}
       to={{ page: "history", detail: { kind: "day", date: d.day } }}
     />
   );
