@@ -121,8 +121,11 @@ const pnlOf = (p: ValueGetterParams<Row>) => (p.data ? (p.data._total ? p.data.t
 const hedgeOf = (p: ValueGetterParams<Row>) => p.data?._hedge ?? null;
 const blankTotal = (f: VF): VF => (p) => (p.data?._total ? "" : f(p));
 
-function columns(): ColDef<Row>[] {
-  const n = (c: ColDef<Row>): ColDef<Row> => ({ type: "rightAligned", cellClass: "num", ...c });
+/** The columns; `hide` (Hide amounts): a sort by a masked figure would give the hidden order away, so those
+ *  columns do not sort and the rows go by symbol. */
+function columns(hide: boolean): ColDef<Row>[] {
+  // money and sizes (their cells take the mask's class): no sort while hidden
+  const n = (c: ColDef<Row>): ColDef<Row> => ({ type: "rightAligned", cellClass: "num", ...c, ...(hide && typeof c.cellClass === "function" ? { sortable: false } : null) });
   return [
     {
       field: "symbol",
@@ -131,9 +134,10 @@ function columns(): ColDef<Row>[] {
       pinned: "left",
       width: 128,
       cellRenderer: SymbolCell,
+      sort: hide ? "asc" : null,
     },
     n({ field: "inv_qty", headerName: "Inventory", width: 92, valueFormatter: money(blankTotal(fQtyS as VF)), cellClass: moneyCls, headerTooltip: "Quantity held, free + locked, base-asset units" }),
-    n({ field: "inv_value", headerName: "Value", width: 84, valueFormatter: money(fUsd as VF), cellClass: plainCls, comparator: absDesc, initialSort: "desc", headerTooltip: "Quantity × mid, USDT; sorted by size. The total counts spot only" }),
+    n({ field: "inv_value", headerName: "Value", width: 84, valueFormatter: money(fUsd as VF), cellClass: plainCls, comparator: absDesc, sort: hide ? null : "desc", headerTooltip: "Quantity × mid, USDT; sorted by size. The total counts spot only" }),
     n({ field: "avg_cost", headerName: "Avg cost", width: 82, valueFormatter: fPrice, headerTooltip: "Average cost from today's fills, USDT per unit" }),
     n({ field: "mid", headerName: "Mid", width: 82, valueFormatter: fPrice, headerTooltip: "(best bid + best ask) / 2, USDT" }),
     n({
@@ -198,7 +202,7 @@ export function SymbolsGrid({ selected, hideDust = false }: { selected?: Instrum
   );
   // new column definitions when Hide amounts flips: the cell classes (muted, no sign colour) follow
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cols = useMemo(() => flexCols(columns()), [hide]);
+  const cols = useMemo(() => flexCols(columns(hide)), [hide]);
   const pinned = useMemo(() => (rows.length ? [totals(rows)] : []), [rows]);
   const selKey = selected ? `${selected.venue}:${selected.symbol}` : "";
   const rules = useMemo(

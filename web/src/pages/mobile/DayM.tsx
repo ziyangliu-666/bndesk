@@ -208,7 +208,7 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
     <div className="r-chart">
       <ExChart
         id="m-day"
-        title="Day PnL"
+        title="Day PnL through the day, 5 min"
         toolbarLeft={<span className="a-chart-t">Through the day, 5 min</span>}
         series={series}
         height={240}

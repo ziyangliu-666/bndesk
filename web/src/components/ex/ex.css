@@ -789,3 +789,8 @@
     height: 40px;
   }
 }
+/* a chart's own name in its toolbar: in fullscreen the title row says it already */
+.ex-fs .ops-chart-title,
+.ex-fs .a-chart-t {
+  display: none;
+}

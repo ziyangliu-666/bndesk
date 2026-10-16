@@ -70,7 +70,8 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
     <section className="dk-panel dk-tr">
       <div className="dk-head">
         <span className="dk-title">Fills</span>
-        <span className="dk-head-r muted fig">{fillsDay == null ? "--" : `${int(fillsDay)} today`}</span>
+        {/* the desk's count is the Fills tab's, beside it: the panel says it only for one instrument */}
+        {inst && <span className="dk-head-r muted fig">{fillsDay == null ? "--" : `${int(fillsDay)} today`}</span>}
       </div>
       <div className={"dk-tr-hd" + (inst ? " inst" : "")}>
         {inst ? (

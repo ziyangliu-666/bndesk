@@ -1,7 +1,7 @@
 import { memo, useCallback, type ReactNode } from "react";
 import { useElementSize } from "@mantine/hooks";
 import { useStore } from "../../store";
-import { DASH, int } from "../../format";
+import { DASH, int, num } from "../../format";
 import { MASK, Money as AmountSpan, signTone, useAmount } from "../../mask";
 import { DefinedLabel, InfoLabel, defineProps } from "./Info";
 
@@ -239,8 +239,10 @@ export function LimitBar({
 }) {
   const money_ = useMoney();
   const hide = useStore((s) => s.hideAmounts);
-  // the limit is printed with the value's own formatter: −112.92 / ±210.42
+  // the limit is printed with the value's own formatter (−112.92 / 300.00); a ±band in whole units, as the
+  // desktop's ticker writes it (−112.92 / ±210)
   const fmt = format ?? ((v: number) => (money ? money_(v, centered ? "pnl" : "usd") : int(v)));
+  const fmtLimit = format ?? (centered && money ? (v: number) => (hide ? MASK : num(v, 0)) : fmt);
   const tone = limitTone(value, limit);
   // masked amounts: an empty track, the fill's length would give the amount away
   const r = limit > 0 && !(money && hide) ? Math.min(1, Math.abs(value) / limit) : 0;
@@ -271,7 +273,7 @@ export function LimitBar({
             <span className="m-lim-of">
               {" / "}
               {centered ? "±" : ""}
-              {fmt(Math.abs(limit)).replace(/^\+/, "")}
+              {fmtLimit(Math.abs(limit)).replace(/^\+/, "")}
             </span>
           </>
         )}

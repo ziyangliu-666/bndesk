@@ -97,7 +97,7 @@ export function DeskChart({ what }: { what: "equity" | "exposure" }) {
     <div className="r-chart">
       <ExChart
         id={what === "equity" ? "m-assets-eq" : "m-assets-exp"}
-        title={what === "equity" ? "Equity today" : "Exposure today"}
+        title={what === "equity" ? "Equity today (USDT)" : "Exposure today (USDT)"}
         toolbarLeft={<span className="a-chart-t">{what === "equity" ? "Equity today (USDT)" : "Exposure today (USDT)"}</span>}
         series={series}
         height={220}
@@ -128,7 +128,7 @@ export function AccountsChart({ accounts, only }: { accounts: Account[]; only?: 
     <div className="r-chart">
       <ExChart
         id={only ? "m-account-pnl" : "m-assets-accts"}
-        title={only ? "Day PnL" : "Day PnL by account"}
+        title={only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}
         toolbarLeft={<span className="a-chart-t">{only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}</span>}
         series={series}
         // 204: the chip row clears the bottom bar on the first view of Assets

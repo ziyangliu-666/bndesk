@@ -172,7 +172,7 @@ function AccountChart() {
             key: "equity",
             kind: "area",
             label: "Equity",
-            color: C.accent,
+            color: C.ink2,
             data: pts("desk-eq", desk.t, desk.eq, step),
             format: fmtU,
             toggle: false,
@@ -182,7 +182,7 @@ function AccountChart() {
     <section className="ops-panel ops-chart-panel">
       <ExChart
         id="assets-acc"
-        title={mode === "pnl" ? "Day PnL by account" : "Equity"}
+        title={mode === "pnl" ? "Day PnL by account (USDT)" : "Desk equity (USDT)"}
         series={lines}
         intervals={IVS}
         interval={iv}
@@ -239,7 +239,7 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
     <section className="ops-panel ops-chart-panel">
       <ExChart
         id={id}
-        title={title}
+        title={`${title} (USDT)`}
         series={[{ key: field, kind: field === "inventory" ? "area" : "line", label: title, color, data: pts(field, cols.t, cols.v, STEP[iv] ?? 0), format: fmt, toggle: false }]}
         intervals={IVS}
         interval={iv}
@@ -356,14 +356,15 @@ function Spot() {
   const cols = useMemo<ColDef<SpotRow>[]>(() => {
     const n = (c: ColDef<SpotRow>): ColDef<SpotRow> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
-      { field: "asset", headerName: "Asset", width: 90, cellRenderer: AssetCell, pinned: "left" },
+      // with amounts hidden the rows go by asset (an order by value would give the values away)
+      { field: "asset", headerName: "Asset", width: 90, cellRenderer: AssetCell, pinned: "left", sort: hide ? "asc" : null },
       // sizes and balances are masked too: they give the amount away
       n({ field: "amount", headerName: "Amount", headerTooltip: "Held across the accounts, free + in orders", width: 100, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "locked", headerName: "In orders", headerTooltip: "Held in resting sell orders", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "free", headerName: "Available", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "mid", headerName: "Price", headerTooltip: "Mid, USDT", width: 90, valueFormatter: fPrice }),
       n({ field: "avg", headerName: "Avg cost", headerTooltip: "Average cost of what is held, USDT", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : price(p.value as number)) }),
-      n({ field: "value", headerName: "Value (USDT)", headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), initialSort: "desc" }),
+      n({ field: "value", headerName: "Value (USDT)", headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), sort: hide ? null : "desc", sortable: !hide }),
       n({ field: "upnl", headerName: "uPnL", headerTooltip: "Value − amount × avg cost, USDT", width: 84, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
       n({ field: "today", headerName: "Trading PnL", headerTooltip: "Today, USDT: market making + inventory PnL (realized + float), fees included", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
     ]);

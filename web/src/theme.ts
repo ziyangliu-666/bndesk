@@ -22,11 +22,11 @@ export const S1 = SERIES[0];
 export const S2 = SERIES[1];
 export const S3 = SERIES[2];
 
-// One line per account (at most six), in this order. No green, red or amber (those mean gain, loss and warn), and
-// no blue (the market-making line): mauves, violets, a grey teal. Picked for the widest worst-case separation
-// (OKLab ΔE×100, normal / protanopia / deuteranopia, Machado 2009): 13.4 over the first four, 12.1 over all six.
-// Lines this close carry their name: with three or more the chart labels each line (legend) and they keep it.
-export const ACCOUNT_SERIES = ["#9980ee", "#e9cada", "#7fa3a6", "#846876", "#8654bc", "#c4a9fe"] as const;
+// One line per account (at most six), in this order. No green, red or amber (gain, loss and warn), nothing near
+// the ink of the Desk line drawn with them (worst ΔE 20.6 to it). Picked for the widest separation, OKLab
+// ΔE×100: 17.7 over the first three (normal vision, protanopia and deuteranopia, Machado 2009); 11.2 between
+// any two for normal vision and 7.0 under either simulation over all six, where the legend's names carry it.
+export const ACCOUNT_SERIES = ["#5e7777", "#bbb0f0", "#7777f2", "#148fbe", "#7ba9c1", "#ca83fb"] as const;
 
 export const SANS = `"IBM Plex Sans", system-ui, sans-serif`;
 
