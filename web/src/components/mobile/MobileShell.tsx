@@ -4,7 +4,7 @@ import { IconX } from "@tabler/icons-react";
 import { arrival, back, hashOf, isSub, useStore, type Route } from "../../store";
 import { TEXT_FIELD } from "../../responsive";
 import { DETAILS, PAGES, routePage } from "../../pages/mobile";
-import { useFirstPage } from "../../lazyPage";
+import { preloadIdle, useFirstPage } from "../../lazyPage";
 import { TopBar } from "./TopBar";
 import { MobileNav } from "./MobileNav";
 import { InfoSheet } from "./Info";
@@ -18,6 +18,10 @@ export function MobileShell() {
   // the first page's chunk is there before it renders: it shows complete, never as a fallback
   const firstPage = useFirstPage(routePage(route));
   const ready = useStore((s) => s.snap != null) && firstPage;
+  // the other tabs and pages once the first is drawn: a tap finds its page there
+  useEffect(() => {
+    if (ready) preloadIdle([...Object.values(PAGES).map((p) => p.C), ...Object.values(DETAILS)]);
+  }, [ready]);
   const typing = useTyping();
   const app = useRef<HTMLDivElement>(null);
   useEdgeBack();

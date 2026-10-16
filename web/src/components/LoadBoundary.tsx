@@ -39,8 +39,13 @@ export function reloadNow() {
 }
 
 /** Around a page's Suspense: a page that fails to load or render shows one line with Reload, not a blank. */
-export class LoadBoundary extends Component<{ phone?: boolean; children: ReactNode }, { error: unknown; reloading: boolean }> {
+export class LoadBoundary extends Component<{ phone?: boolean; reset?: unknown; children: ReactNode }, { error: unknown; reloading: boolean }> {
   state = { error: null as unknown, reloading: false };
+
+  /** A new `reset` (the page) clears an error. */
+  componentDidUpdate(prev: { reset?: unknown }) {
+    if (prev.reset !== this.props.reset && this.state.error != null && !this.state.reloading) this.setState({ error: null });
+  }
 
   static getDerivedStateFromError(error: unknown) {
     return { error };

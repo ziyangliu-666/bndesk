@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazyPage } from "../lazyPage";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, GridApi, ICellRendererParams } from "ag-grid-community";
 import { SegmentedControl, TextInput } from "@mantine/core";
@@ -12,7 +13,9 @@ import { Meter, Panel } from "../components/ui";
 import type { MapSort } from "../components/QuoteMap";
 
 // ECharts is only needed here; the chart loads as its own chunk when the page opens
-const QuoteMap = lazy(() => import("../components/QuoteMap").then((m) => ({ default: m.QuoteMap })));
+export const QuoteMap = lazyPage<Parameters<typeof import("../components/QuoteMap").QuoteMap>[0]>(() =>
+  import("../components/QuoteMap").then((m) => ({ default: m.QuoteMap })),
+);
 const short = (s: string) => s.replace(/USDT$/, "");
 
 /** One cell per account: bid and ask notional as bars on a shared scale, then bid use and the

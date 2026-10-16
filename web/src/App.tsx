@@ -7,19 +7,20 @@ import { useIsMobile } from "./hooks";
 import { MobileShell } from "./components/mobile/MobileShell";
 import { LoadBoundary } from "./components/LoadBoundary";
 import { isPhoneLayout, isPhoneNow } from "./responsive";
-import { lazyPage, useFirstPage } from "./lazyPage";
+import { lazyPage, preloadIdle, useFirstPage } from "./lazyPage";
 import { routePage } from "./pages/mobile";
 
 // Every page is its own chunk, so a phone, whose pages are lazy too (pages/mobile), never loads AG Grid. The
-// desktop fetches all of them as soon as it mounts (while the first snapshot is on its way), and a page switch
-// keeps the page shown until the next one is ready, so a slow load never blanks the frame.
+// first page loads with the entry; the others (and the Orders page's quote map) once the first is drawn, so a
+// page switch finds its chunk there and shows at once. A switch to a page still loading keeps the page shown
+// until the next one is ready, so a slow load never blanks the frame.
 const Desk = lazyPage(() => import("./pages/Desk").then((m) => ({ default: m.Desk })));
 const Markouts = lazyPage(() => import("./pages/Markouts").then((m) => ({ default: m.Markouts })));
 const Accounts = lazyPage(() => import("./pages/Accounts").then((m) => ({ default: m.Accounts })));
 const Engine = lazyPage(() => import("./pages/Engine").then((m) => ({ default: m.Engine })));
 const Orders = lazyPage(() => import("./pages/Orders").then((m) => ({ default: m.Orders })));
 const History = lazyPage(() => import("./pages/History").then((m) => ({ default: m.History })));
-const LOAD = [Desk, Markouts, Accounts, Engine, Orders, History];
+const LOAD = [Desk, Markouts, Accounts, Engine, Orders, History, { preload: () => import("./pages/Orders").then((m) => m.QuoteMap.preload()) }];
 const PAGE = { desk: Desk, markouts: Markouts, accounts: Accounts, engine: Engine, orders: Orders, history: History };
 
 /** The layout's Desk, fetched at once (index.html has already asked for its files): it is ready to draw when the
@@ -58,7 +59,9 @@ function DesktopApp() {
   // the first page's chunk is there before it renders: it shows complete, never as a fallback
   const firstPage = useFirstPage(PAGE[page]);
   const ready = useStore((s) => s.snap != null) && firstPage;
-  useEffect(() => LOAD.forEach((p) => void p.preload().catch(() => {})), []);
+  useEffect(() => {
+    if (ready) preloadIdle(LOAD);
+  }, [ready]);
   return (
     <div className="app">
       <Header />
@@ -68,7 +71,9 @@ function DesktopApp() {
         {!ready ? (
           <div className="waiting">Waiting for the first snapshot from the server</div>
         ) : (
-          <LoadBoundary key={page}>
+          // one boundary for every page: a new one per page would show its fallback while a chunk loads, where
+          // this one keeps the page on screen (the deferred page); a page's error clears on the next page
+          <LoadBoundary reset={page}>
             <Suspense fallback={<div className="waiting">Loading the page</div>}>
               {page === "desk" ? (
                 <Desk />
