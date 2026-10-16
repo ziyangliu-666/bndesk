@@ -416,6 +416,7 @@ export function ExChart(p: ExChartProps) {
   const [away, setAway] = useState(false); // panned away from the latest bar
   const [dense, setDense] = useState(false); // bars under 5 px apart: no markers
   const [awaiting, setAwaiting] = useState(false);
+  const [drawn, setDrawn] = useState(0); // bumps once new data is in the chart: the legend reads it then
   // with an id, the fullscreen is a route (#/chart/<id>: Back closes it, a reload keeps it); else local state
   const routed = !!p.id && !p.inFullscreen;
   const [fsLocal, setFsLocal] = useState(false);
@@ -457,6 +458,7 @@ export function ExChart(p: ExChartProps) {
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
     const measure = () => {
+      if (chart.current !== c) return; // a frame queued before the chart was removed
       const top = el.getBoundingClientRect().top;
       setPaneTops(c.panes().map((pn) => (pn.getHTMLElement()?.getBoundingClientRect().top ?? top) - top));
       setAxisW(c.priceScale("right", 0).width() || 64);
@@ -484,7 +486,12 @@ export function ExChart(p: ExChartProps) {
   }, []);
 
   useEffect(() => {
-    chart.current?.applyOptions(chartOptions(touch, tz, step));
+    const c = chart.current;
+    if (!c) return;
+    // only the labels: applying the time scale's spacing options again would undo a fit just made (the bar
+    // spacing goes back to its default and the view scrolls to the end), as on a switch of interval
+    const o = chartOptions(touch, tz, step);
+    c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter }, localization: o.localization });
   }, [tz, step, touch]);
 
   // ---- series: structure, options, data ----
@@ -610,6 +617,7 @@ export function ExChart(p: ExChartProps) {
         fitView();
       }
       hov.set({ v: hov.get().v + 1 });
+      setDrawn((n) => n + 1);
     }
   });
 
@@ -682,14 +690,17 @@ export function ExChart(p: ExChartProps) {
 
   // ---- legend model ----
   const lookup = useCallback((key: string, t: number) => live.current.get(key)?.byTime.get(t), []);
+  // the latest bar the chart holds (not the props' data, which runs one layout pass ahead of it: a legend drawn
+  // from it would look up bars the chart does not have yet and show dashes)
   const latest = useCallback(() => {
     let t = -Infinity;
-    for (const s of p.series) {
-      const d = s.data;
-      if (d.length) t = Math.max(t, d[d.length - 1]!.time);
+    for (const l of live.current.values()) {
+      const d = l.data;
+      if (d?.length) t = Math.max(t, d[d.length - 1]!.time);
     }
     return Number.isFinite(t) ? t : null;
-  }, [p.series]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawn]);
 
   const legend = useMemo(
     () => buildLegend(p.series, p.legendExtra ?? [], lookup, touch, tz, step),
