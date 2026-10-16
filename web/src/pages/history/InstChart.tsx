@@ -1,4 +1,4 @@
-// An instrument's history on ExChart: Binance's klines, our fills on them (one small circle per bar and side
+// An instrument's history on ExChart: Binance's klines, our fills on them (one small hollow ring per bar and side
 // at our VWAP, hidden while the bars are dense; counts and prices in the legend), the market's volume with
 // ours, and what we bought net over the range.
 import { useMemo, useRef, type ReactNode } from "react";
@@ -40,6 +40,7 @@ export function InstChart({
   onInterval,
   view,
   hide,
+  onBarClick,
 }: {
   symbol: string;
   bars: Candle[];
@@ -54,6 +55,8 @@ export function InstChart({
   view: ExView | null;
   /** Hide amounts: our notional and net quantity read •••. */
   hide: boolean;
+  /** A click on a bar. */
+  onBarClick?: (t: number) => void;
 }) {
   const kIv = KI[interval];
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
@@ -104,11 +107,11 @@ export function InstChart({
     [avgCost],
   );
   const chips: (Chip | "|")[] = [
-    { key: "fills", label: "Fills", color: C.up },
-    ...(avgCost ? [{ key: "avg", label: "Avg cost", color: C.muted }] : []),
+    { key: "fills", label: "Fills", color: C.up, ring: true },
+    ...(avgCost ? [{ key: "avg", label: "Avg cost", color: C.muted, stroke: "large" as const }] : []),
     "|",
     { key: "vol", label: "Vol" },
-    { key: "ours", label: "Ours", color: C.ink },
+    { key: "ours", label: "Ours", color: C.ink, bar: true },
     { key: "net", label: "Net qty", color: INV_COLOR },
   ];
 
@@ -134,6 +137,7 @@ export function InstChart({
       resetKey={symbol}
       rightOffset={interval === "1d" || interval === "1w" ? 1 : undefined}
       view={view}
+      onBarClick={onBarClick}
     />
   );
 }

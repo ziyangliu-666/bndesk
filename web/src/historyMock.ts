@@ -394,7 +394,7 @@ export function mockTicker24h(symbol: string, venue: string): { last: number; op
 }
 
 const ACCTS = ["sub-a", "sub-b", "sub-c", "sub-d"];
-function fills(symbol: string, from: number, to: number): HistFill[] {
+function fills(symbol: string, venue: string | undefined, from: number, to: number): HistFill[] {
   if (!tracked(symbol)) return [];
   const p = path(symbol);
   const isPerpHedged = symbol === "BTCUSDT" || symbol === "ETHUSDT";
@@ -406,35 +406,41 @@ function fills(symbol: string, from: number, to: number): HistFill[] {
   const row = snap?.symbols.find((s) => s.symbol === symbol && s.venue === "spot");
   const dayStart = snap?.summary.day_start ?? 0;
   const perMin = row && snap ? row.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.15;
-  // a cluster has about 2.8 fills; activity averages about 1
-  const k = Math.min(0.9, Math.max(0.02, perMin / 2.8));
+  const perp = snap?.symbols.find((s) => s.symbol === symbol && s.venue === "usdm");
+  const perpPerMin = Math.min(1, perp && snap ? perp.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.01);
+  // a cluster has about 2.8 fills; activity averages about 1 (a busy instrument has several clusters a minute)
+  const k = Math.min(12, Math.max(0.02, perMin / 2.8));
   const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN));
   const m1 = Math.min(p.n - 1, Math.floor((Math.min(to, tapeFrom - 1) - ORIGIN) / MIN));
   const out: HistFill[] = [];
   for (let m = m0; m <= m1; m++) {
     const r = hash(m, p.seed + 10);
     const a = activity(m);
-    if (r < k * a) {
+    const lam = k * a;
+    const clusters = Math.floor(lam) + (r < lam - Math.floor(lam) ? 1 : 0);
+    const [, h, l] = minuteBar(p, m, 1);
+    const bias = gauss(Math.floor(m / 30), p.seed + 12); // buying and selling come in runs
+    for (let c = 0; c < clusters; c++) {
+      const mc = m * 16 + c;
       // a cluster: a few fills within seconds, on one side
-      const n = 1 + Math.floor(-Math.log(Math.max(1e-9, hash(m, p.seed + 11))) * 1.8);
-      const [, h, l] = minuteBar(p, m, 1);
-      const bias = gauss(Math.floor(m / 30), p.seed + 12); // buying and selling come in runs
-      const side = hash(m, p.seed + 13) < 0.5 + bias * 0.2 ? "buy" : "sell";
-      const t0 = ORIGIN + m * MIN + Math.floor(hash(m, p.seed + 14) * (MIN - 5000));
+      const n = 1 + Math.floor(-Math.log(Math.max(1e-9, hash(mc, p.seed + 11))) * 1.8);
+      const side = hash(mc, p.seed + 13) < 0.5 + bias * 0.2 ? "buy" : "sell";
+      const t0 = ORIGIN + m * MIN + Math.floor(hash(mc, p.seed + 14) * (MIN - 5000));
       for (let k = 0; k < n; k++) {
         const px = side === "buy" ? l + (h - l) * 0.25 : h - (h - l) * 0.25;
         out.push({
-          t: t0 + Math.floor(k * 400 * (0.5 + hash(m * 8 + k, p.seed + 15))),
+          t: t0 + Math.floor(k * 400 * (0.5 + hash(mc * 8 + k, p.seed + 15))),
           side,
           price: px,
-          qty: Math.min(150, Math.max(4, 11 * Math.exp(0.8 * gauss(m * 8 + k, p.seed + 16)))) / px,
+          qty: Math.min(150, Math.max(4, 11 * Math.exp(0.8 * gauss(mc * 8 + k, p.seed + 16)))) / px,
           account: ACCTS[p.seed % ACCTS.length]!,
           venue: "spot",
-          maker: hash(m * 8 + k, p.seed + 17) < 0.95,
+          maker: hash(mc * 8 + k, p.seed + 17) < 0.95,
         });
       }
     }
-    if (isPerpHedged && r > 1 - 0.01 * a) {
+    // the hedge's perp fills, at the perp row's own pace today
+    if (isPerpHedged && hash(m, p.seed + 20) < perpPerMin * a) {
       const [, h, l] = minuteBar(p, m, 1.0002);
       const side = hash(m, p.seed + 18) < 0.5 ? "buy" : "sell";
       const px = (h + l) / 2;
@@ -445,7 +451,7 @@ function fills(symbol: string, from: number, to: number): HistFill[] {
     if (f.ts >= Math.max(from, tapeFrom) && f.ts < to)
       out.push({ t: f.ts, side: f.side, price: f.price, qty: f.qty, account: f.account, venue: f.venue, maker: f.maker });
   // the server's page: at most 20 000 fills from `from` on (the page asks again after the last one)
-  return out.filter((f) => f.t >= from && f.t < to).sort((x, y) => x.t - y.t).slice(0, 20_000);
+  return out.filter((f) => f.t >= from && f.t < to && (!venue || f.venue === venue)).sort((x, y) => x.t - y.t).slice(0, 20_000);
 }
 
 export function mockApi(path: string, q: Record<string, string | number>): unknown {
@@ -456,7 +462,7 @@ export function mockApi(path: string, q: Record<string, string | number>): unkno
     case "/api/klines":
       return klines(String(q.symbol), String(q.venue), String(q.interval), n("from"), n("to"));
     case "/api/fills":
-      return fills(String(q.symbol), n("from"), n("to"));
+      return fills(String(q.symbol), q.venue == null ? undefined : String(q.venue), n("from"), n("to"));
   }
   throw new Error("404 Not Found");
 }

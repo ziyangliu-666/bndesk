@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { useStore, serverNow } from "../../store";
-import { getJSON, type HistFill } from "../../api";
+import { useStore } from "../../store";
+import { useInstFills } from "../desk/instFills";
 import { compact, int, price } from "../../format";
 import { C } from "../../theme";
 import {
@@ -17,7 +17,6 @@ import {
   type KInterval,
 } from "../../components/ex";
 import type { Venue } from "../../protocol";
-import { useLoad } from "./shared";
 import { Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./history.css";
 
@@ -36,24 +35,18 @@ const MORE = [
 ];
 const ALL = [...IVS, ...MORE].map((i) => i.value);
 const BARS = 1000;
-const NO_FILLS: HistFill[] = [];
 
-/** One instrument's market candles over a longer span, with our fills on them (per bar and side, one circle
+/** One instrument's market candles over a longer span, with our fills on them (per bar and side, one ring
  *  at our VWAP), and what was bought and sold in that span. */
 export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: Venue }) {
   const [iv, setIv] = useExPref<string>("m-hinst", "interval", "1h", ALL);
   const kIv = (iv === "line" ? "15m" : iv) as KInterval;
   const k = useKlines(symbol, venue, kIv, { bars: BARS });
   const money = useAmt();
-  const first = k.bars[0]?.time;
-  const key = first != null ? `${symbol}|${venue}|${kIv}|${Math.floor(first / 3_600_000)}` : null;
-  const load = useLoad<HistFill[]>(
-    key,
-    (signal) =>
-      getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first!, to: serverNow() }, signal).then((xs) => xs.filter((f) => f.venue === venue && f.t >= first!)),
-    60_000,
-  );
-  const fills = load.key === key && load.data ? load.data : NO_FILLS;
+  const first = k.bars[0]?.time ?? null;
+  // our fills on this venue over the loaded bars (desk/instFills.ts, shared with the other instrument charts)
+  const own = useInstFills(symbol, venue, first);
+  const fills = own.fills;
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
   const row = useStore((s) => s.snap?.symbols.find((r) => r.symbol === symbol && r.venue === venue));
 
@@ -82,7 +75,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
     }
     return s;
   }, [fills]);
-  const ready = load.key === key && load.data != null;
+  const ready = !own.loading && first != null;
 
   return (
     <>
@@ -107,7 +100,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
             row?.avg_cost ? [{ series: "k", key: "avg", price: row.avg_cost, color: C.muted, title: "Avg cost", style: "large", labelColor: C.raised, labelTextColor: C.ink }] : undefined
           }
           legendExtra={[{ key: "fills", label: "Fills", value: (t) => fillsText(byBar.get(t)), box: (t) => fillsShort(byBar.get(t)) }]}
-          chips={[{ key: "fills", label: "Fills", color: C.up }, ...(row?.avg_cost ? [{ key: "avg", label: "Avg cost", color: C.muted }] : []), "|", { key: "vol", label: "Vol" }]}
+          chips={[{ key: "fills", label: "Fills", color: C.up, ring: true }, ...(row?.avg_cost ? [{ key: "avg", label: "Avg cost", color: C.muted }] : []), "|", { key: "vol", label: "Vol" }]}
         />
       </div>
 

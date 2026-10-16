@@ -1,10 +1,10 @@
 // The instrument page's chart: Binance's klines for the instrument (5m by default), our fills as one small
-// circle per bar and side at our VWAP, our best bid and ask, the fair and the average cost as price lines, the
+// hollow ring per bar and side at our VWAP, our best bid and ask, the fair and the average cost as price lines, the
 // market's volume in its own pane with ours in the legend. Long-press reads a bar; ⤢ opens #/chart/m-inst.
-import { useEffect, useMemo, useState } from "react";
-import { getJSON, type HistFill } from "../../../api";
+import { useMemo } from "react";
 import { compact, price } from "../../../format";
-import { serverNow, useStore } from "../../../store";
+import { useStore } from "../../../store";
+import { useInstFills } from "../../desk/instFills";
 import {
   ExChart,
   closePoints,
@@ -15,13 +15,14 @@ import {
   useExPref,
   useKlines,
   volumePoints,
+  type ExLegendItem,
   type ExPriceLine,
   type ExSeries,
   type KInterval,
 } from "../../../components/ex";
-import { C, S1, rgba } from "../../../components/ex/palette";
+import { C, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
-import type { Fill, Venue } from "../../../protocol";
+import type { Venue } from "../../../protocol";
 import { maskText } from "../../../mask";
 
 const IVS = [
@@ -38,7 +39,7 @@ const MORE = [
   { value: "1w", label: "1W" },
 ];
 const ALL = [...IVS, ...MORE].map((i) => i.value);
-const FAIR = S1;
+const FAIR = C.accent;
 
 export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   const [iv, setIv] = useExPref<string>("m-inst", "interval", "5m", ALL);
@@ -47,27 +48,12 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   // the store's side of it, four times a second
   const row = useLive((s) => s.snap?.symbols.find((r) => r.symbol === symbol && r.venue === venue), 250, false, symbol + venue);
   const orders = useLive((s) => s.snap?.orders, 250);
-  const liveFills = useLive((s) => s.snap?.fills, 500);
   const hide = useStore((s) => s.hideAmounts);
 
-  // our fills over the loaded bars: /api/fills, then the snapshot's after it
-  const [hist, setHist] = useState<{ k: string; to: number; fills: HistFill[] } | null>(null);
-  const first = kl.bars[0]?.time;
+  // our fills on this venue over the loaded bars (instFills.ts: the history, its tail, the live tape after)
+  const first = kl.bars[0]?.time ?? null;
   const hk = `${venue}:${symbol}`;
-  useEffect(() => {
-    if (first == null) return;
-    const to = serverNow();
-    const ac = new AbortController();
-    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to }, ac.signal)
-      .then((f) => !ac.signal.aborted && setHist({ k: hk, to, fills: f }))
-      .catch(() => {});
-    return () => ac.abort();
-  }, [symbol, venue, first, hk]);
-  const fills = useMemo(() => {
-    const h = hist && hist.k === hk ? hist : null;
-    const extra = (liveFills ?? []).filter((f: Fill) => f.symbol === symbol && f.venue === venue && (!h || f.ts > h.to));
-    return [...(h?.fills ?? []), ...extra];
-  }, [hist, hk, liveFills, symbol, venue]);
+  const fills = useInstFills(symbol, venue, first).fills;
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
   const markers = useMemo(() => fillMarkers(byBar, "k"), [byBar]);
 
@@ -85,25 +71,48 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
       : { key: "k", kind: "candles", label: symbol, data: kl.bars, toggle: false, format: price },
     { key: "vol", kind: "histogram", label: "Vol(USDT)", data: volumePoints(kl.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
   ];
-  const tag = { labelTextColor: C.ground };
-  const lines: ExPriceLine[] = [];
-  // labelled on the axis only: a title inside the plot covers the last candles (the legend names them)
-  if (bid) lines.push({ series: "k", key: "quotes", price: bid.price, color: rgba(C.up, 0.75), labelColor: C.up, ...tag });
-  if (ask) lines.push({ series: "k", key: "quotes", price: ask.price, color: rgba(C.down, 0.75), labelColor: C.down, ...tag });
-  if (fair != null) lines.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.8), style: "dotted", axisLabel: false });
-  if (avg != null) lines.push({ series: "k", key: "avg", price: avg, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink });
+  const bidP = bid?.price;
+  const askP = ask?.price;
+  // labelled on the axis only: a title inside the plot covers the last candles (the legend names them). Ours
+  // have dark tags with coloured text; the one solid tag is the market's last price. Rebuilt only when a price
+  // moves (the page re-renders four times a second)
+  const lines = useMemo<ExPriceLine[]>(() => {
+    const out: ExPriceLine[] = [];
+    if (bidP != null) out.push({ series: "k", key: "quotes", price: bidP, color: rgba(C.up, 0.75), labelColor: C.raised, labelTextColor: C.up });
+    if (askP != null) out.push({ series: "k", key: "quotes", price: askP, color: rgba(C.down, 0.75), labelColor: C.raised, labelTextColor: C.down });
+    if (fair != null) out.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.8), style: "dotted", axisLabel: false });
+    if (avg != null) out.push({ series: "k", key: "avg", price: avg, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink });
+    return out;
+  }, [bidP, askP, fair, avg]);
 
-  // our traded notional in a bar, for the volume pane's legend
-  const oursIn = (t: number) => {
-    const f = byBar.get(t);
-    if (!f) return "0";
-    return maskText(hide, compact((f.buyVwap ?? 0) * f.buyQty + (f.sellVwap ?? 0) * f.sellQty));
-  };
+  // fair, our quotes and the average cost are today's: at the latest bar only (a past bar has none)
+  const lastT = kl.bars[kl.bars.length - 1]?.time;
+  const legend = useMemo<ExLegendItem[]>(() => {
+    const now = (v: number | null | undefined) => (t: number) => (t === lastT && v != null ? price(v) : "--");
+    // our traded notional in a bar, for the volume pane's legend
+    const oursIn = (t: number) => {
+      const f = byBar.get(t);
+      if (!f) return "0";
+      return maskText(hide, compact((f.buyVwap ?? 0) * f.buyQty + (f.sellVwap ?? 0) * f.sellQty));
+    };
+    return [
+      ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: now(fair), line: 2 }] : []),
+      ...(bidP != null || askP != null
+        ? [
+            { key: "quotes", label: "Our bid", color: C.up, value: now(bidP), line: 2 },
+            { key: "quotes", label: "Our ask", color: C.down, value: now(askP), line: 2 },
+          ]
+        : []),
+      ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted, value: now(avg), line: 3 }] : []),
+      { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)), box: (t: number) => fillsShort(byBar.get(t)), line: 3 },
+      { label: "Ours", pane: 1, color: C.ink2, value: oursIn },
+    ];
+  }, [fair, bidP, askP, avg, avgWord, byBar, hide, lastT]);
 
   return (
     <ExChart
       id="m-inst"
-      title={symbol + (venue === "usdm" ? " perp" : "")}
+      title={symbol + (venue === "usdm" ? " Perp" : "")}
       className="in-chart"
       series={series}
       paneStretch={[1, 0.24]}
@@ -121,23 +130,12 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
       touch
       markers={markers}
       priceLines={lines}
-      legendExtra={[
-        ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: () => price(fair), line: 2 }] : []),
-        ...(bid || ask
-          ? [
-              { key: "quotes", label: "Bid", color: C.up, value: () => (bid ? price(bid.price) : "--"), line: 2 },
-              { key: "quotes", label: "Ask", color: C.down, value: () => (ask ? price(ask.price) : "--"), line: 2 },
-            ]
-          : []),
-        ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted, value: () => price(avg), line: 3 }] : []),
-        { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)), box: (t: number) => fillsShort(byBar.get(t)), line: 3 },
-        { label: "Ours", pane: 1, color: C.ink2, value: oursIn },
-      ]}
+      legendExtra={legend}
       chips={[
-        { key: "fills", label: "Fills", color: C.up },
-        { key: "quotes", label: "Quotes", color: C.down },
-        { key: "fair", label: "Fair", color: FAIR },
-        ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted }] : []),
+        { key: "fills", label: "Fills", color: C.up, ring: true, title: "Our fills: one ring per bar and side at our average price" },
+        { key: "quotes", label: "Quotes", color: C.down, title: "Our best bid and ask as lines" },
+        { key: "fair", label: "Fair", color: FAIR, stroke: "dotted" },
+        ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted, stroke: "large" as const }] : []),
         "|",
         { key: "vol", label: "Vol" },
       ]}

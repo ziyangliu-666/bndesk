@@ -1,8 +1,8 @@
 // The latest fills, the market trades' place on an exchange's trade page: price in the side's colour, size,
 // edge, time; new rows flash once. Desk-wide with the symbol, or the picked instrument's.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { getJSON, type HistFill } from "../../api";
-import { selectInstrument, serverNow, useStore, type Instrument } from "../../store";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { selectInstrument, useStore, type Instrument } from "../../store";
+import { useInstFills } from "./instFills";
 import { bps, compact, hms, int, price, qty } from "../../format";
 import type { Fill } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
@@ -18,44 +18,34 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
   const tz = useStore((s) => s.tz);
   const hide = useHide();
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? 0);
+  // today's only (the tape keeps yesterday's last fills over the day roll): the list and the count agree
   const tape = useMemo(() => {
     const all = fills ?? [];
-    if (!inst) return all.slice(0, N);
     const out: Fill[] = [];
     for (const f of all) {
-      if (f.symbol === inst.symbol && f.venue === inst.venue) out.push(f);
+      if (f.ts < dayStart) break; // newest first
+      if (!inst || (f.symbol === inst.symbol && f.venue === inst.venue)) out.push(f);
       if (out.length >= N) break;
     }
     return out;
-  }, [fills, inst]);
+  }, [fills, inst, dayStart]);
 
-  // the live tape holds the desk's newest fills only: a quiet instrument's earlier ones today come from
-  // /api/fills (once per pick; new ones arrive on the tape)
+  // the live tape holds the desk's newest fills only: a quiet instrument's earlier ones today come from the
+  // instrument's fills (instFills.ts: /api/fills from today's start, fetched again, so a failed load retries
+  // and the day roll starts a new day)
   const short = !!inst && fills != null && tape.length < N && (fillsDay ?? 0) > tape.length;
-  const [older, setOlder] = useState<{ key: string; rows: ShownFill[] } | null>(null);
-  const instKey = inst ? inst.venue + ":" + inst.symbol : "";
-  useEffect(() => {
-    if (!short || !inst || !dayStart || older?.key === instKey) return;
-    const ac = new AbortController();
-    const to = tape.length ? tape[tape.length - 1]!.ts : serverNow();
-    getJSON<HistFill[]>("/api/fills", { symbol: inst.symbol, venue: inst.venue, from: dayStart, to }, ac.signal)
-      .then((h) => {
-        if (ac.signal.aborted) return;
-        const rows = h
-          .filter((f) => f.venue === inst.venue && f.t < to)
-          .slice(-N)
-          .reverse()
-          .map((f, i): ShownFill => ({ id: `h${f.t}:${i}`, ts: f.t, account: f.account, symbol: inst.symbol, venue: f.venue, side: f.side, price: f.price, qty: f.qty, notional: f.price * f.qty, maker: f.maker, edge_bps: null }));
-        setOlder({ key: instKey, rows });
-      })
-      .catch(() => {});
-    return () => ac.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [short, instKey, dayStart]);
-  const list: ShownFill[] = useMemo(
-    () => (older && older.key === instKey && tape.length < N ? [...tape, ...older.rows.filter((f) => !tape.length || f.ts < tape[tape.length - 1]!.ts)].slice(0, N) : tape),
-    [older, instKey, tape],
-  );
+  const own = useInstFills(short ? inst!.symbol : null, inst?.venue ?? "spot", short && dayStart ? dayStart : null);
+  const list: ShownFill[] = useMemo(() => {
+    if (!short || !own.fills.length) return tape;
+    const oldest = tape.length ? tape[tape.length - 1]!.ts : Infinity;
+    const rows: ShownFill[] = [];
+    for (let i = own.fills.length - 1; i >= 0 && tape.length + rows.length < N; i--) {
+      const f = own.fills[i]!;
+      if (f.t >= oldest || f.t < dayStart) continue;
+      rows.push({ id: `h${f.t}:${i}`, ts: f.t, account: f.account, symbol: inst!.symbol, venue: f.venue, side: f.side, price: f.price, qty: f.qty, notional: f.price * f.qty, maker: f.maker, edge_bps: null });
+    }
+    return rows.length ? (tape as ShownFill[]).concat(rows) : tape;
+  }, [short, own.fills, tape, dayStart, inst]);
 
   // rows that arrive after the list is first drawn flash once (the class stays a second; the animation runs once)
   const seen = useRef<Set<string> | null>(null);

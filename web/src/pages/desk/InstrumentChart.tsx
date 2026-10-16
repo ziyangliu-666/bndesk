@@ -1,12 +1,12 @@
 // The Desk's centre with an instrument picked: its market candles (Binance klines, live forming bar) with our
 // fills as one circle per bar and side at our VWAP, our open orders, fair and average cost as price lines, a
 // chip row for the overlays, and an Info tab.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getJSON, type HistFill } from "../../api";
-import { serverNow, useStore, type Instrument } from "../../store";
+import { useMemo, useRef, type ReactNode } from "react";
+import { useStore, type Instrument } from "../../store";
+import { useInstFills } from "./instFills";
 import { bps, compact, int, num, pnl, price, qty } from "../../format";
-import type { Fill, OpenOrder } from "../../protocol";
-import { C, FUT_COLOR, PNL_COLORS } from "../../theme";
+import type { OpenOrder } from "../../protocol";
+import { C, INV_COLOR, PNL_COLORS } from "../../theme";
 import { Stable, sameValue } from "./model";
 import {
   ExChart,
@@ -45,11 +45,10 @@ const MORE = [
 ];
 const IV_VALUES = [...IVS, ...MORE].map((i) => i.value);
 const FAIR = C.accent;
-const INV_LINE = C.ink2;
+const INV_LINE = INV_COLOR;
 const POS_PNL = PNL_COLORS.trading;
-const OURS = rgba(FUT_COLOR, 0.75);
-/** /api/fills answers at most this many fills (server history.rs MAX_FILLS): a full page may miss some. */
-const FILLS_PAGE = 20_000;
+// our own notional filled: ink (the market's volume beside it is up / down)
+const OURS = rgba(C.ink, 0.7);
 
 type Tab = "chart" | "info";
 
@@ -83,42 +82,24 @@ function Klines({ inst }: { inst: Instrument }) {
   const k = useKlines(symbol, venue, kIv);
   const row = useStore((s) => s.snap?.symbols.find((r) => r.symbol === symbol && r.venue === venue));
   const orders = useStore((s) => s.snap?.orders);
-  const liveFills = useStore((s) => s.snap?.fills);
   const hide = useHide();
 
-  // fills over the loaded range: /api/fills before the snapshot's, the snapshot's after
-  const [hist, setHist] = useState<{ key: string; to: number; fills: HistFill[] } | null>(null);
-  const first = k.bars[0]?.time;
+  // our fills over the loaded range (instFills.ts: the history, its tail fetched again, the live tape after)
+  const first = k.bars[0]?.time ?? null;
   const key = `${venue}:${symbol}`;
-  useEffect(() => {
-    if (first == null) return;
-    const to = serverNow();
-    const ac = new AbortController();
-    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to }, ac.signal)
-      .then((f) => !ac.signal.aborted && setHist({ key, to, fills: f.filter((x) => x.venue === venue) }))
-      .catch(() => {});
-    return () => ac.abort();
-  }, [key, first, symbol, venue]);
-  const fills = useMemo(() => {
-    const h = hist && hist.key === key ? hist : null;
-    const mine = (liveFills ?? []).filter((f: Fill) => f.symbol === symbol && f.venue === venue);
-    const oldest = mine.length ? mine[mine.length - 1]!.ts : Infinity;
-    // the history up to the snapshot's oldest fill, then the snapshot's (newest first → oldest first)
-    return [...(h?.fills.filter((f) => f.t < oldest) ?? []), ...mine.slice().reverse()];
-  }, [hist, key, liveFills, symbol, venue]);
+  const own = useInstFills(symbol, venue, first);
+  const fills = own.fills;
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
 
-  // Inventory and Position P&L per bar, rebuilt from today's inventory back through our fills: valid from where
-  // the fills are complete (the whole range unless /api/fills hit its page limit; then the live tape's span)
+  // Inventory and Position P&L per bar, rebuilt from today's inventory back through our fills: valid once the
+  // fills cover the whole range
   const invNow = row?.inv_qty ?? null;
-  const histOk = hist && hist.key === key ? hist : null;
-  const tapeFrom = liveFills?.length ? liveFills[liveFills.length - 1]!.ts : Infinity;
-  const cut = histOk && histOk.fills.length < FILLS_PAGE ? (first ?? Infinity) : tapeFrom;
+  const cut = own.complete && first != null ? first : Infinity;
   const position = useMemo(() => {
     const bars = k.bars;
     if (invNow == null || !bars.length || !Number.isFinite(cut)) return null;
     const step = INTERVAL_MS[kIv];
-    const ft = (f: (typeof fills)[number]) => ("t" in f ? f.t : f.ts);
+    const ft = (f: (typeof fills)[number]) => f.t;
     const sq = (f: (typeof fills)[number]) => (f.side === "buy" ? f.qty : -f.qty);
     let j = fills.findIndex((f) => ft(f) >= cut);
     if (j < 0) j = fills.length;
@@ -162,25 +143,25 @@ function Klines({ inst }: { inst: Instrument }) {
   // a key of what the lines show, so they are rebuilt only when a price moves (not on every store update)
   const linesKey = [bids.map((o) => o.price).join(","), asks.map((o) => o.price).join(","), fair, avg].join("|");
   // price lines are labelled on the axis only (a title inside the plot covers the last candles); the legend
-  // names them
+  // names them. Our quotes, fair and average cost have dark tags with coloured text: the one solid tag is the
+  // market's last price (the candle series' own)
   const lines = useMemo<ExPriceLine[]>(() => {
-    const tag = { labelTextColor: C.ground };
     const out: ExPriceLine[] = [];
     bids.forEach((o, i) =>
       out.push(
         i === 0
-          ? { series: "k", key: "quotes", price: o.price, color: rgba(C.up, 0.8), labelColor: C.up, ...tag }
+          ? { series: "k", key: "quotes", price: o.price, color: rgba(C.up, 0.8), labelColor: C.raised, labelTextColor: C.up }
           : { series: "k", key: "quotes", price: o.price, color: rgba(C.up, 0.35), style: "dotted", axisLabel: false },
       ),
     );
     asks.forEach((o, i) =>
       out.push(
         i === 0
-          ? { series: "k", key: "quotes", price: o.price, color: rgba(C.down, 0.8), labelColor: C.down, ...tag }
+          ? { series: "k", key: "quotes", price: o.price, color: rgba(C.down, 0.8), labelColor: C.raised, labelTextColor: C.down }
           : { series: "k", key: "quotes", price: o.price, color: rgba(C.down, 0.35), style: "dotted", axisLabel: false },
       ),
     );
-    if (fair != null) out.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.7), style: "dotted", labelColor: FAIR, ...tag });
+    if (fair != null) out.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.7), style: "dotted", labelColor: C.raised, labelTextColor: FAIR });
     if (avg != null) out.push({ series: "k", key: "avg", price: avg, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,17 +217,22 @@ function Klines({ inst }: { inst: Instrument }) {
   }, [symbol, k.bars, line, oursPts, kIv, position, hide, stable]);
   const bid0 = bids[0]?.price;
   const ask0 = asks[0]?.price;
-  const legend = useMemo<ExLegendItem[]>(() => [
-    ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: () => price(fair) }] : []),
-    ...(bid0 != null || ask0 != null
-      ? [
-          { key: "quotes", label: "Our bid", color: C.up, value: () => price(bid0) },
-          { key: "quotes", label: "Our ask", color: C.down, value: () => price(ask0) },
-        ]
-      : []),
-    ...(avg != null ? [{ key: "avg", label: "Avg cost", color: C.ink2, value: () => price(avg) }] : []),
-    { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)) },
-  ], [fair, bid0, ask0, avg, byBar]);
+  // fair, our quotes and the average cost are today's: shown at the latest bar only (a past bar has none)
+  const lastT = k.bars[k.bars.length - 1]?.time;
+  const legend = useMemo<ExLegendItem[]>(() => {
+    const now = (v: number | null | undefined) => (t: number) => (t === lastT ? price(v) : "--");
+    return [
+      ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: now(fair) }] : []),
+      ...(bid0 != null || ask0 != null
+        ? [
+            { key: "quotes", label: "Our bid", color: C.up, value: now(bid0) },
+            { key: "quotes", label: "Our ask", color: C.down, value: now(ask0) },
+          ]
+        : []),
+      ...(avg != null ? [{ key: "avg", label: "Avg cost", color: C.ink2, value: now(avg) }] : []),
+      { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)) },
+    ];
+  }, [fair, bid0, ask0, avg, byBar, lastT]);
 
   return (
     <div className="dk-chart-col">
@@ -270,13 +256,13 @@ function Klines({ inst }: { inst: Instrument }) {
         priceLines={lines}
         legendExtra={legend}
         chips={[
-          { key: "fills", label: "Fills", color: C.up, title: "Our fills: one circle per bar and side at our average price" },
+          { key: "fills", label: "Fills", color: C.up, ring: true, title: "Our fills: one ring per bar and side at our average price" },
           { key: "quotes", label: "Quotes", color: C.down, title: "Our open orders as lines; the best on each side has its price on the axis" },
-          { key: "fair", label: "Fair", color: FAIR },
-          { key: "avg", label: "Avg cost", color: C.muted },
+          { key: "fair", label: "Fair", color: FAIR, stroke: "dotted" },
+          { key: "avg", label: "Avg cost", color: C.muted, stroke: "large" },
           "|",
           { key: "vol", label: "Vol", title: "The market's volume" },
-          { key: "ours", label: "Ours", color: OURS, title: "Our filled notional per bar, on its own scale" },
+          { key: "ours", label: "Ours", color: OURS, bar: true, title: "Our filled notional per bar, on its own scale" },
           ...(position
             ? [
                 { key: "inv", label: "Inventory", color: INV_LINE, title: "Our inventory at each bar's close, from today's and our fills" },
