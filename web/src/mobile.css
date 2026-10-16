@@ -195,19 +195,13 @@ html.is-phone body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  height: 44px;
   padding: 0 4px 0 8px;
   border-radius: 4px;
   font-size: 13px;
   font-weight: 400;
   color: var(--ink-2);
   white-space: nowrap;
-}
-.m-pill::after {
-  /* a 44 px target around the 28 px pill */
-  content: "";
-  position: absolute;
-  inset: -6px -4px;
 }
 .m-pill:active {
   background: var(--raised);
@@ -272,7 +266,7 @@ html.is-phone body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 calc(var(--m-pad-r) - 8px) 0 var(--m-pad-l);
+  padding: 0 calc(var(--m-pad-r) - 14px) 0 var(--m-pad-l);
   border-bottom: 1px solid var(--rule);
   font-size: 12px;
   color: var(--ink-2);
@@ -287,8 +281,8 @@ html.is-phone body {
 }
 .m-demo button {
   flex: none;
-  width: 40px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   color: var(--muted);
@@ -319,7 +313,7 @@ html.is-phone body {
   justify-content: center;
   gap: 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
@@ -351,7 +345,7 @@ html.is-phone body {
   box-sizing: content-box;
   display: grid;
   place-items: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -417,9 +411,12 @@ html.is-phone body {
   display: inline-flex;
   align-items: center;
   gap: 1px;
+  justify-content: flex-end;
+  /* a thumb's 44 × 44 at least: the target runs on into the page's right padding */
+  min-width: 44px;
   height: 44px;
-  margin: 0 -6px 0 0;
-  padding: 0 2px 0 10px;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 0;
+  padding: 0 var(--m-pad-r) 0 12px;
   font-size: 13px;
   font-weight: 500;
   color: var(--accent);
@@ -969,7 +966,7 @@ a.m-row:active,
 .m-kv-value .m-unit,
 .m-row-pri .m-unit {
   margin-left: 3px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -1071,6 +1068,9 @@ a.m-row:active,
 .m-side {
   flex: none;
   font-weight: 500;
+}
+.m-at {
+  color: var(--muted);
 }
 
 /* ---- sparkline ---- */

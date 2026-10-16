@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../../store";
 import { int } from "../../format";
-import { useHold, useLive } from "../../components/mobile";
+import { Chips, useHold, useLive } from "../../components/mobile";
 import { TextToggle } from "../../components/ex";
 import { FillRow, useFillSheet, type FillFig } from "./shared";
 import { Empty, Sec } from "./rest/ui";
@@ -52,21 +52,24 @@ export function FillsM() {
     <>
       <div className="o-filters">
         {(ids.length > 1 || acct !== "all") && (
-          <div className="o-pills" role="group" aria-label="Account">
-            {[{ id: "all", n: fills.length }, ...ids.map((id) => ({ id, n: counts.get(id) ?? 0 }))].map((o) => (
-              <button key={o.id} type="button" className={"o-pill" + (acct === o.id ? " on" : "")} aria-pressed={acct === o.id} onClick={() => setAcct(o.id)}>
-                {o.id === "all" ? "All" : labelOf(o.id)}
-                <span className="n">{int(o.n)}</span>
-              </button>
-            ))}
-          </div>
+          // a row that runs past the edge fades there (Chips), so a cut name reads as more to scroll to
+          <Chips
+            label="Account"
+            value={acct}
+            onChange={setAcct}
+            data={[{ id: "all", n: fills.length }, ...ids.map((id) => ({ id, n: counts.get(id) ?? 0 }))].map((o) => ({
+              value: o.id,
+              label: o.id === "all" ? "All" : labelOf(o.id),
+              count: o.n,
+            }))}
+          />
         )}
         </div>
       <div className="m-hold" {...hold}>
         <Sec
           title={shown.length < N ? `${int(shown.length)} fills` : `Newest ${N}${acct === "all" && fillsDay != null ? ` of ${int(fillsDay)} today` : ""}`}
           info={`The newest of the desk's recent fills, all accounts or the one chosen above.\n\n${FIG_DEF}`}
-          right={<TextToggle label="Figure" value={fig} onChange={setFig} options={FIGS} />}
+          right={<TextToggle className="o-tt" label="Figure" value={fig} onChange={setFig} options={FIGS} />}
         >
           <div className="m-body">
             {shown.map((f) => (

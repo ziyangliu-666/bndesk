@@ -131,7 +131,8 @@ export function AccountsChart({ accounts, only }: { accounts: Account[]; only?: 
         title={only ? "Day PnL" : "Day PnL by account"}
         toolbarLeft={<span className="a-chart-t">{only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}</span>}
         series={series}
-        height={only ? 200 : 220}
+        // 204: the chip row clears the bottom bar on the first view of Assets
+        height={only ? 200 : 204}
         fullscreen
         chips={!only}
         emptyText="No points yet today"

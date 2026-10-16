@@ -240,17 +240,17 @@ export function Segmented<T extends string>({
       {data.map((o) => (
         <UnstyledButton key={o.value} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
           {o.label}
-          {o.count != null && <span className="m-chip-n">{o.count}</span>}
+          {o.count != null && <span className="m-chip-n">{o.count.toLocaleString("en-US")}</span>}
         </UnstyledButton>
       ))}
     </div>
   );
 }
 
-/** A fill's or order's side as the desktop's tape writes it: "+ buy" in the gain colour, "− sell" in the loss
+/** A fill's or order's side as an exchange writes it: "Buy" in the gain colour, "Sell" in the loss
  *  colour; `words` swaps the words (orders: bid / ask; positions: long / short). */
 export function Side({ side, words }: { side: "buy" | "sell"; words?: [string, string] }) {
   const buy = side === "buy";
-  const text = words ? (buy ? words[0] : words[1]) : buy ? "+ buy" : "− sell";
+  const text = words ? (buy ? words[0] : words[1]) : buy ? "Buy" : "Sell";
   return <span className={"m-side " + (buy ? "up" : "down")}>{text}</span>;
 }

@@ -207,7 +207,7 @@ button.r-row:active {
   padding: 0 4px;
   border-radius: 2px;
   background: var(--raised);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 16px;
   color: var(--ink-2);
