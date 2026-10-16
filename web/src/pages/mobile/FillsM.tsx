@@ -61,13 +61,12 @@ export function FillsM() {
             ))}
           </div>
         )}
-        <TextToggle label="Figure" value={fig} onChange={setFig} options={FIGS} />
-      </div>
+        </div>
       <div className="m-hold" {...hold}>
         <Sec
           title={shown.length < N ? `${int(shown.length)} fills` : `Newest ${N}${acct === "all" && fillsDay != null ? ` of ${int(fillsDay)} today` : ""}`}
           info={`The newest of the desk's recent fills, all accounts or the one chosen above.\n\n${FIG_DEF}`}
-          right="notional · figure"
+          right={<TextToggle label="Figure" value={fig} onChange={setFig} options={FIGS} />}
         >
           <div className="m-body">
             {shown.map((f) => (

@@ -114,7 +114,7 @@ function ToxTable({ tox }: { tox: { horizons_s: number[]; bps: (number | null)[]
                   <InfoLabel label="Against us" info={TOX_DEF} />
                 </th>
                 {tox.bps.map((v, i) => (
-                  <td key={i} className={tone(v, bps(v))}>
+                  <td key={i} className={tone(v == null ? v : -v, bps(v))}>
                     {bps(v)}
                   </td>
                 ))}

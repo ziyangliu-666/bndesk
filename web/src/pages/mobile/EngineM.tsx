@@ -138,7 +138,7 @@ export function EngineM() {
             label: <span className={engines && running < engines.length ? "warn-text" : ""}>Engines</span>,
             count: engines ? `${running}/${engines.length}` : null,
           },
-          { value: "feeds", label: <span className={tone(sum.worst)}>Feeds</span>, count: bad.length ? `${bad.length} off` : `${feeds.length}` },
+          { value: "feeds", label: <span className={tone(sum.worst)}>Feeds</span>, count: bad.length ? `${bad.length} to check` : `${feeds.length}` },
         ]}
         value={tab}
         onChange={setTab}

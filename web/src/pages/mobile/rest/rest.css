@@ -382,6 +382,24 @@ button.r-stat-l::after {
 .r-chart .ex-chart {
   background: var(--ground);
 }
+.r-chart .ex-chart.touch .ex-chip {
+  height: 36px;
+}
+/* the chip row runs past the edge: it fades there, so the chips out of view read as more to scroll to */
+.r-chart .ex-chips {
+  padding-right: 24px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* a toggle in a section head (Both Buy Sell, Edge 10 s 60 s) */
+.r-head-r .ex-tt {
+  margin-right: -8px;
+}
+.r-head-r .ex-tt button {
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 13px;
+}
 
 /* ---- a use against its limit ---- */
 .r-meter {

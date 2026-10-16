@@ -64,7 +64,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
   const money = useAmt();
   const qOf = useQty();
   const from = useStore((s) => s.route);
-  const [acct, setAcct] = useState("all");
+  const [acct, setAcct] = useState(() => (from.account && all.some((a) => a.id === from.account) ? from.account : "all"));
   const [side, setSide] = useState<SideF>("all");
   const [q, setQ] = useState(() => (from.symbol ? `${from.symbol} ${from.venue === "usdm" ? "perp" : "spot"}` : ""));
   const [open, setOpen] = useState<OpenOrder | null>(null);
@@ -116,22 +116,26 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
             </button>
           ))}
         </div>
-        <TextToggle
-          label="Side"
-          value={side}
-          onChange={setSide}
-          options={[
-            { value: "all", label: "Both" },
-            { value: "buy", label: "Buy" },
-            { value: "sell", label: "Sell" },
-          ]}
-        />
-      </div>
+        </div>
       <div className="m-hold" {...hold}>
         <Sec
           title={`${int(rows.length)} orders`}
           info="Resting orders, newest first. At the right: the limit price, and its distance from fair in bps (positive is passive; negative is through fair, amber) with the notional, USDT."
-          right={through > 0 ? <span className="warn-text">{int(through)} through fair</span> : "price · from fair"}
+          right={
+            <>
+              {through > 0 && <span className="warn-text">{int(through)} through</span>}
+              <TextToggle
+                label="Side"
+                value={side}
+                onChange={setSide}
+                options={[
+                  { value: "all", label: "Both" },
+                  { value: "buy", label: "Buy" },
+                  { value: "sell", label: "Sell" },
+                ]}
+              />
+            </>
+          }
         >
           {rows.slice(0, MAX_ROWS).map((o) => (
             <OrderRow key={o.id} o={o} label={labelOf(o.account)} ago={o.since != null ? span(now - o.since) : "--"} notional={money(o.notional, "k")} onOpen={setOpen} />

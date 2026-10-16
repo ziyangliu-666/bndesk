@@ -99,16 +99,20 @@ function DeskHistory() {
     let fills = 0;
     let best: DayPnl | null = null;
     let worst: DayPnl | null = null;
+    let done = 0;
     for (const d of days) {
       const v = dayPnl(d);
       tot += v;
-      if (v > 0) up++;
       fills += d.fills;
+      // today is not finished: it counts in the total, not among the days up, the best or the worst
+      if (d.day === todayKey) continue;
+      done++;
+      if (v > 0) up++;
       if (!best || v > dayPnl(best)) best = d;
       if (!worst || v < dayPnl(worst)) worst = d;
     }
-    return { tot, up, fills, best, worst };
-  }, [days]);
+    return { tot, up, done, fills, best, worst };
+  }, [days, todayKey]);
 
   const chart = useMemo(() => {
     const cum = view === "cum";
@@ -231,7 +235,8 @@ function DeskHistory() {
           items={[
             {
               label: "Days up",
-              value: days.length ? `${sum.up} / ${days.length}` : "--",
+              info: "Finished days that made money, of the finished days in the range. Today is still moving: it counts in the total, not here, nor as the best or worst day.",
+              value: sum.done ? `${sum.up} / ${sum.done}` : "--",
             },
             {
               label: "Best day",
@@ -253,6 +258,7 @@ function DeskHistory() {
           series={series}
           height={280}
           resetKey={range + view}
+          rightOffset={0.6}
           fullscreen
           intervals={RANGES}
           interval={range}
@@ -288,7 +294,7 @@ function DeskHistory() {
 
       <Sec
         title="By day"
-        right={tradingOnly ? `${tradingOnly} days Trading PnL only` : "USDT"}
+        right={tradingOnly ? `${tradingOnly} older days: Trading PnL only` : "USDT"}
       >
         {days
           .slice()

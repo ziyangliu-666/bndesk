@@ -50,7 +50,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
   const load = useLoad<HistFill[]>(
     key,
     (signal) =>
-      getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first!, to: serverNow() }, signal).then((xs) => xs.filter((f) => f.venue === venue)),
+      getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first!, to: serverNow() }, signal).then((xs) => xs.filter((f) => f.venue === venue && f.t >= first!)),
     60_000,
   );
   const fills = load.key === key && load.data ? load.data : NO_FILLS;

@@ -256,8 +256,9 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
             },
             { label: "Hedge", info: "Futures notional of the hedge symbols, USDT.", value: <Amt v={x.hedge_notional} plain /> },
             { label: "Spot value", value: money(x.spot_value, "full") },
-            { label: "Futures", value: <Amt v={x.futures_notional} plain /> },
-            { label: "Spot × beta", info: "The spot inventory's value with each market weighted by its beta to the hedge instrument. USDT.", value: money(x.beta_value, "full") },
+            ...(Math.abs(x.futures_notional - x.hedge_notional) > 0.005
+              ? [{ label: "All futures", info: "Futures net notional of every symbol, hedge or not, USDT.", value: <Amt v={x.futures_notional} plain /> }]
+              : []),
           ]}
         />
       </Sec>
@@ -269,8 +270,8 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
           <Stats
             cols={4}
             items={[
-              { label: "Inventory", value: <Amt v={inv} /> },
-              { label: "Hedge", value: <Amt v={hd.hedge_pnl} /> },
+              { label: "Inventory PnL", value: <Amt v={inv} /> },
+              { label: "Hedge PnL", value: <Amt v={hd.hedge_pnl} /> },
               { label: "Net", value: <Amt v={inv + (hd.hedge_pnl ?? 0)} /> },
               { label: "Offset", value: offset != null ? pct(offset, 0) : "--" },
             ]}
