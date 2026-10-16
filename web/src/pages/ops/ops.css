@@ -357,12 +357,8 @@
   grid-template-columns: minmax(0, 1fr) minmax(400px, 0.62fr);
 }
 .ops-fut {
-  grid-template-columns: minmax(400px, 0.62fr) minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: stretch;
-}
-.ops-fut > .ops-pos {
-  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .ops-side {
   display: grid;
@@ -503,4 +499,64 @@
 }
 .ops-funding {
   margin-top: 12px;
+}
+
+/* narrow or short windows: the page scrolls (styles.css), so the regions that fill a box get a height */
+@media (max-width: 61.99em), (max-width: 74.99em) and (max-height: 56.24em) {
+  .ops-orders {
+    grid-template-rows: auto 640px;
+  }
+  .ops-limits {
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)) !important;
+    gap: 0;
+    background: var(--panel);
+  }
+  .ops-limit {
+    box-shadow: inset -1px -1px 0 var(--rule);
+  }
+  .ops-assets {
+    grid-template-rows: auto auto auto;
+  }
+  .ops-tab-body {
+    min-height: 640px;
+  }
+  .ops-system {
+    grid-template-rows: auto minmax(560px, auto);
+  }
+}
+/* under 1400 px the map's legend and controls take two lines */
+@media (max-width: 87.49em) {
+  .ops-orders {
+    grid-template-columns: minmax(0, 1fr) 500px;
+  }
+  .ops-qmap-legend {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    padding-block: 6px;
+  }
+}
+/* narrow: one column */
+@media (max-width: 61.99em) {
+  .ops-orders {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 640px 520px;
+  }
+  .ops-limits {
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)) !important;
+  }
+  .ops-spot,
+  .ops-exp {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-rows: minmax(320px, auto);
+  }
+  .ops-hero {
+    flex-wrap: wrap;
+    gap: 16px 32px;
+  }
+  .ops-engine-tables {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
 }

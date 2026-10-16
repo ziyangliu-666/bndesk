@@ -16,7 +16,7 @@ import { HedgeBridge } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
 import { ExChart, Tabs, useExPref, type ExSeries } from "../components/ex";
 import { Money, hideNow, masked, money, useHide, useMoney } from "./ops/money";
-import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
+import { IVS, IV_KEYS, STEP, useBucketed, useRefit } from "./ops/series";
 import "./ops/ops.css";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
@@ -114,6 +114,7 @@ function AccountChart() {
   const [iv, setIv] = useExPref("assets-acc", "interval", "1m", IV_KEYS);
   const [mode, setMode] = useExPref("assets-acc", "mode", "pnl", ["pnl", "equity"]);
   const pts = useBucketed();
+  const refit = useRefit(iv, mode);
   const step = STEP[iv] ?? 0;
   const desk = useMemo(() => {
     const s = series ?? [];
@@ -183,6 +184,7 @@ function AccountChart() {
       <ExChart
         key={hide ? "masked" : "shown"}
         id="assets-acc"
+        chartRef={refit}
         title={mode === "pnl" ? "Day PnL by account" : "Equity"}
         series={lines}
         intervals={IVS}
@@ -211,9 +213,10 @@ function AccountChart() {
 
 function Overview() {
   const wide = useMediaQuery("(min-width: 1700px)") ?? true;
+  const scrolls = useMediaQuery("(max-width: 1399px)") ?? false; // the grid scrolls sideways: room for its bar
   const n = useStore((st) => st.snap?.accounts.length ?? 0);
   // grid header + rows (gridTheme: 26 + 24 a row), so the grid needs no inner scroll
-  const h = 27 + 24 * Math.max(1, n) + 2;
+  const h = 27 + 24 * Math.max(1, n) + 2 + (scrolls ? 14 : 0);
   return (
     <div className="ops-tab-body ops-ov">
       <section className="ops-panel" style={{ height: h }}>
@@ -230,6 +233,7 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
   const hide = useHide();
   const [iv, setIv] = useExPref(id, "interval", "1m", IV_KEYS);
   const pts = useBucketed();
+  const refit = useRefit(iv);
   const cols = useMemo(() => {
     const s = series ?? [];
     return { t: s.map((p) => p.t), v: s.map((p) => p[field]) };
@@ -240,6 +244,7 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
       <ExChart
         key={hide ? "masked" : "shown"}
         id={id}
+        chartRef={refit}
         title={title}
         series={[{ key: field, kind: field === "inventory" ? "area" : "line", label: title, color, data: pts(field, cols.t, cols.v, STEP[iv] ?? 0), format: fmt, toggle: false }]}
         intervals={IVS}
@@ -739,6 +744,7 @@ function ExposureChart() {
   const hide = useHide();
   const [iv, setIv] = useExPref("assets-exp", "interval", "1m", IV_KEYS);
   const pts = useBucketed();
+  const refit = useRefit(iv);
   const step = STEP[iv] ?? 0;
   const cols = useMemo(() => {
     const s = series ?? [];
@@ -755,6 +761,7 @@ function ExposureChart() {
       <ExChart
         key={hide ? "masked" : "shown"}
         id="assets-exp"
+        chartRef={refit}
         title="Exposure"
         series={lines}
         intervals={IVS}
