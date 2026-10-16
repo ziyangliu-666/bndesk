@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
-import { useInstPnl } from "../../selectors";
-import type { Venue } from "../../protocol";
+import { useHedgePnl } from "../../selectors";
+import type { SymbolRow, Venue } from "../../protocol";
 
 export function InstrumentPicker({
   value,
@@ -18,16 +18,17 @@ export function InstrumentPicker({
 }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const hide = useHide();
-  const pnlOf = useInstPnl();
+  const hedgeOf = useHedgePnl();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useMemo(() => {
-    const rows = (symbols ?? []).slice().sort((a, b) => b.volume_day - a.volume_day || a.symbol.localeCompare(b.symbol));
+    // by today's volume; by name while amounts are hidden (the order would give the volumes away)
+    const rows = (symbols ?? []).slice().sort((a, b) => (hide ? 0 : b.volume_day - a.volume_day) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue));
     const f = q.trim().toUpperCase();
     return f ? rows.filter((r) => r.symbol.includes(f)) : rows;
-  }, [symbols, q]);
+  }, [symbols, q, hide]);
   const [hi, setHi] = useState(0);
 
   useEffect(() => {
@@ -110,7 +111,7 @@ export function InstrumentPicker({
                   {r.symbol}
                   {r.venue === "usdm" && <span className="hx-perp">Perp</span>}
                 </span>
-                <span className={"fig " + (hide ? "" : pnlOf(r) > 0.005 ? "up" : pnlOf(r) < -0.005 ? "down" : "")}>{maskNode(hide, pnl(pnlOf(r)))}</span>
+                <PnlCell r={r} hedge={hedgeOf(r)} hide={hide} />
               </button>
             ))}
             {!list.length && <div className="hx-pick-none">No instrument matches</div>}
@@ -118,5 +119,17 @@ export function InstrumentPicker({
         </div>
       )}
     </div>
+  );
+}
+
+/** A spot market's Trading PnL, or a perp's hedge leg (marked so). */
+function PnlCell({ r, hedge, hide }: { r: SymbolRow; hedge: number | null; hide: boolean }) {
+  const perp = r.venue === "usdm";
+  const v = perp ? hedge : r.trading_pnl;
+  return (
+    <span className={"fig " + (hide || v == null ? "" : v > 0.005 ? "up" : v < -0.005 ? "down" : "")}>
+      {perp && <span className="dk-mk-k">hedge </span>}
+      {maskNode(hide, pnl(v))}
+    </span>
   );
 }

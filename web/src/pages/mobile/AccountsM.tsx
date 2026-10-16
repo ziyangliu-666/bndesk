@@ -133,7 +133,7 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
           ]}
         />
       </Sec>
-      <Sec title="Holdings" right="value · today">
+      <Sec title="Holdings" right="value · Trading PnL">
         {held.map((r) => {
           const base = r.symbol.replace(/USDT$/, "");
           return (
@@ -181,7 +181,7 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
           ]}
         />
       </Sec>
-      <Sec title="Positions" info={`uPnL: ${TIP.upnl}\n\nToday: ${TIP.today}`} right="uPnL · today">
+      <Sec title="Positions" info={`uPnL: ${TIP.upnl}\n\nToday: ${TIP.today}`} right="uPnL · hedge today">
         {pos.map(({ p, a }) => (
           <PositionRow key={a.id + p.symbol} p={p} account={a.label} />
         ))}

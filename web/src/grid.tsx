@@ -5,7 +5,7 @@ import {
   type CellClassParams,
   type ValueFormatterParams,
 } from "ag-grid-community";
-import { DASH, age, bps, hms, int, pnl, price, qty, usd, signClass } from "./format";
+import { DASH, age, bps, compact, hms, int, pnl, price, qty, usd, signClass } from "./format";
 import { useStore } from "./store";
 import { hideNow, maskText } from "./mask";
 
@@ -20,6 +20,8 @@ type VF = (p: ValueFormatterParams) => string;
 const v = (p: ValueFormatterParams) => p.value as number | null | undefined;
 
 export const fUsd: VF = (p) => usd(v(p));
+/** Volumes: K / M with 2 decimals at every size from a thousand (one look down a column, as the ticker's). */
+export const fVol: VF = (p) => compact(v(p));
 export const fPnl: VF = (p) => pnl(v(p));
 export const fBps: VF = (p) => bps(v(p));
 export const fBpsU: VF = (p) => bps(v(p), false);

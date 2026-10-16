@@ -705,3 +705,7 @@
 .dk-bottom-body .ag-header-cell-resize::after {
   opacity: 0;
 }
+/* a perp's figure in the Trading PnL column is its hedge leg: said in a muted word */
+.dk-mk-k {
+  color: var(--muted);
+}

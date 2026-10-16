@@ -1,15 +1,16 @@
 // The ticker's name slot as a picker (`Desk ▾`, `ETHUSDT ▾`), as on an exchange's trade page: a searchable list
-// of the desk and its instruments, the biggest inventory first, each with its Trading PnL.
+// of the desk and its instruments, the biggest inventory first (by name while amounts are hidden), each with its
+// Trading PnL (a perp: its hedge leg, marked so).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
-import { useInstPnl } from "../../selectors";
+import { useHedgePnl } from "../../selectors";
 
 export function NamePicker({ sel, children }: { sel: Instrument | null; children: ReactNode }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const hide = useHide();
-  const pnlOf = useInstPnl();
+  const hedgeOf = useHedgePnl();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hi, setHi] = useState(0);
@@ -19,9 +20,12 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
   // the desk first (index 0, only without a search), then the instruments
   const list = useMemo(() => {
     const f = q.trim().toUpperCase();
-    const rows = (symbols ?? []).filter((r) => !f || r.symbol.includes(f)).sort((a, b) => Math.abs(b.inv_value) - Math.abs(a.inv_value) || a.symbol.localeCompare(b.symbol));
+    const rows = (symbols ?? [])
+      .filter((r) => !f || r.symbol.includes(f))
+      .sort((a, b) => (hide ? 0 : Math.abs(b.inv_value) - Math.abs(a.inv_value)) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue));
     return [...(f ? [] : [null]), ...rows];
-  }, [symbols, q]);
+  }, [symbols, q, hide]);
+  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (r.venue === "spot" ? r.trading_pnl : 0), 0), [symbols]);
 
   useEffect(() => {
     if (!open) return;
@@ -76,7 +80,8 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
           <div className="dk-pick-list" role="listbox">
             {list.map((r, i) => {
               const on = r ? sel?.symbol === r.symbol && sel.venue === r.venue : !sel;
-              const tp = r ? pnlOf(r) : null;
+              const perp = r?.venue === "usdm";
+              const tp = r ? (perp ? hedgeOf(r) : r.trading_pnl) : deskTp;
               return (
                 <button
                   type="button"
@@ -91,11 +96,10 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
                     {r ? r.symbol : "Desk"}
                     {r?.venue === "usdm" && <span className="dk-tag">Perp</span>}
                   </span>
-                  {tp == null ? (
-                    <span className="muted">All instruments</span>
-                  ) : (
-                    <span className={"fig " + (hide ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>{maskNode(hide, pnl(tp))}</span>
-                  )}
+                  <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
+                    {perp && <span className="dk-mk-k">hedge </span>}
+                    {maskNode(hide, pnl(tp))}
+                  </span>
                 </button>
               );
             })}

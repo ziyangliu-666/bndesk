@@ -6,7 +6,7 @@ import { int, price } from "../../format";
 import { Money, Segmented, tone, useHold, useLive, useMoney } from "../../components/mobile";
 import { Tabs, useTicker24h, useTickers24h, tickerKey, type Ticker24h } from "../../components/ex";
 import type { SymbolRow, Venue } from "../../protocol";
-import { instPnl, legPnl } from "../../selectors";
+import { hedgePnl, legPnl, tradingPnl } from "../../selectors";
 import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
@@ -57,10 +57,10 @@ function MarketList() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
-  // each instrument's Trading PnL as every page has it (a perp's is its hedge leg's today)
-  const pnlOf = useMemo(() => {
+  // a spot market's Trading PnL; a perp is the hedge: its leg's P&L today, shown as such (and sorted after)
+  const hedgeOf = useMemo(() => {
     const leg = legPnl(legs);
-    return (r: SymbolRow) => instPnl(r, leg);
+    return (r: SymbolRow) => hedgePnl(r, leg);
   }, [legs]);
   // with Hide amounts on, a list ordered by a hidden figure would give its ranking away: by name instead
   const hide = useHide();
@@ -89,7 +89,7 @@ function MarketList() {
         case "chg":
           return tick.get(tickerKey(r.symbol, r.venue))?.changePct ?? null;
         case "pnl":
-          return pnlOf(r);
+          return tradingPnl(r);
         case "inv":
           return Math.abs(r.inv_value);
       }
@@ -103,7 +103,7 @@ function MarketList() {
       return dir * (x - (y as number));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown, eff.key, eff.desc, tick, pnlOf]);
+  }, [shown, eff.key, eff.desc, tick]);
 
   // each header cell steps through its figures: Name / Fills, Mid / 24h (both ways), Day PnL (both ways) / Inv
   const tapLeft = () => setSort(sort.key === "fills" ? { key: "name", desc: false } : { key: "fills", desc: true });
@@ -170,7 +170,7 @@ function MarketList() {
       <div className="mk-list">
       <div className="m-hold" {...hold}>
         {list.map((r) => (
-          <MarketRow key={r.venue + r.symbol} r={r} pnl={pnlOf(r)} />
+          <MarketRow key={r.venue + r.symbol} r={r} hedge={hedgeOf(r)} />
         ))}
         {list.length === 0 && (
           <div className="m-empty">{needle ? `No instrument matches “${q.trim()}”.` : "No instruments here."}</div>
@@ -182,12 +182,14 @@ function MarketList() {
 }
 
 /** One instrument, 56 px: name and venue · mid and its 24 h change · day PnL and the inventory. */
-const MarketRow = memo(function MarketRow({ r, pnl }: { r: SymbolRow; pnl: number }) {
+const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: number | null }) {
   const money = useMoney();
+  const hide = useHide();
   const t: Ticker24h | null = useTicker24h(r.symbol, r.venue);
   const perp = r.venue === "usdm";
   const chg = t?.changePct ?? null;
-  const inv = Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short");
+  // with amounts hidden every row reads the same ("flat" would tell which are held)
+  const inv = !hide && Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short") + (hide ? "" : " USDT");
   return (
     <UnstyledButton className="mk-row" onClick={() => selectInstrument({ symbol: r.symbol, venue: r.venue })}>
       <span className="mk-c-l">
@@ -205,7 +207,8 @@ const MarketRow = memo(function MarketRow({ r, pnl }: { r: SymbolRow; pnl: numbe
       </span>
       <span className="mk-c-r">
         <span className="mk-pnl">
-          <Money v={pnl} />
+          {perp && <span className="mk-k">hedge </span>}
+          <Money v={perp ? hedge : r.trading_pnl} />
         </span>
         <span className="mk-sub m-fig">{inv}</span>
       </span>

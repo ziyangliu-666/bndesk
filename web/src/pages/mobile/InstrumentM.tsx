@@ -1,5 +1,6 @@
 import { useMemo, useRef, type ReactNode } from "react";
-import { serverNow, useStore } from "../../store";
+import { UnstyledButton } from "@mantine/core";
+import { navigate, serverNow, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { bps, compact, hm, int, price } from "../../format";
 import { refLabel } from "../../components/ui";
@@ -8,7 +9,7 @@ import { Tabs, useExPref, useTicker24h, type Ticker24h } from "../../components/
 import { QuoteRows, type QRow } from "../../components/quotes";
 import type { Fill, OpenOrder, SymbolRow, Venue } from "../../protocol";
 import { FillRow, MkTable, useAccountLabel, useFillSheet, useQty } from "./shared";
-import { instPnl } from "../../selectors";
+import { useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
@@ -130,23 +131,24 @@ function OurStats({ r }: { r: SymbolRow }) {
   const q = useQty();
   const leg = useStore((s) => s.snap?.exposure.hedge_day?.legs.find((l) => l.symbol === r.symbol));
   const funding = useStore((s) => s.snap?.exposure.funding.find((f) => f.symbol === r.symbol));
+  const hide = useHide();
   const asset = r.symbol.replace(/USDT$/, "");
   const perp = r.venue === "usdm";
   const items: { label: string; value: ReactNode }[] = perp
     ? [
-        { label: `Pos (${asset})`, value: q(r.inv_qty, true) },
+        { label: `Position (${asset})`, value: q(r.inv_qty, true) },
         { label: "Entry", value: price(r.avg_cost) },
-        // the hedge leg's P&L today, as Markets, the Desk and Assets call a perp's Trading PnL (instPnl)
-        { label: "Trading PnL", value: <Money v={leg?.pnl ?? 0} /> },
+        // a perp is the hedge: its leg's P&L today (it has no Trading PnL, as on the Desk and Markets)
+        { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> },
         {
           label: "Funding",
           value: funding?.rate != null ? <span className={tone(-funding.rate * Math.sign(r.inv_qty), bps(funding.rate * 1e4))}>{bpsUnit(funding.rate * 1e4)}</span> : "--",
         },
       ]
     : [
-        { label: `Inv (${asset})`, value: r.inv_qty === 0 ? "flat" : q(r.inv_qty, true) },
+        { label: `Inventory (${asset})`, value: r.inv_qty === 0 && !hide ? "flat" : q(r.inv_qty, true) },
         { label: "Avg cost", value: r.inv_qty === 0 ? "--" : price(r.avg_cost) },
-        { label: "Trading PnL", value: <Money v={instPnl(r, null)} /> },
+        { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
         { label: "Edge", value: <span className={tone(r.edge_bps, bps(r.edge_bps))}>{bpsUnit(r.edge_bps)}</span> },
       ];
   return (
@@ -178,10 +180,10 @@ function Band({ symbol, venue }: { symbol: string; venue: Venue }) {
     <section className="in-band">
       <div className="q-legend in-band-legend m-fig">
         <span>
-          <i className="q-lg-dot up" /> Our Bid <b className={nb ? "up" : "muted"}>{nb ? d(sym?.bid_dist_bps, true) : "None"}</b>
+          <i className="q-lg-dot up" /> Our bid <b className={nb ? "up" : "muted"}>{nb ? d(sym?.bid_dist_bps, true) : "None"}</b>
         </span>
         <span>
-          <i className="q-lg-dot down" /> Our Ask <b className={na ? "down" : "muted"}>{na ? d(sym?.ask_dist_bps, false) : "None"}</b>
+          <i className="q-lg-dot down" /> Our ask <b className={na ? "down" : "muted"}>{na ? d(sym?.ask_dist_bps, false) : "None"}</b>
         </span>
         <span>
           <i className="q-lg-band" /> Spread <b>{sym?.spread_bps == null ? "--" : `${bps(sym.spread_bps, false)} bps`}</b>
@@ -203,8 +205,8 @@ function QuotesTab({ r }: { r: SymbolRow }) {
   const n = Math.max(bids.length, asks.length);
   // our distances from fair and the spread are in the band above, the fair in the chart's legend
   const items: KVItem[] = [
-    { label: "Market Bid", value: <span className="up">{price(r.bid)}</span> },
-    { label: "Market Ask", value: <span className="down">{price(r.ask)}</span> },
+    { label: "Market bid", value: <span className="up">{price(r.bid)}</span> },
+    { label: "Market ask", value: <span className="down">{price(r.ask)}</span> },
   ];
   return (
     <section className="in-tab">
@@ -224,12 +226,13 @@ function QuotesTab({ r }: { r: SymbolRow }) {
       ) : (
         <div className="m-empty">No resting orders on {r.symbol} right now.</div>
       )}
+      {ours.length > 0 && (
+        <UnstyledButton className="m-link in-more" onClick={() => navigate({ page: "orders", symbol: r.symbol, venue: r.venue })}>
+          All {ours.length} open order{ours.length === 1 ? "" : "s"} on the Orders page
+        </UnstyledButton>
+      )}
       <div className="in-kv">
         <KV cols={2} items={items} />
-      </div>
-      <div className="in-link">
-        {/* the ladder above counts them: the row only leads to the orders page */}
-        <ListRow dense title="Open orders" secondary="Orders page" to={{ page: "orders", symbol: r.symbol, venue: r.venue }} />
       </div>
     </section>
   );

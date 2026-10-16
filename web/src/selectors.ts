@@ -1,18 +1,28 @@
-// Small derived lists the pages share: each instrument's Trading PnL (the footer's marquee, top movers), and the
+// Small derived lists the pages share: each instrument's P&L today (the footer's marquee, top movers), and the
 // busiest instruments (the phone Desk's live quotes block).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Fill, HedgeLeg, OpenOrder, SymbolRow, Venue } from "./protocol";
 import { serverNow, useStore } from "./store";
 
 /**
- * An instrument's "Trading PnL" today, the one figure every page shows per instrument (Desk lists and ticker,
- * Assets, phone Markets): a spot market's is Π (market making + inventory PnL, fees included); a perp's is its
- * hedge leg's today (price P&L at mark − fees + funding), which the server does not put in the perp row's
- * `trading_pnl` (0). The desk's Day PnL is their sum plus rebates and other.
+ * "Trading PnL" is market making + inventory PnL, fees included, and never the hedge, on every page and size.
+ * A spot market has one (`trading_pnl`); a perp is the hedge and has none (null: shown as `--`), its P&L today
+ * is its hedge leg's (`hedgePnl`: price P&L at mark − fees + funding), shown under a Hedge figure or column. The
+ * desk's Day PnL = the Trading PnLs + the hedge legs + rebates + other.
  */
+export function tradingPnl(r: SymbolRow): number | null {
+  return r.venue === "usdm" ? null : r.trading_pnl;
+}
+
+/** A perp's hedge leg P&L today (null for spot, and for a perp with no leg today). */
+export function hedgePnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number | null {
+  return r.venue === "usdm" ? (legs?.get(r.symbol) ?? null) : null;
+}
+
+/** What an instrument made today, whichever kind it is: a spot market's Trading PnL, a perp's hedge leg.
+ *  For rankings across both (top movers, the marquee), always shown with its kind. */
 export function instPnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number {
-  if (r.venue === "usdm") return legs?.get(r.symbol) ?? 0;
-  return r.trading_pnl;
+  return (r.venue === "usdm" ? hedgePnl(r, legs) : r.trading_pnl) ?? 0;
 }
 
 const NO_LEGS: ReadonlyMap<string, number | null> = new Map();
@@ -34,19 +44,25 @@ export function useInstPnl(): (r: SymbolRow) => number {
   return useCallback((r: SymbolRow) => instPnl(r, legs), [legs]);
 }
 
+/** `hedgePnl` bound to the store's hedge legs. */
+export function useHedgePnl(): (r: SymbolRow) => number | null {
+  const legs = useLegPnl();
+  return useCallback((r: SymbolRow) => hedgePnl(r, legs), [legs]);
+}
+
 /** The legs at call time, for AG Grid getters. */
 export const legPnlNow = () => legPnl(useStore.getState().snap?.exposure.hedge_day?.legs);
 
 export interface InstrumentPnl {
   symbol: string;
   venue: Venue;
-  /** Trading PnL today (instPnl), USDT. */
+  /** What it made today (instPnl): a spot market's Trading PnL, a perp's hedge leg. USDT. */
   pnl: number;
   fills: number;
 }
 
 /**
- * Each instrument's Trading PnL today, largest first by size: the instruments that traded today or carry a
+ * Each instrument's P&L today (instPnl: Trading PnL, or a perp's hedge leg), largest first by size: the instruments that traded today or carry a
  * P&L (dust left out). `limit` caps the list.
  */
 export function dayPnlList(symbols: readonly SymbolRow[] | undefined, legs: ReadonlyMap<string, number | null>, limit = Infinity): InstrumentPnl[] {

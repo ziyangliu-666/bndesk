@@ -6,17 +6,18 @@ import type { CellClassParams, ColDef, GetRowIdParams, GridApi, ICellRendererPar
 import { selectInstrument, useStore, type Instrument } from "../store";
 import type { SymbolRow } from "../protocol";
 import { gridTheme } from "../gridTheme";
-import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, signCls, DEFAULT_COL } from "../grid";
+import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, fVol, signCls, DEFAULT_COL } from "../grid";
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import { refLabel } from "./ui";
-import { instPnl, legPnlNow } from "../selectors";
+import { hedgePnl, tradingPnl, useLegPnl } from "../selectors";
 
-type Row = SymbolRow & { _total?: boolean };
+/** A row, with its hedge leg's P&L today (perps) put in the row: AG Grid refreshes a row whose data changed. */
+type Row = SymbolRow & { _total?: boolean; _hedge?: number | null };
 
 function SymbolCell(p: ICellRendererParams<Row>) {
   const r = p.data;
   if (!r) return null;
-  if (r._total) return <span className="sym total">Total</span>;
+  if (r._total) return <span className="sym total" title="Spot markets; the hedge column sums the perps' legs">Spot total</span>;
   const tip = [r.reference != null ? `reference ${refLabel(r.reference)}` : "", r.dust ? "balance below min notional" : ""].filter(Boolean).join("; ");
   return (
     <span className={"sym" + (r.dust ? " dust" : "")} title={tip || undefined}>
@@ -28,21 +29,28 @@ function SymbolCell(p: ICellRendererParams<Row>) {
 
 const absDesc = (a: number | null, b: number | null) => Math.abs(a ?? 0) - Math.abs(b ?? 0);
 
-function totals(rows: SymbolRow[], legs: ReadonlyMap<string, number | null>): Row {
+/** The total row: the spot markets' figures (the ticker's, Fills and Spot volume, and the header's split), and
+ *  the perps' hedge legs under Hedge. Trading PnL = Market making + Inventory PnL, as in the header. */
+function totals(rows: Row[]): Row {
   let inv = 0;
   let fills = 0;
   let vol = 0;
   let tp = 0;
   let mp = 0;
   let ip = 0;
+  let hedge: number | null = null;
   let bids = 0;
   let asks = 0;
   const w = { mk10: [0, 0], edge: [0, 0] };
   for (const r of rows) {
-    inv += r.venue === "spot" ? r.inv_value : 0;
+    if (r.venue === "usdm") {
+      if (r._hedge != null) hedge = (hedge ?? 0) + r._hedge;
+      continue;
+    }
+    inv += r.inv_value;
     fills += r.fills_day;
     vol += r.volume_day;
-    tp += instPnl(r, legs);
+    tp += r.trading_pnl;
     mp += r.mm_pnl;
     ip += r.inv_pnl;
     bids += r.open_bids;
@@ -93,6 +101,7 @@ function totals(rows: SymbolRow[], legs: ReadonlyMap<string, number | null>): Ro
     fair: null,
     bid: null,
     ask: null,
+    _hedge: hedge,
   };
 }
 
@@ -106,8 +115,10 @@ const moneyCls = maskCls<CellClassParams<Row>>(signCls);
 const plainCls = maskCls();
 /** A spot figure: a perp has none (its P&L is the hedge leg's), so `--`, not 0.00. */
 const spotOnly = (k: "mm_pnl" | "inv_pnl") => (p: ValueGetterParams<Row>) => (p.data && (p.data._total || p.data.venue === "spot") ? p.data[k] : null);
-/** The row's Trading PnL: a perp's is its hedge leg's (instPnl); the total row carries the sum. */
-const pnlOf = (p: ValueGetterParams<Row>) => (p.data ? (p.data._total ? p.data.trading_pnl : instPnl(p.data, legPnlNow())) : null);
+/** Trading PnL: spot only (a perp is the hedge: `--`); the total row carries the sum. */
+const pnlOf = (p: ValueGetterParams<Row>) => (p.data ? (p.data._total ? p.data.trading_pnl : tradingPnl(p.data)) : null);
+/** Hedge: a perp's leg today; the total row the legs' sum; spot rows have none. */
+const hedgeOf = (p: ValueGetterParams<Row>) => p.data?._hedge ?? null;
 const blankTotal = (f: VF): VF => (p) => (p.data?._total ? "" : f(p));
 
 function columns(): ColDef<Row>[] {
@@ -132,13 +143,23 @@ function columns(): ColDef<Row>[] {
       valueGetter: pnlOf,
       valueFormatter: money(fPnl as VF),
       cellClass: moneyCls,
-      headerTooltip: "Today, USDT. Spot: market making + inventory PnL, fees included. Perp: the hedge leg (price at mark − fees + funding). The desk's Day PnL adds rebates and other",
+      headerTooltip: "Today, USDT: market making + inventory PnL, fees included. Spot markets only: a perp is the hedge (its P&L is under Hedge)",
       ...flashOn(fPnl),
     }),
-    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: moneyCls, headerTooltip: "Each fill against the mid 60 s later, minus fees, USDT" }),
-    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: moneyCls, headerTooltip: "Trading PnL minus market making, USDT" }),
+    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: "Each fill against the mid 60 s later, minus fees, USDT" }),
+    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: "Trading PnL minus market making, USDT" }),
+    n({
+      colId: "hedge",
+      headerName: "Hedge",
+      width: 76,
+      valueGetter: hedgeOf,
+      valueFormatter: money(fPnl as VF),
+      cellClass: moneyCls,
+      headerTooltip: "A perp's hedge leg today: price P&L at mark − fees + funding, USDT. The total is the header's Hedge",
+      ...flashOn(fPnl),
+    }),
     n({ field: "fills_day", headerName: "Fills", width: 64, valueFormatter: fInt, headerTooltip: "Fills today", ...flashOn(fInt) }),
-    n({ field: "volume_day", headerName: "Volume", width: 74, valueFormatter: money(fUsd as VF), cellClass: plainCls, headerTooltip: "Filled notional today, USDT. The total adds the perps (the hedge), which the ticker's Volume leaves out" }),
+    n({ field: "volume_day", headerName: "Volume", width: 74, valueFormatter: money(fVol as VF), cellClass: plainCls, headerTooltip: "Filled notional today, USDT. The total is the spot markets' (the ticker's Spot volume)" }),
     n({ field: "edge_bps", headerName: "Edge", width: 56, valueFormatter: fBps, headerTooltip: "Edge at fill: side × (fair − price) / fair, volume-weighted, bps" }),
     n({ field: "mk10_bps", headerName: "Markout 10 s", width: 86, valueFormatter: fBps, headerTooltip: "10 s after the fill, net of the reference move, volume-weighted, bps. Diagnostic, not PnL" }),
     n({
@@ -167,12 +188,18 @@ export function SymbolsGrid({ selected, hideDust = false }: { selected?: Instrum
   useEffect(() => {
     api.current?.refreshCells({ force: true });
   }, [hide]);
-  const rows = useMemo(() => (hideDust ? (all ?? []).filter((r) => !r.dust || r.fills_day > 0) : (all ?? [])), [all, hideDust]);
+  const legs = useLegPnl();
+  const rows = useMemo<Row[]>(
+    () =>
+      (all ?? [])
+        .filter((r) => !hideDust || !r.dust || r.fills_day > 0)
+        .map((r) => (r.venue === "usdm" ? { ...r, _hedge: hedgePnl(r, legs) } : r)),
+    [all, hideDust, legs],
+  );
   // new column definitions when Hide amounts flips: the cell classes (muted, no sign colour) follow
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cols = useMemo(() => flexCols(columns()), [hide]);
-  const legs = useStore((s) => s.snap?.exposure.hedge_day?.legs);
-  const pinned = useMemo(() => (rows.length ? [totals(rows, legPnlNow())] : []), [rows, legs]);
+  const pinned = useMemo(() => (rows.length ? [totals(rows)] : []), [rows]);
   const selKey = selected ? `${selected.venue}:${selected.symbol}` : "";
   const rules = useMemo(
     () => ({ ...DUST_ROW, "dk-sel-row": (p: { data?: Row }) => !!p.data && !p.data._total && `${p.data.venue}:${p.data.symbol}` === selKey }),

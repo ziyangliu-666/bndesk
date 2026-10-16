@@ -77,7 +77,7 @@
 }
 .in-stats dd {
   margin: 3px 0 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -129,7 +129,7 @@
 .in-tabs .ex-tab {
   justify-content: center;
   min-width: 48px;
-  font-size: 15px;
+  font-size: 14px;
 }
 .in-tab {
   padding: 8px 0 16px;
@@ -140,6 +140,11 @@
 }
 .in-link {
   border-top: 1px solid var(--rule);
+}
+/* "All 4 open orders on the Orders page": a link under the ladder, at its right */
+.in-more {
+  display: flex;
+  margin-left: auto;
 }
 .in-tab .m-kv {
   margin-left: calc(-1 * var(--m-pad-l));
@@ -154,7 +159,7 @@
 
 /* our orders, bids left and asks right, each row's bar its notional */
 .in-ladder {
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 .in-ladder-h {

@@ -12,7 +12,7 @@
 .mk-view .ex-tab {
   justify-content: center;
   min-width: 48px;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .mk-search {
@@ -35,7 +35,7 @@
   background: none;
   color: var(--ink);
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
 }
 .mk-search input::placeholder {
   color: var(--muted);
@@ -140,7 +140,7 @@
   text-align: right;
 }
 .mk-sym {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
@@ -155,7 +155,7 @@
 }
 .mk-px,
 .mk-pnl {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -184,4 +184,9 @@
 }
 .mk-quotes .q-legend {
   padding: 4px 0;
+}
+/* a perp's figure is its hedge leg: said in a muted word */
+.mk-k {
+  color: var(--muted);
+  font-size: 12px;
 }

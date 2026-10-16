@@ -15,7 +15,7 @@ import type { Account, HedgeLeg, Position, SymbolRow } from "../protocol";
 import { HedgeBridge } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
 import { ExChart, Tabs, useExPref, type ExSeries } from "../components/ex";
-import { Money, amount, hideNow, pctOfMoney, useAmount, useHide } from "../mask";
+import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
 
@@ -470,8 +470,8 @@ function Futures() {
       n({ field: "upnl", headerName: "uPnL", headerTooltip: "Unrealized PnL at mark against the entry price, USDT. Not today's result: see Today", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({
         field: "pnl_day",
-        headerName: "Trading PnL",
-        headerTooltip: "Today, USDT: the position held at the day start and today's fills marked to mark now, minus fees, plus funding (the hedge leg)",
+        headerName: "Hedge",
+        headerTooltip: "Today, USDT: the hedge leg, the position held at the day start and today's fills marked to mark now, minus fees, plus funding. A perp has no Trading PnL",
         width: 90,
         valueFormatter: fSigned,
         cellClass: sCls(hide),
@@ -633,6 +633,7 @@ function LegCell(p: ICellRendererParams<HedgeLeg>) {
 /** Funding as on Binance futures: rate and countdown per perp held. */
 function FundingPanel() {
   const x = useStore((s) => s.snap?.exposure);
+  const hide = useHide();
   const tz = useStore((s) => s.tz);
   const skew = useStore((s) => s.skew);
   const now = useNow(1000) + skew;
@@ -662,7 +663,7 @@ function FundingPanel() {
                       <span className="ops-perp">Perp</span>
                     </span>
                   </td>
-                  <td className={f.position > 0 ? "up" : f.position < 0 ? "down" : ""}>{qty(f.position, true)}</td>
+                  <td className={hide ? "masked" : f.position > 0 ? "up" : f.position < 0 ? "down" : ""}>{qtyText(f.position, hide, true)}</td>
                   <td title={f.rate == null ? undefined : bps(f.rate * 1e4) + " bps"}>{f.rate == null ? "--" : (f.rate >= 0 ? "" : "−") + Math.abs(f.rate * 100).toFixed(4) + "%"}</td>
                   <td>{f.next == null ? "--" : hms(f.next, tz)}</td>
                   <td>{f.next == null ? "--" : dur(f.next - now)}</td>
@@ -691,7 +692,7 @@ function HedgePanel() {
       n({ field: "fills", headerName: "Fills", headerTooltip: "Futures fills today", width: 52 }),
       n({ field: "mark", headerName: "Mark", headerTooltip: "Mark price now, USDT", width: 84, valueFormatter: fPrice }),
       n({ colId: "fees", headerName: "Fees", headerTooltip: "Fees today, a cost, USDT", width: 64, valueGetter: (p) => (p.data ? -p.data.fees : null), valueFormatter: fSigned, cellClass: sCls(hide) }),
-      n({ field: "pnl", headerName: "Trading PnL", headerTooltip: "Today: price P&L at mark − fees + funding, USDT", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "pnl", headerName: "Hedge PnL", headerTooltip: "Today: price P&L at mark − fees + funding, USDT", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
     ]);
   }, [hide]);
   const offset = h && inv != null && h.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -h.hedge_pnl / inv : null;
@@ -736,14 +737,24 @@ function HedgePanel() {
 /** Today's spot inventory, futures notional and their net, on the 5 s desk grid. */
 function ExposureChart() {
   const series = useStore((s) => s.snap?.series);
+  const x = useStore((s) => s.snap?.exposure);
+  const now = useStore((s) => s.snap?.now);
   const hide = useHide();
   const [iv, setIv] = useExPref("assets-exp", "interval", "1m", IV_KEYS);
   const pts = useBucketed();
   const step = STEP[iv] ?? 0;
+  // the 5 s series, then the table's live figures now: the legend at rest reads what the table does
   const cols = useMemo(() => {
     const s = series ?? [];
-    return { t: s.map((p) => p.t), inv: s.map((p) => p.inventory), fut: s.map((p) => p.futures_notional), net: s.map((p) => p.inventory + p.futures_notional) };
-  }, [series]);
+    const c = { t: s.map((p) => p.t), inv: s.map((p) => p.inventory), fut: s.map((p) => p.futures_notional), net: s.map((p) => p.inventory + p.futures_notional) };
+    if (x && now != null && (!c.t.length || now > c.t[c.t.length - 1]!)) {
+      c.t.push(now);
+      c.inv.push(x.spot_value);
+      c.fut.push(x.futures_notional);
+      c.net.push(x.net);
+    }
+    return c;
+  }, [series, x, now]);
   const fmt = (v: number) => amount(v, "pnlMoney", hide);
   const lines: ExSeries[] = [
     { key: "inv", kind: "line", label: "Spot inventory", color: INV_COLOR, data: pts("inv", cols.t, cols.inv, step), format: fmt },

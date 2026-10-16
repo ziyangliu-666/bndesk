@@ -9,7 +9,7 @@
   min-height: 48px;
 }
 .dk-alert .m-row-title {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
   white-space: normal;
   display: -webkit-box;
@@ -29,7 +29,7 @@
   display: flex;
   align-items: center;
   min-height: 40px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .dk-hero-label .m-info {
@@ -151,7 +151,7 @@
   color: var(--muted);
 }
 .dk-part-v {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -194,7 +194,7 @@
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 4px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .dk-qt-read-h b {
   font-weight: 500;
@@ -259,4 +259,10 @@
 /* risk: bars are neutral while far from a limit; amber and red only near and past it */
 .dk-risk .m-lim.ok .m-lim-fill {
   background: var(--muted);
+}
+/* a perp's figure among the movers is its hedge leg: said in a muted word */
+.dk-mv-k {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
 }

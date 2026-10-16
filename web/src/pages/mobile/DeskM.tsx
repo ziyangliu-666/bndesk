@@ -6,14 +6,12 @@ import { useNow } from "../../hooks";
 import { hm, int, num } from "../../format";
 import { LevelIcon } from "../../components/ui";
 import { DefinedLabel, KV, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
-import { HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
+import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
+import { SeriesKey } from "../../components/ex";
 import type { Account, Exposure, SymbolRow } from "../../protocol";
 import { Bps, FillRow, InstName, useFillSheet } from "./shared";
-import { instPnl as instPnlOf } from "../../selectors";
+import { instPnl, useLegPnl } from "../../selectors";
 import { pctOfMoney, useHide } from "../../mask";
-
-/** A spot market's Trading PnL (the movers are spot only). */
-const instPnl = (r: SymbolRow) => instPnlOf(r, null);
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
@@ -59,7 +57,7 @@ export function DeskM() {
         v={sm.pnl_day}
         sub={
           <>
-            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 3)} of equity</span>}
+            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 2)} of equity</span>}
           </>
         }
         since={`since ${hm(sm.day_start, tz)}${zone}`}
@@ -74,14 +72,15 @@ export function DeskM() {
       <Section title="Day PnL split" right="USDT">
         <PartRows
           rows={[
-            { key: "mm", label: "Market making", color: MM_COLOR, v: p.mm, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} USDT.` },
-            { key: "inv", label: "Inventory PnL", color: INVPNL_COLOR, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
-            { key: "hedge", label: "Hedge", color: HEDGE_COLOR, v: hedge },
-            { key: "reb", label: "Rebates", color: REBATE_COLOR, v: sm.rebates },
+            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} USDT.` },
+            { key: "inv", label: "Inventory PnL", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
+            { key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge },
+            { key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates },
             {
               key: "other",
               label: "Other",
-              color: "#5b6474",
+              color: PNL_COLORS.other,
+              stroke: PNL_STROKES.other,
               v: sm.other,
               tone: reconcile ? "warn" : undefined,
               info: "Day PnL minus trading PnL, the hedge and the rebates." + (reconcile ? "\n\nA reconcile alert is active: a fill, transfer or asset the desk does not see." : ""),
@@ -116,7 +115,7 @@ export function DeskM() {
         )}
         {o1d && (
           <RateMeter
-            label="Orders 1 d"
+            label="Orders today"
             who={o1d.a.label}
             value={o1d.v}
             limit={o1d.lim}
@@ -134,8 +133,9 @@ export function DeskM() {
               value: int(sm.fills_1h),
             },
             {
-              label: "Volume",
-              value: <Money v={sm.volume_day} kind="short" />,
+              label: "Spot volume",
+              // as the desktop's ticker writes it: K / M with 2 decimals
+              value: <Money v={sm.volume_day} kind="k" />,
             },
             {
               label: "Markout 10 s",
@@ -215,6 +215,7 @@ interface Part {
   label: string;
   sub?: string;
   color: string;
+  stroke: Stroke;
   v: number | null | undefined;
   info?: string;
   tone?: "warn";
@@ -225,7 +226,7 @@ function PartRows({ rows }: { rows: Part[] }) {
     <>
       {rows.map((r) => (
         <div key={r.key} className={"dk-part" + (r.info ? " m-tap" : "")} {...defineProps(r.label, r.info)}>
-          <i className="dk-key" style={{ background: r.color }} aria-hidden />
+          <SeriesKey color={r.color} stroke={r.stroke} />
           <span className={"dk-part-l " + (r.tone ?? "")}>
             <DefinedLabel label={r.label} info={r.info} />
             {r.sub && <span className="dk-part-sub"> {r.sub}</span>}
@@ -239,42 +240,70 @@ function PartRows({ rows }: { rows: Part[] }) {
   );
 }
 
-// ---- top movers: the best or the worst spot instruments today ----
+// ---- top movers: the instruments that made or lost the most today ----
 
+/**
+ * The best or the worst instruments today by what each made: a spot market's Trading PnL, a perp's hedge leg
+ * (marked "hedge"), so the two biggest contributors are here whichever they are. With amounts hidden the
+ * ranking would give the winners away: the busiest instruments by fills instead.
+ */
 function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
   const [side, setSide] = useState<"best" | "worst">("best");
   const money = useMoney();
-  const [best, worst] = useMemo(() => {
-    const xs = (symbols ?? []).filter((r) => r.venue === "spot" && Math.abs(instPnl(r)) >= 0.005).sort((a, b) => instPnl(b) - instPnl(a));
-    return [xs.filter((r) => instPnl(r) > 0).slice(0, 4), xs.filter((r) => instPnl(r) < 0).reverse().slice(0, 4)];
-  }, [symbols]);
-  const list = side === "best" ? best : worst;
-  if (!best.length && !worst.length) return null;
+  const hide = useHide();
+  const legs = useLegPnl();
+  const made = (r: SymbolRow) => instPnl(r, legs);
+  const [best, worst, busy] = useMemo(() => {
+    const xs = (symbols ?? []).filter((r) => !r.dust && Math.abs(instPnl(r, legs)) >= 0.005).sort((a, b) => instPnl(b, legs) - instPnl(a, legs));
+    const busy = (symbols ?? [])
+      .filter((r) => r.fills_day > 0)
+      .sort((a, b) => b.fills_day - a.fills_day || a.symbol.localeCompare(b.symbol))
+      .slice(0, 4);
+    return [xs.filter((r) => instPnl(r, legs) > 0).slice(0, 4), xs.filter((r) => instPnl(r, legs) < 0).reverse().slice(0, 4), busy];
+  }, [symbols, legs]);
+  const list = hide ? busy : side === "best" ? best : worst;
+  if (!best.length && !worst.length && !busy.length) return null;
   return (
     <Section
-      title="Top movers"
+      title={hide ? "Busiest today" : "Top movers"}
       right={
-        <Segmented
-          label="Movers"
-          value={side}
-          onChange={setSide}
-          data={[
-            { value: "best", label: "Best" },
-            { value: "worst", label: "Worst" },
-          ]}
-        />
+        hide ? (
+          "by fills"
+        ) : (
+          <Segmented
+            label="Movers"
+            value={side}
+            onChange={setSide}
+            data={[
+              { value: "best", label: "Best" },
+              { value: "worst", label: "Worst" },
+            ]}
+          />
+        )
       }
     >
-      {list.map((r) => (
-        <ListRow
-          key={r.venue + r.symbol}
-          title={<InstName r={r} />}
-          subtitle={`Spot · ${money(r.inv_value, "short") === "0.00" ? "flat" : "inv " + money(r.inv_value, "short")} · ${int(r.fills_day)} fills`}
-          primary={<Money v={instPnl(r)} />}
-          secondary={`MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
-          to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
-        />
-      ))}
+      {list.map((r) => {
+        const perp = r.venue === "usdm";
+        return (
+          <ListRow
+            key={r.venue + r.symbol}
+            title={<InstName r={r} />}
+            subtitle={
+              perp
+                ? `Hedge · ${int(r.fills_day)} fills`
+                : `Spot · ${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + " USDT"} · ${int(r.fills_day)} fills`
+            }
+            primary={
+              <>
+                {perp && <span className="dk-mv-k">hedge </span>}
+                <Money v={made(r)} />
+              </>
+            }
+            secondary={perp ? "its leg today" : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
+            to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
+          />
+        );
+      })}
       {list.length === 0 && <div className="m-empty">{side === "best" ? "Nothing has made money today yet." : "Nothing has lost money today."}</div>}
     </Section>
   );
