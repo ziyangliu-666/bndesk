@@ -16,6 +16,14 @@ pub const TOX_BEFORE_S: f64 = 5.0;
 pub const REF_ANCHORS: [(&str, i64); 4] = [("-5", -5_000), ("0", 0), ("0.2", 200), ("1", 1_000)];
 const TOX_MS: [i64; 5] = [0, 200, 1_000, 60_000, 300_000];
 
+/// The price path around a fill: dense horizons from 10 s before it to 300 s after, seconds.
+pub const PATH_S: [f64; 17] = [-10.0, -5.0, -2.0, -1.0, -0.5, 0.0, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0];
+pub const PATH_N: usize = PATH_S.len();
+pub const PATH_MS: [i64; PATH_N] =
+    [-10_000, -5_000, -2_000, -1_000, -500, 0, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000];
+/// PATH index of each of HORIZONS (1, 10, 60, 300 s).
+pub const PATH_OF_H: [usize; 4] = [8, 11, 14, 16];
+
 pub fn sign(side: Side) -> f64 {
     if side == Side::Buy { 1.0 } else { -1.0 }
 }
@@ -63,6 +71,10 @@ pub struct FillRec {
     pub mk_fast: Marks,             // net, tau = 0.2 s
     pub tox: [Option<f64>; 5],      // D(h), bps; indexed like TK
     pub refs: [Option<f64>; 4],     // reference anchors, indexed like REF_ANCHORS
+    /// The instrument's mid and the reference's at each PATH_S horizon (at 1, 10, 60 and 300 s the 1 s ring's
+    /// mid, as the markouts take it; the ms ring's elsewhere).
+    pub pm: [Option<f64>; PATH_N],
+    pub pr: [Option<f64>; PATH_N],
 }
 
 impl FillRec {
@@ -90,6 +102,8 @@ impl FillRec {
             mk_fast: Marks::default(),
             tox: [None; 5],
             refs: [None; 4],
+            pm: [None; PATH_N],
+            pr: [None; PATH_N],
         }
     }
 
@@ -105,6 +119,20 @@ impl FillRec {
     pub fn pnl(&self, h: &str) -> f64 {
         let i = HK.iter().position(|k| *k == h).expect("horizon");
         self.mk.0[i].map_or(0.0, |m| m * self.notional() / 1e4)
+    }
+
+    /// (raw, net τ = 1 s, net τ = 0.2 s, toxicity D) in bps at PATH_S[j], from the stored path. The definitions
+    /// are the markouts' and D(h)'s, so at 1, 10, 60 and 300 s they equal `mk_raw`, `mk` and `mk_fast`.
+    pub fn path_at(&self, j: usize) -> Option<(f64, f64, f64, Option<f64>)> {
+        let mid = self.pm[j].filter(|x| *x != 0.0)?;
+        let rh = self.pr[j];
+        let (raw, net) = markout_bps(self.side, self.price, mid, self.refs[3], rh);
+        let (_, fast) = markout_bps(self.side, self.price, mid, self.refs[2], rh);
+        let tox = match (self.refs[0].filter(|x| *x != 0.0), rh.filter(|x| *x != 0.0)) {
+            (Some(r5), Some(rh)) => Some(toxicity_bps(self.side, r5, rh)),
+            _ => None,
+        };
+        Some((raw, net.unwrap_or(raw), fast.unwrap_or(raw), tox))
     }
 
     pub fn matured(&self) -> bool {
@@ -173,6 +201,7 @@ impl FillBook {
             return false;
         }
         let inst = market.ensure(&f.symbol, f.venue, None);
+        market.keep_fine(inst);   // the path around its next fills, at ms resolution
         if fresh {
             f.fair = market.fair(inst);
             f.edge_bps = f.fair.filter(|x| *x != 0.0).map(|fair| edge_bps(f.side, fair, f.price));
@@ -227,6 +256,23 @@ impl FillBook {
                     if let (Some(r5), Some(rh)) = (r5.filter(|x| *x != 0.0), rh.filter(|x| *x != 0.0)) {
                         f.tox[j] = Some(toxicity_bps(f.side, r5, rh));
                         changed = true;
+                    }
+                }
+            }
+            if let Some(inst) = inst {
+                let i = &m.insts[inst];
+                for (j, dt) in PATH_MS.iter().enumerate() {
+                    let t = f.ts + dt;
+                    if f.pm[j].is_some() || now < t + 1000 {
+                        continue;
+                    }
+                    f.pm[j] = if PATH_OF_H.contains(&j) {
+                        i.ring.at(t)
+                    } else {
+                        i.fine.as_ref().and_then(|r| r.at(t)).or_else(|| i.ring.at(t))
+                    };
+                    if f.has_ref {
+                        f.pr[j] = m.ref_at(inst, t);
                     }
                 }
             }

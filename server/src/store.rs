@@ -11,7 +11,7 @@ use std::time::Duration;
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, Row as SqlRow, params};
 
-use crate::fills::{FillRec, REF_ANCHORS, TK};
+use crate::fills::{FillRec, PATH_S, REF_ANCHORS, TK};
 use crate::protocol::Marks;
 
 pub const SCHEMA: &str = "
@@ -33,20 +33,20 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 12] = [
-    ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"),
+pub const MIGRATIONS: [(&str, &str, &str); 13] = [
+    ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"), ("fills", "path", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
     ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
-    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs";
+    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
     realized, floating, hedge, mm, rebates";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
 const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
-    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
     futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
@@ -189,7 +189,33 @@ fn ref_keys() -> [&'static str; 4] {
     REF_ANCHORS.map(|(k, _)| k)
 }
 
-fn fill_params(f: &FillRec) -> [Value; 20] {
+/// The mids around a fill (`pm`, `pr`) as `{"h": [seconds], "m": [..], "r": [..]}`, NULL before the first.
+fn path_json(f: &FillRec) -> Value {
+    if f.pm.iter().all(Option::is_none) {
+        return Value::Null;
+    }
+    Value::Text(serde_json::json!({ "h": PATH_S, "m": f.pm, "r": f.pr }).to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct PathCol {
+    h: Vec<f64>,
+    m: Vec<Option<f64>>,
+    r: Vec<Option<f64>>,
+}
+
+/// Back into `pm` / `pr` by horizon (a horizon no longer in PATH_S is dropped).
+fn parse_path(s: &str, f: &mut FillRec) {
+    let Ok(p) = serde_json::from_str::<PathCol>(s) else { return };
+    for (k, h) in p.h.iter().enumerate() {
+        if let Some(j) = PATH_S.iter().position(|x| x == h) {
+            f.pm[j] = p.m.get(k).copied().flatten();
+            f.pr[j] = p.r.get(k).copied().flatten();
+        }
+    }
+}
+
+fn fill_params(f: &FillRec) -> [Value; 21] {
     let opt = |v: Option<f64>| v.map_or(Value::Null, Value::Real);
     [
         Value::Text(f.id.clone()), Value::Integer(f.ts), Value::Text(f.account.clone()),
@@ -197,7 +223,7 @@ fn fill_params(f: &FillRec) -> [Value; 20] {
         Value::Real(f.price), Value::Real(f.qty), Value::Real(f.fee), Value::Text(f.fee_asset.clone()),
         Value::Integer(f.maker as i64), opt(f.fair), opt(f.edge_bps), opt(f.ref0), Value::Integer(f.has_ref as i64),
         Value::Text(marks_json(&f.mk)), Value::Text(marks_json(&f.mk_raw)), Value::Text(marks_json(&f.mk_fast)),
-        Value::Text(keyed_json(&TK, &f.tox, false)), Value::Text(keyed_json(&ref_keys(), &f.refs, true)),
+        Value::Text(keyed_json(&TK, &f.tox, false)), Value::Text(keyed_json(&ref_keys(), &f.refs, true)), path_json(f),
     ]
 }
 
@@ -264,6 +290,9 @@ pub fn row_fill(r: &SqlRow) -> rusqlite::Result<FillRec> {
     }
     if let Some(s) = str_opt(r, 19)?.filter(|s| !s.is_empty()) {
         f.refs = parse_keyed(&s, &ref_keys());
+    }
+    if let Some(s) = str_opt(r, 20)?.filter(|s| !s.is_empty()) {
+        parse_path(&s, &mut f);
     }
     Ok(f)
 }
@@ -553,6 +582,9 @@ mod tests {
         f.mk_fast = Marks([None, None, None, Some(0.1)]);
         f.tox = [Some(0.0), None, Some(3.25), None, None];
         f.refs = [Some(49.9), Some(50.0), None, Some(50.1)];
+        f.pm[0] = Some(100.6);
+        f.pm[16] = Some(100.25);
+        f.pr[5] = Some(50.05);
         s.put(Row::Fill(Box::new(f.clone())));
         s.put(Row::PnlHour(HourRow { t: 3_600_000, trading: 1.0, hedged: 0.5, factor: 0.25, ref_hedge: 0.1,
                                      factor_hedge: 0.2, fills: 3, volume: 300.0, covered_s: 3600,

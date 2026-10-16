@@ -375,6 +375,7 @@ impl Desk {
         let mut tracked = self.tracked.borrow_mut();
         for mc in &self.cfg.markets {
             let id = m.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));
+            m.keep_fine(id);   // the markout path's pre-fill and sub-second mids
             tracked.insert(m.insts[id].key.clone());
             if let Some(r) = m.insts[id].ref_ {
                 tracked.insert(m.insts[r].key.clone());
@@ -1120,6 +1121,12 @@ impl DeskSource for Source {
 
     fn health(&self) -> DeskHealth {
         self.0.borrow().health()
+    }
+
+    fn markouts(&self, q: &crate::markouts::Query) -> Option<Vec<u8>> {
+        let d = self.0.borrow();
+        let fills = d.fills.borrow();
+        Some(P::encode(&crate::markouts::report(&fills.fills, q, CLOCK.now(), d.day_start())))
     }
 }
 
