@@ -39,6 +39,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { num, price as fmtPrice } from "../../format";
+import { MASK } from "../../mask";
 import { closeChart, openChart, useStore } from "../../store";
 import type { TzMode } from "../../format";
 import { C, CROSSHAIR, DOWN, GRID, PLOT_BG, SANS, UP, rgba, signColor } from "./palette";
@@ -168,6 +169,13 @@ export interface ExMode {
 
 export type ExBoxRow = [label: string, value: string, color?: string];
 
+/**
+ * A view the page owns: a logical range (bar indexes, fractions allowed) or a time range (ms). ExChart applies it
+ * instead of its own fit, after every (re)load and whenever the value changes, and holds it while new bars come
+ * (no shift to the live edge). `null` / undefined: ExChart fits the data itself.
+ */
+export type ExView = { logical: { from: number; to: number } } | { time: { from: number; to: number } };
+
 export interface ExChartProps {
   /** Chart id: remembers hidden series (store `hidden["ex.<id>"]`) and the legend's collapse. Use the same id in
    *  `useExPref(id, "interval", …)` for the interval and modes. */
@@ -211,7 +219,10 @@ export interface ExChartProps {
   touch?: boolean;
   /** Bars in view after a (re)load; default all of them, fitted. */
   initialBars?: number;
-  /** Bars of space right of the latest one. Default 3 on touch, 5 with a mouse (a few daily bars want less). */
+  /** The page's own view (24h on the Desk, a day zoomed on History). See ExView. */
+  view?: ExView | null;
+  /** Bars of space right of the latest one. Default 3 on touch, 5 with a mouse (a few daily bars want less; a
+   *  history of days wants 1). */
   rightOffset?: number;
   /** A change of this value resets the view (a new symbol). */
   resetKey?: string | number;
@@ -247,6 +258,16 @@ function minMoveFor(v: number): number {
   return a >= 1000 ? 0.01 : a >= 10 ? 0.001 : a >= 1 ? 0.0001 : a >= 0.01 ? 0.00001 : 0.0000001;
 }
 const defaultFormat = (s: ExSeries) => s.format ?? (s.kind === "candles" ? (v: number) => fmtPrice(v) : (v: number) => num(v, 2));
+/** What a format prints for a few probes: a page's new format function that prints the same keeps the axis as it
+ *  is; one that prints otherwise (Hide amounts flipped) is applied without a remount. */
+const formatSig = (s: ExSeries) => {
+  if (!s.format) return "";
+  try {
+    return s.format(-1234.567) + "|" + s.format(0.5);
+  } catch {
+    return "?";
+  }
+};
 
 function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: number): DeepPartial<ChartOptions> {
   return {
@@ -283,12 +304,19 @@ function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: nu
     handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     handleScale: { mouseWheel: !touch, pinch: true, axisPressedMouseMove: { time: true, price: !touch }, axisDoubleClickReset: true },
     kineticScroll: { touch: true, mouse: false },
-    trackingMode: { exitMode: TrackingModeExitMode.OnNextTap },
+    // tracking ends when the finger lifts (the value box stays up until the next touch): a vertical swipe after
+    // it scrolls the page, as on an exchange app. The long press itself is 380 ms (vite.config.ts patches the
+    // library's 240 ms, which caught a thumb resting before a scroll).
+    trackingMode: { exitMode: TrackingModeExitMode.OnTouchEnd },
   };
 }
 
+/** A series whose format prints the Hide amounts mask: its sign colours go too (mask.tsx's rule). */
+const isMasked = (s: ExSeries) => formatSig(s).includes(MASK);
+
 function seriesOptions(s: ExSeries, lastValue: boolean, visible: boolean): Record<string, unknown> {
   const fmt = defaultFormat(s);
+  const masked = isMasked(s);
   const color = s.color ?? C.ink;
   const [up, down] = s.colors ?? [UP, DOWN];
   const width = s.width ?? (s.kind === "baseline" ? 2 : 1.5);
@@ -308,19 +336,22 @@ function seriesOptions(s: ExSeries, lastValue: boolean, visible: boolean): Recor
     case "area":
       o = { lineColor: color, topColor: rgba(color, 0.18), bottomColor: rgba(color, 0.0), lineWidth: width, crosshairMarkerRadius: 3 };
       break;
-    case "baseline":
+    case "baseline": {
+      // masked: one neutral colour above and below the base, so the line does not tell a gain from a loss
+      const [u, d] = masked ? [C.ink2, C.ink2] : [up, down];
       o = {
         baseValue: { type: "price", price: s.base ?? 0 },
         lineWidth: width,
-        topLineColor: up,
-        topFillColor1: rgba(up, 0.16),
-        topFillColor2: rgba(up, 0.02),
-        bottomLineColor: down,
-        bottomFillColor1: rgba(down, 0.02),
-        bottomFillColor2: rgba(down, 0.16),
+        topLineColor: u,
+        topFillColor1: rgba(u, masked ? 0.08 : 0.16),
+        topFillColor2: rgba(u, 0.02),
+        bottomLineColor: d,
+        bottomFillColor1: rgba(d, 0.02),
+        bottomFillColor2: rgba(d, masked ? 0.08 : 0.16),
         crosshairMarkerRadius: 3,
       };
       break;
+    }
     case "histogram":
       o = { color: s.color ?? rgba(C.ink2, 0.4) };
       break;
@@ -378,9 +409,11 @@ interface Hover {
   t: number | null;
   x: number;
   v: number; // bumps when data changes, so the legend reads the new latest bar
+  /** Touch: the finger lifted after a long press; the box keeps this bar until the next touch. */
+  pinned: boolean;
 }
 function hoverStore() {
-  let cur: Hover = { t: null, x: 0, v: 0 };
+  let cur: Hover = { t: null, x: 0, v: 0, pinned: false };
   const subs = new Set<() => void>();
   return {
     get: () => cur,
@@ -419,6 +452,7 @@ export function ExChart(p: ExChartProps) {
   const [dense, setDense] = useState(false); // bars under 5 px apart: no markers
   const [awaiting, setAwaiting] = useState(false);
   const [drawn, setDrawn] = useState(0); // bumps once new data is in the chart: the legend reads it then
+  const moved = useRef(false); // the user moved the view since the last fit: queued re-fits give way
   // with an id, the fullscreen is a route (#/chart/<id>: Back closes it, a reload keeps it); else local state
   const routed = !!p.id && !p.inFullscreen;
   const [fsLocal, setFsLocal] = useState(false);
@@ -446,11 +480,34 @@ export function ExChart(p: ExChartProps) {
     const c = createChart(el, chartOptions(touch, tz, stepRef.current, p.rightOffset));
     chart.current = c;
     cbs.current.chartRef?.(c);
+    const fingerUp = { current: true }; // no finger on the screen
     const onMove = (e: MouseEventParams<Time>) => {
       const t = e.time == null ? null : (e.time as number) * 1000;
-      hov.set({ t, x: e.point?.x ?? 0 });
+      // touch: when tracking ends on the finger's lift, the box keeps the last bar until the next touch
+      if (t == null && touch && fingerUp.current && hov.get().t != null) {
+        hov.set({ pinned: true });
+        return;
+      }
+      hov.set({ t, x: e.point?.x ?? 0, pinned: false });
       cbs.current.onCrosshair?.(t);
     };
+    // a finger down anywhere ends a kept reading; the user's own pan or zoom cancels the queued re-fits
+    const onDocDown = () => {
+      fingerUp.current = false;
+      if (hov.get().pinned) {
+        hov.set({ t: null, pinned: false });
+        cbs.current.onCrosshair?.(null);
+      }
+    };
+    const onDocUp = (e: TouchEvent) => {
+      if (e.touches.length === 0) fingerUp.current = true;
+    };
+    const onUser = () => (moved.current = true);
+    document.addEventListener("touchstart", onDocDown, { capture: true, passive: true });
+    document.addEventListener("touchend", onDocUp, { capture: true, passive: true });
+    document.addEventListener("touchcancel", onDocUp, { capture: true, passive: true });
+    el.addEventListener("pointerdown", onUser, { passive: true });
+    el.addEventListener("wheel", onUser, { passive: true });
     c.subscribeCrosshairMove(onMove);
     const ts = c.timeScale();
     const onRange = () => {
@@ -473,6 +530,11 @@ export function ExChart(p: ExChartProps) {
     const mk = markersApi.current;
     return () => {
       ro.disconnect();
+      document.removeEventListener("touchstart", onDocDown, { capture: true });
+      document.removeEventListener("touchend", onDocUp, { capture: true });
+      document.removeEventListener("touchcancel", onDocUp, { capture: true });
+      el.removeEventListener("pointerdown", onUser);
+      el.removeEventListener("wheel", onUser);
       c.unsubscribeCrosshairMove(onMove);
       ts.unsubscribeVisibleLogicalRangeChange(onRange);
       ts.unsubscribeSizeChange(measure);
@@ -491,11 +553,18 @@ export function ExChart(p: ExChartProps) {
   useEffect(() => {
     const c = chart.current;
     if (!c) return;
-    // only the labels (and the right offset): applying the time scale's spacing options again would undo a fit
-    // just made (the bar spacing goes back to its default and the view scrolls to the end), as on a switch of interval
+    // only the labels: applying the time scale's spacing options again would undo a fit just made (the bar
+    // spacing goes back to its default and the view scrolls to the end), as on a switch of interval
     const o = chartOptions(touch, tz, step, p.rightOffset);
-    c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter, rightOffset: o.timeScale!.rightOffset }, localization: o.localization });
+    c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter }, localization: o.localization });
   }, [tz, step, touch, p.rightOffset]);
+  // the right offset only when the prop changes: setting it scrolls to the live edge
+  const offRef = useRef(p.rightOffset);
+  useEffect(() => {
+    if (p.rightOffset === offRef.current) return;
+    offRef.current = p.rightOffset;
+    chart.current?.timeScale().applyOptions({ rightOffset: p.rightOffset ?? (touch ? 3 : 5) });
+  }, [p.rightOffset, touch]);
 
   // ---- series: structure, options, data ----
   const structure = p.series.map((s) => `${s.key}:${s.kind}:${s.pane ?? 0}:${s.scale ?? ""}`).join("|");
@@ -503,6 +572,7 @@ export function ExChart(p: ExChartProps) {
   const dataRefs = useRef<unknown[]>([]);
   const needFit = useRef(true);
   const resetRef = useRef(p.resetKey);
+  const loadRef = useRef(!!p.loading);
 
   const fitView = useCallback(() => {
     const c = chart.current;
@@ -511,19 +581,36 @@ export function ExChart(p: ExChartProps) {
     for (const l of live.current.values()) n = Math.max(n, l.data?.length ?? 0);
     if (!n) return;
     const want = cbs.current.initialBars;
+    const right = cbs.current.rightOffset ?? (touch ? 3 : 5);
+    const ts = c.timeScale();
     const apply = () => {
-      if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
-      else c.timeScale().fitContent();
+      const v = cbs.current.view;
+      ts.applyOptions({ shiftVisibleRangeOnNewBar: !v });
+      if (v && "logical" in v) ts.setVisibleLogicalRange(v.logical);
+      else if (v) ts.setVisibleRange({ from: sec(v.time.from), to: sec(v.time.to) });
+      else if (want && n > want) ts.setVisibleLogicalRange({ from: n - want, to: n - 1 + right });
+      // all bars, the first one whole (fitContent cuts it at the left edge), `right` bars of room after the last
+      else ts.setVisibleLogicalRange({ from: -0.6, to: n - 1 + right });
     };
+    moved.current = false;
     apply();
     // the chart takes new data on its next frame and clamps a range set before it to the old bars, and a chart
-    // created with its data at hand is laid out (autoSize) a frame or two later: fit again after each
+    // created with its data at hand is laid out (autoSize) a frame or two later: fit again after each, unless the
+    // user has moved the view in between
     requestAnimationFrame(() => {
-      if (chart.current !== c) return;
+      if (chart.current !== c || moved.current) return;
       apply();
-      requestAnimationFrame(() => chart.current === c && apply());
+      requestAnimationFrame(() => chart.current === c && !moved.current && apply());
     });
   }, [touch]);
+  // a new view from the page: applied at once (and again over the next frames)
+  const viewKey = p.view ? JSON.stringify(p.view) : "";
+  const viewRef = useRef(viewKey);
+  useEffect(() => {
+    if (viewKey === viewRef.current) return;
+    viewRef.current = viewKey;
+    fitView();
+  }, [viewKey, fitView]);
 
   useLayoutEffect(() => {
     const c = chart.current;
@@ -573,9 +660,12 @@ export function ExChart(p: ExChartProps) {
       const pane = s.pane ?? 0;
       const lv = s.lastValue ?? (s.kind !== "histogram" && !firstInPane.has(pane));
       firstInPane.add(pane);
-      const sig = JSON.stringify([s.color, s.colors, s.width, s.lineStyle, s.base, lv, off(s.key), s.options, s.margins]);
+      const sig = JSON.stringify([s.color, s.colors, s.width, s.lineStyle, s.base, lv, off(s.key), s.options, s.margins, formatSig(s)]);
       if (sig !== l.sig) {
-        l.api.applyOptions(seriesOptions(s, lv, !off(s.key)) as never);
+        const o = seriesOptions(s, lv, !off(s.key));
+        // candles keep the precision their data set (below)
+        if (s.kind === "candles" && l.data?.length) o.priceFormat = { type: "custom", formatter: defaultFormat(s), minMove: minMoveFor((l.data[l.data.length - 1] as ExOhlc).close) };
+        l.api.applyOptions(o as never);
         if (s.margins) l.api.priceScale().applyOptions({ scaleMargins: s.margins });
         l.sig = sig;
       }
@@ -586,11 +676,13 @@ export function ExChart(p: ExChartProps) {
     const refs = p.series.map((s) => s.data);
     const dataSame = refs.length === dataRefs.current.length && refs.every((r, i) => r === dataRefs.current[i]);
     let wait = awaiting;
+    const loadDone = loadRef.current && !p.loading;
+    loadRef.current = !!p.loading;
     if (p.interval !== ivRef.current) {
       ivRef.current = p.interval;
       needFit.current = true;
       if (dataSame && refs.some((r) => r.length)) wait = true;
-    } else if (wait && !dataSame) wait = false;
+    } else if (wait && (!dataSame || loadDone)) wait = false;
     if (p.resetKey !== resetRef.current) {
       resetRef.current = p.resetKey;
       needFit.current = true;
@@ -634,6 +726,13 @@ export function ExChart(p: ExChartProps) {
     }
   });
 
+  // the wait for a new interval's data never outlasts 4 s: then it shows what there is
+  useEffect(() => {
+    if (!awaiting) return;
+    const id = setTimeout(() => setAwaiting(false), 4000);
+    return () => clearTimeout(id);
+  }, [awaiting]);
+
   // ---- markers (one plugin per series), hidden while bars are dense ----
   useLayoutEffect(() => {
     const map = live.current;
@@ -661,7 +760,8 @@ export function ExChart(p: ExChartProps) {
       if (!api) markersApi.current.set(k, (api = createSeriesMarkers(l.api, [], { autoScale: false })));
       api.setMarkers(list);
     }
-  }, [p.markers, dense, awaiting, p.loading, off, structure]);
+    // `drawn`: a marker whose bar came after it is placed once the bar is in
+  }, [p.markers, dense, awaiting, p.loading, off, structure, drawn]);
 
   // ---- price lines ----
   useLayoutEffect(() => {
@@ -776,6 +876,7 @@ export function ExChart(p: ExChartProps) {
       {hasToolbar && (
         <div className="ex-tb">
           <div className="ex-tb-scroll">
+            {p.inFullscreen && p.title != null && <span className="ex-fs-title">{p.title}</span>}
             {p.toolbarLeft}
             {!!p.intervals?.length && (
               <TextToggle className="ex-iv" label="Interval" options={p.intervals} value={p.interval ?? ""} onChange={(v) => p.onInterval?.(v)} />
@@ -815,7 +916,7 @@ export function ExChart(p: ExChartProps) {
             axisW={axisW}
           />
         )}
-        {touch && !showLoading && <ValueBox hov={hov} rows={boxRows} axisW={axisW} top={(paneTops[0] ?? 0) + 30} host={plot} />}
+        {touch && !showLoading && <ValueBox hov={hov} rows={boxRows} axisW={axisW} axisH={axisH} top={paneTops[0] ?? 0} host={plot} />}
         {showLoading ? (
           <div className="ex-center" style={{ right: axisW }}>
             Loading
@@ -842,7 +943,7 @@ export function ExChart(p: ExChartProps) {
       </div>
       {chipItems && <ChipRow items={chipItems} isOn={(k) => !off(k)} onToggle={toggle} />}
       {fs && !p.inFullscreen && (
-        <ChartFullscreen title={p.title} onClose={() => setFs(false)} routed={routed}>
+        <ChartFullscreen onClose={() => setFs(false)} routed={routed}>
           <ExChart {...p} inFullscreen onCloseFullscreen={() => setFs(false)} fullscreen={false} chartRef={undefined} />
         </ChartFullscreen>
       )}
@@ -1005,7 +1106,8 @@ const LegendLayer = memo(function LegendLayer({
                   )}
                   {shown.map((it, j) => {
                     const r = it.value(t);
-                    const [txt, col] = Array.isArray(r) ? r : [r, undefined];
+                    const [txt, c0] = Array.isArray(r) ? r : [r, undefined];
+                    const col = txt === MASK ? C.muted : c0;
                     const isOff = off(it.key);
                     return (
                       <span
@@ -1078,32 +1180,47 @@ function MoreIntervals({ options, value, onChange }: { options: Option[]; value:
 
 // ================================ touch value box ================================
 
+const BOX_ROW = 17;
+
 function ValueBox({
   hov,
   rows,
   axisW,
+  axisH,
   top,
   host,
 }: {
   hov: HoverStore;
   rows: (t: number) => ExBoxRow[];
   axisW: number;
+  axisH: number;
   top: number;
   host: { current: HTMLDivElement | null };
 }) {
   const h = useSyncExternalStore(hov.sub, hov.get);
   if (h.t == null) return null;
-  const w = host.current?.clientWidth ?? 0;
-  // on the side away from the finger
+  const el = host.current;
+  const w = el?.clientWidth ?? 0;
+  const ht = el?.clientHeight ?? 0;
+  // under the main pane's legend, so it never covers the legend lines
+  const lg = el?.querySelector<HTMLElement>(".ex-legend");
+  const y = Math.max(top + 4, lg ? lg.offsetTop + lg.offsetHeight + 4 : top + 30);
+  const list = rows(h.t);
+  // on the side away from the finger; two columns where one would not fit above the time axis (a phone held
+  // sideways)
   const left = h.x > (w - axisW) / 2;
+  const two = ht > 0 && y + list.length * BOX_ROW + 14 > ht - axisH;
   return (
-    <div className="ex-box fig" style={{ top, ...(left ? { left: 6 } : { right: axisW + 6 }) }}>
-      {rows(h.t).map(([l, v, c], i) => (
+    <div className={"ex-box fig" + (two ? " two" : "")} style={{ top: two ? Math.max(top + 4, Math.min(y, ht - axisH - Math.ceil(list.length / 2) * BOX_ROW - 16)) : y, ...(left ? { left: 6 } : { right: axisW + 6 }) }}>
+      {list.map(([l, v, c0], i) => {
+        const c = v === MASK ? C.muted : c0;
+        return (
         <div key={i}>
           <span>{l}</span>
           <span style={{ color: c ?? C.ink }}>{v}</span>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

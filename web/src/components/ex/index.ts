@@ -16,6 +16,7 @@ export {
   type ExMode,
   type ExValue,
   type ExBoxRow,
+  type ExView,
 } from "./ExChart";
 export { ChartFullscreen, goFullscreen, useLandscapeFullscreen } from "./fullscreen";
 export { Tabs, TextToggle, ChipRow, TickerStrip, TvAttribution, type Option, type Chip, type TickerItem, type Tone } from "./controls";

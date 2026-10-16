@@ -26,8 +26,17 @@
   border-bottom: 1px solid var(--rule);
 }
 .ex-chart.touch .ex-tb {
-  height: 40px;
+  height: 44px;
   padding: 0 4px 0 2px;
+}
+/* the chart's name in the fullscreen copy's toolbar (no header row of its own) */
+.ex-fs-title {
+  flex: none;
+  padding: 0 10px 0 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
 }
 .ex-tb-gap {
   flex: 1;
@@ -127,8 +136,8 @@
   color: var(--ink);
 }
 .ex-chart.touch .ex-icon {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
 }
 .ex-plot {
   position: relative;
@@ -194,6 +203,17 @@
 .ex-lg-l {
   color: var(--muted);
 }
+/* touch: legend items and the chevron take a 44 px tall target (padding over the plot, the text stays) */
+.ex-chart.touch .ex-lg-it.tog,
+.ex-chart.touch .ex-chev {
+  padding-block: 14px;
+  margin-block: -14px;
+}
+.ex-chart.touch .ex-chev {
+  width: 28px;
+  margin-left: -8px;
+  margin-right: -6px;
+}
 .ex-chev {
   width: 12px;
   flex: none;
@@ -232,6 +252,13 @@
 }
 .ex-box div span:first-child {
   color: var(--muted);
+}
+/* too tall for the plot (a phone held sideways): two columns */
+.ex-box.two {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 14px;
+  max-width: 70%;
 }
 
 .ex-center {
@@ -273,6 +300,12 @@
   width: 32px;
   height: 28px;
 }
+/* its target is 44 px square on touch */
+.ex-chart.touch .ex-live::after {
+  content: "";
+  position: absolute;
+  inset: -8px -6px;
+}
 
 /* ---------- text toggles (intervals, modes) ---------- */
 .ex-tt {
@@ -299,9 +332,17 @@
 .ex-tt button.on {
   color: var(--ink);
 }
+.ex-chart.touch .ex-tt {
+  gap: 2px;
+}
 .ex-chart.touch .ex-tt button {
   font-size: 13px;
-  padding: 8px 7px;
+  min-height: 44px;
+  min-width: 40px;
+  padding: 0 8px;
+}
+.ex-chart.touch .ex-more-btn {
+  min-height: 44px;
 }
 .ex-tt-div {
   width: 1px;
@@ -415,11 +456,24 @@
   background: #232a35;
   color: var(--ink);
 }
+.ex-chart.touch .ex-chips,
+.touch .ex-chips {
+  gap: 8px;
+  padding: 4px 8px;
+}
 .ex-chart.touch .ex-chip,
 .touch .ex-chip {
-  height: 32px;
+  position: relative;
+  height: 36px;
   padding: 0 12px;
   font-size: 13px;
+}
+/* a 44 px tall target around the 36 px chip */
+.ex-chart.touch .ex-chip::after,
+.touch .ex-chip::after {
+  content: "";
+  position: absolute;
+  inset: -4px -4px;
 }
 .ex-chip-sw {
   width: 10px;
@@ -590,6 +644,16 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+.ex-marq-l {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  padding: 0 8px 0 0;
+  background: var(--ground);
+  color: var(--muted);
 }
 .ex-marq-in {
   display: inline-flex;
@@ -666,4 +730,28 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* a phone held sideways in fullscreen: the plot gets the height; a slimmer toolbar and chip row */
+@media (orientation: landscape) and (max-height: 500px) {
+  .ex-fs .ex-chart.touch .ex-tb {
+    height: 36px;
+  }
+  .ex-fs .ex-chart.touch .ex-tt button,
+  .ex-fs .ex-chart.touch .ex-more-btn {
+    min-height: 36px;
+  }
+  .ex-fs .ex-chart.touch .ex-icon {
+    width: 40px;
+    height: 36px;
+  }
+  .ex-fs .ex-chart.touch .ex-chips {
+    padding: 2px 8px;
+  }
+  .ex-fs .ex-chart.touch .ex-chip {
+    height: 30px;
+  }
+  .ex-fs .ex-chart.touch .ex-chip::after {
+    inset: -2px -4px;
+  }
 }

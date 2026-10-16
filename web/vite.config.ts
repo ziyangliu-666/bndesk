@@ -88,8 +88,27 @@ function precompress(): Plugin {
   };
 }
 
+/** Lightweight Charts starts its touch tracking (the crosshair under a resting finger) after a fixed 240 ms; a thumb
+ *  that rests that long before a scroll got caught. Here it is 380 ms, close to the quote map's 320 ms. Fails the
+ *  build if the library's code no longer has the pattern (check the new version's long-tap delay). */
+const LONG_TAP_MS = 380;
+function longTap(): Plugin {
+  return {
+    name: "lwc-long-tap",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
+      const re = /(setTimeout\(this\.[\w$]+\.bind\(this,\s*\w+\),\s*)240(\s*(?:\/\* Delay\.LongTap \*\/)?\))/;
+      if (!re.test(code)) this.error("lwc-long-tap: the long-tap delay was not found in " + id);
+      return { code: code.replace(re, `$1${LONG_TAP_MS}$2`), map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), preloadDesk(), precompress()],
+  plugins: [longTap(), react(), preloadDesk(), precompress()],
+  // pre-bundled deps skip the transform above: the dev server serves this one as it is, through it
+  optimizeDeps: { exclude: ["lightweight-charts"] },
   // shown on the phone's More page
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
