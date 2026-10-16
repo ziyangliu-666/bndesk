@@ -97,7 +97,8 @@ function longTap(): Plugin {
     name: "lwc-long-tap",
     enforce: "pre",
     transform(code, id) {
-      if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
+      // the dev server asks with a ?v= query on the id; the build without
+      if (!/lightweight-charts[\\/]dist[\\/][^?]*\.m?js(\?.*)?$/.test(id)) return null;
       const re = /(setTimeout\(this\.[\w$]+\.bind\(this,\s*\w+\),\s*)240(\s*(?:\/\* Delay\.LongTap \*\/)?\))/;
       if (!re.test(code)) this.error("lwc-long-tap: the long-tap delay was not found in " + id);
       return { code: code.replace(re, `$1${LONG_TAP_MS}$2`), map: null };
@@ -113,7 +114,7 @@ function edgeLabels(): Plugin {
     name: "lwc-edge-labels",
     enforce: "pre",
     transform(code, id) {
-      if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
+      if (!/lightweight-charts[\\/]dist[\\/][^?]*\.m?js(\?.*)?$/.test(id)) return null;
       const re = /needAlignCoordinate\s*=\s*\(?\s*[\w$.]+\s*&&\s*([\w$.]+)\.index\s*<=\s*([\w$.]+)\s*\)?\s*\|\|\s*\(?\s*[\w$.]+\s*&&\s*\1\.index\s*>=\s*([\w$.]+)\s*\)?/;
       if (!re.test(code)) this.error("lwc-edge-labels: the time-mark alignment was not found in " + id);
       // aligning moves a label only when it would cross an edge: the inner ones stay where they are
