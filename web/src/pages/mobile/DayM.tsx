@@ -32,21 +32,35 @@ export function DayM({ date }: { date: string }) {
   const money = useAmt();
   // the day's start: today's, moved back by whole days
   const start = today ? dayStart - Math.round((Date.parse(today + "T00:00:00Z") - Date.parse(date + "T00:00:00Z")) / DAY) * DAY : 0;
-  if (!d) return <div className="r-empty">This day is not among the {days?.length ?? 0} the desk keeps.</div>;
   const live = date === today;
-  const kept = d.pnl_day != null;
+  const path = useDayPath(start, live);
+  const kept = d?.pnl_day != null;
+  // Day PnL as the History list has it: the desk's own figure, else the day's change on the equity history
+  const fromPath = path.pts.length ? path.pts[path.pts.length - 1]!.pnl : null;
+  const pnl = kept ? d!.pnl_day : fromPath;
+  if (!d && !path.pts.length) {
+    if (path.loading) return <DayPath start={start} path={path} />;
+    return <div className="r-empty">This day is not among the {days?.length ?? 0} the desk keeps.</div>;
+  }
   const h = (s: number) => num(s / 3600, 1);
 
   return (
     <>
       <Big
-        label={kept ? `Day PnL${live ? ", so far" : ""} (USDT)` : "Trading PnL (USDT)"}
-        value={<Amt v={kept ? d.pnl_day : d.trading} />}
-        sub={kept ? undefined : <>Day PnL was not recorded this day · ± {money(d.trading_se, "full")}</>}
+        label={`Day PnL${live ? ", so far" : ""} (USDT)`}
+        value={<Amt v={pnl} />}
+        sub={
+          kept ? undefined : pnl != null ? (
+            <>From the equity history: the split was not kept this day</>
+          ) : (
+            <>No Day PnL this day · Trading {money(d?.trading)} ± {money(d?.trading_se, "full")}</>
+          )
+        }
       />
-      <DayPath start={start} live={live} />
+      <DayPath start={start} path={path} />
+      {!d && <div className="r-empty">Only the equity history is kept for this day.</div>}
 
-      {kept && (
+      {d && kept && (
         <Sec title="Split" right="USDT">
           {PARTS.map((p) => (
             <Row
@@ -58,14 +72,14 @@ export function DayM({ date }: { date: string }) {
                   {p.label}
                 </>
               }
-              value={<Amt v={d[p.key]} />}
+              value={<Amt v={d![p.key]} />}
               onClick={() => showInfo(p.label, PART_INFO[p.key])}
             />
           ))}
         </Sec>
       )}
 
-      <Sec title="Hedged views" info={`Trading PnL: market making plus inventory PnL, fees included, not hedged. Ref-hedged and beta-hedged take off what the inventory would have made on its references, or on the beta instrument. ${DEF_SE}`} right="± likely error">
+      {d && <><Sec title="Hedged views" info={`Trading PnL: market making plus inventory PnL, fees included, not hedged. Ref-hedged and beta-hedged take off what the inventory would have made on its references, or on the beta instrument. ${DEF_SE}`} right="± likely error">
         <Stats
           cols={3}
           items={[
@@ -99,7 +113,7 @@ export function DayM({ date }: { date: string }) {
             },
           ]}
         />
-      </Sec>
+      </Sec></>}
     </>
   );
 }
@@ -116,10 +130,10 @@ function SeVal({ v, se }: { v: number | null; se: number | null }) {
 
 type PathPt = { time: number; pnl: number; mm: number | null; inv: number | null; hedge: number | null; reb: number | null };
 
-/** The day's PnL through the day, 5 min bars, with its parts as lines (chips). */
-function DayPath({ start, live }: { start: number; live: boolean }) {
-  const hide = useStore((s) => s.hideAmounts);
-  const money = useAmt();
+type DayPathLoad = { pts: PathPt[]; loading: boolean; err: string | null };
+
+/** The day's 5 min bars from /api/history: Day PnL from the day's start and its parts. */
+function useDayPath(start: number, live: boolean): DayPathLoad {
   const key = start ? `day|${start}` : null;
   const hist = useLoad<Hist>(
     key,
@@ -139,6 +153,14 @@ function DayPath({ start, live }: { start: number; live: boolean }) {
       reb: b.rebates,
     }));
   }, [data, start]);
+  return { pts, loading: hist.loading && !data, err: hist.err };
+}
+
+/** The day's PnL through the day, 5 min bars, with its parts as lines (chips). */
+function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
+  const hide = useStore((s) => s.hideAmounts);
+  const money = useAmt();
+  const pts = path.pts;
   const by = useMemo(() => new Map(pts.map((p) => [p.time, p])), [pts]);
   const series = useMemo<ExSeries[]>(() => {
     const fmt = hide ? () => MASK : (x: number) => amt(x, "pnl");
@@ -175,7 +197,6 @@ function DayPath({ start, live }: { start: number; live: boolean }) {
   return (
     <div className="r-chart">
       <ExChart
-        key={hide ? "h" : "s"}
         id="m-day"
         title="Day PnL"
         toolbarLeft={<span className="a-chart-t">Through the day, 5 min</span>}
@@ -183,8 +204,8 @@ function DayPath({ start, live }: { start: number; live: boolean }) {
         height={240}
         fullscreen
         chips
-        loading={hist.loading && !data}
-        emptyText={hist.err ? "Could not load the day's path" : "No path kept for this day"}
+        loading={path.loading}
+        emptyText={path.err ? "Could not load the day's path" : "No path kept for this day"}
         resetKey={start}
         boxRows={boxRows}
       />

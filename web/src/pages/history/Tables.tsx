@@ -2,9 +2,10 @@
 // hour today). Plain rows, figures coloured as text only.
 import type { ReactNode } from "react";
 import type { HistFill } from "../../api";
-import { compact, hm, int, num, price, qty, se, signClass, type TzMode } from "../../format";
+import { compact, hm, int, num, price, se, signClass, type TzMode } from "../../format";
+import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
-import { dayOf, sumDays, type DayRow, type Row } from "./data";
+import { dayOf, daySummary, sumDays, summaryNote, type DayRow, type Row } from "./data";
 
 export interface Col<R> {
   key: string;
@@ -84,17 +85,17 @@ export function Table<R>({
 
 const sg = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
 
-type PnlRow = { label: ReactNode; key: string; pnl: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
+type PnlRow = { label: ReactNode; key: string; split?: boolean; pnl: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
 
 function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: boolean): Col<PnlRow>[] {
-  const m = (s: string) => (hide ? "•••" : s);
+  const m = (s: string) => maskText(hide, s);
   const p = (k: "pnl" | "mm" | "inv" | "hedge" | "reb" | "other", label: string, title?: string): Col<PnlRow> => ({
     key: k,
     label,
     title,
     dot: k === "other",
     cell: (r) => m(sg(r[k])),
-    cls: (r) => "fig " + (hide ? "" : signClass(r[k])),
+    cls: (r) => "fig " + (hide ? "masked" : signClass(r[k])),
   });
   return [
     { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label },
@@ -106,14 +107,16 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     p("other", "Other", PART_META.other.title),
     {
       key: "pi",
-      label: "Π",
+      label: "Trading",
       dot: true,
       title: "Trading PnL: market making plus inventory PnL; the standard error is in each figure's tooltip",
-      cell: (r) => <span title={r.se != null ? se(r.se) + " (Newey–West standard error)" : undefined}>{m(sg(r.pi))}</span>,
-      cls: (r) => "fig " + (hide ? "" : signClass(r.pi)),
+      cell: (r) => (
+        <span title={r.split === false ? "No split kept this day: not in the total" : r.se != null ? se(r.se) + " (Newey–West standard error)" : undefined}>{m(sg(r.pi))}</span>
+      ),
+      cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : signClass(r.pi)),
     },
     { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig" },
-    { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (r) => compact(r.volume), cls: () => "fig" },
+    { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : "") },
   ];
 }
 
@@ -129,7 +132,9 @@ export function DeskDays({ rows, todayDay, selected, onDay, hide }: { rows: DayR
     ),
   }));
   const t = sumDays(rows);
-  const foot: PnlRow = { ...t, key: "total", label: rows.length === 1 ? "1 day" : `${rows.length} days` };
+  const sm = daySummary(rows, todayDay);
+  // the foot's Day PnL is the summary's total (the days with a Day PnL); its label says what it covers
+  const foot: PnlRow = { ...t, pnl: sm.total, key: "total", label: <span title={summaryNote(sm) + (sm.unsplit ? ` · the parts: the ${rows.length - sm.unsplit} days with a split` : "")}>{sm.days === 1 ? "1 day" : `${sm.days} days`}{sm.missing ? ` (+${sm.missing} without)` : ""}</span> };
   return (
     <Table
       cols={pnlCols("Day", "PnL day, newest first; the last row sums the days shown", "Day PnL", hide)}
@@ -186,28 +191,28 @@ function group(fills: HistFill[], keyOf: (t: number) => number, label: (t: numbe
   return [...m.values()].sort((a, b) => b.t - a.t);
 }
 
-const fillCols = (first: string, title: string): Col<FillGroup>[] => [
+const fillCols = (first: string, title: string, hide: boolean): Col<FillGroup>[] => [
   { key: "d", label: first, title, left: true, cell: (g) => g.label },
   { key: "f", label: "Fills", cell: (g) => int(g.fills), cls: () => "fig" },
   { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig up" },
   { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig down" },
-  { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (g) => compact(g.bn + g.sn), cls: () => "fig" },
+  { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (g) => maskText(hide, compact(g.bn + g.sn)), cls: () => "fig" + (hide ? " masked" : "") },
   { key: "ab", label: "Avg buy", cell: (g) => (g.bq > 0 ? price(g.bn / g.bq) : "--"), cls: () => "fig" },
   { key: "as", label: "Avg sell", cell: (g) => (g.sq > 0 ? price(g.sn / g.sq) : "--"), cls: () => "fig" },
-  { key: "n", label: "Net qty", title: "Bought minus sold, base asset", cell: (g) => qty(g.bq - g.sq, true), cls: (g) => "fig " + signClass(g.bq - g.sq) },
+  { key: "n", label: "Net qty", title: "Bought minus sold, base asset", cell: (g) => qtyText(g.bq - g.sq, hide, true), cls: (g) => "fig " + (hide ? "masked" : signClass(g.bq - g.sq)) },
 ];
 
-export function InstDays({ fills, dayStart }: { fills: HistFill[]; dayStart: number }) {
+export function InstDays({ fills, dayStart, hide }: { fills: HistFill[]; dayStart: number; hide: boolean }) {
   // a P&L day is named by the UTC date of its start, as the server names it
   const rows = group(fills, (t) => dayOf(t, dayStart), (t) => new Date(t).toISOString().slice(0, 10));
-  return <Table cols={fillCols("Day", "PnL day, newest first")} rows={rows} rowKey={(g) => g.key} empty="No fills in this range" />;
+  return <Table cols={fillCols("Day", "PnL day, newest first", hide)} rows={rows} rowKey={(g) => g.key} empty="No fills in this range" />;
 }
 
-export function InstHours({ fills, dayStart, tz }: { fills: HistFill[]; dayStart: number; tz: TzMode }) {
+export function InstHours({ fills, dayStart, tz, hide }: { fills: HistFill[]; dayStart: number; tz: TzMode; hide: boolean }) {
   const rows = group(
     fills.filter((f) => f.t >= dayStart),
     (t) => Math.floor(t / 3_600_000) * 3_600_000,
     (t) => hm(t, tz),
   );
-  return <Table cols={fillCols("Hour", tz === "utc" ? "Hour start, UTC" : "Hour start, local time")} rows={rows} rowKey={(g) => g.key} empty="No fills today" />;
+  return <Table cols={fillCols("Hour", tz === "utc" ? "Hour start, UTC" : "Hour start, local time", hide)} rows={rows} rowKey={(g) => g.key} empty="No fills today" />;
 }

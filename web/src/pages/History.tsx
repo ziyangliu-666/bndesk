@@ -5,11 +5,10 @@
 // The instrument is in the URL (#/history/<SYMBOL>/<venue>), a day too (#/day/<date> zooms to it); range,
 // interval and mode are remembered on this browser. Each load is keyed by what it was asked for and drawn only
 // under that key, so switching any of them clears the chart at once and shows the new bars when they land.
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { IChartApi, UTCTimestamp } from "lightweight-charts";
+import { useEffect, useMemo, useRef } from "react";
 import { navigate, useStore } from "../store";
 import type { Venue } from "../protocol";
-import { Tabs, TextToggle, useExHidden, useExPref, useKlines, type KInterval } from "../components/ex";
+import { Tabs, TextToggle, useExHidden, useExPref, useKlines, type ExView, type KInterval } from "../components/ex";
 import { DeskChart } from "./history/DeskChart";
 import { InstChart } from "./history/InstChart";
 import { InstrumentPicker } from "./history/Picker";
@@ -122,27 +121,13 @@ export function History() {
   const instRow = inst ? symbols?.find((s) => s.symbol === inst.symbol && s.venue === inst.venue) : undefined;
   const avgCost = instRow?.avg_cost ?? null;
 
-  // ---- zoom to a chosen day ----
-  const chart = useRef<IChartApi | null>(null);
-  const setChart = useCallback((c: IChartApi | null) => void (chart.current = c), []);
-  const loadedKey = inst ? "" : desk.loading ? "" : desk.key + "|" + iv;
-  useEffect(() => {
-    if (!focusDay || !loadedKey || !rows.length) return;
-    const r = days.find((d) => d.day === focusDay);
-    if (!r) return;
-    const id = requestAnimationFrame(() => {
-      const span = iv === "1w" ? 70 * DAY : iv === "1d" ? 10 * DAY : 0;
-      const a = (r.start - span) / 1000,
-        b = (r.start + DAY + span) / 1000;
-      try {
-        chart.current?.timeScale().setVisibleRange({ from: a as UTCTimestamp, to: b as UTCTimestamp });
-      } catch {
-        /* the chart is between data sets */
-      }
-    });
-    return () => cancelAnimationFrame(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusDay, loadedKey, rows.length > 0]);
+  // ---- zoom to a chosen day: the chart's view while a day is chosen (ExChart applies it after each load) ----
+  const focusStart = focusDay ? (days.find((d) => d.day === focusDay)?.start ?? null) : null;
+  const view = useMemo<ExView | null>(() => {
+    if (focusStart == null) return null;
+    const span = iv === "1w" ? 70 * DAY : iv === "1d" ? 10 * DAY : 0;
+    return { time: { from: focusStart - span, to: focusStart + DAY + span } };
+  }, [focusStart, iv]);
   const onDay = (day: string) => navigate({ page: "history", detail: { kind: "day", date: day } }, { push: false });
 
   // ---- toolbar ----
@@ -195,12 +180,12 @@ export function History() {
               toolbarLeft={rangeToggle}
               intervals={ivOptions}
               onInterval={(v) => setIv(v as HInterval)}
-              chartRef={setChart}
+              view={view}
+              hide={hide}
             />
           ) : (
             <DeskChart
-              // a new chart when amounts are hidden or shown: the axes take their format at creation
-              key={hide ? "desk-hidden" : "desk"}
+              key="desk"
               rows={rows}
               interval={iv}
               mode={mode}
@@ -212,7 +197,7 @@ export function History() {
               intervals={ivOptions}
               onInterval={(v) => setIv(v as HInterval)}
               modes={modes}
-              chartRef={setChart}
+              view={view}
               hide={hide}
             />
           )}
@@ -240,9 +225,9 @@ export function History() {
         <div className="hx-table-body">
           {inst ? (
             tab === "day" ? (
-              <InstDays fills={fills.fills} dayStart={dayStart ?? 0} />
+              <InstDays fills={fills.fills} dayStart={dayStart ?? 0} hide={hide} />
             ) : (
-              <InstHours fills={fills.fills} dayStart={dayStart ?? 0} tz={tz} />
+              <InstHours fills={fills.fills} dayStart={dayStart ?? 0} tz={tz} hide={hide} />
             )
           ) : tab === "day" ? (
             <DeskDays rows={days} todayDay={todayDay} selected={focusDay} onDay={onDay} hide={hide} />

@@ -397,3 +397,8 @@
   color: var(--ink-2);
   font-size: 11px;
 }
+.hx-note {
+  padding: 0 16px 10px;
+  font-size: 12px;
+  line-height: 16px;
+}

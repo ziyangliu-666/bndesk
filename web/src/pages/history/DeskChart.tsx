@@ -2,27 +2,26 @@
 // baseline area with the split as lines) or Candles (each bar's P&L since its day start); volume and the
 // inventory under it, each pane with its legend.
 import { useMemo, type ReactNode } from "react";
-import type { IChartApi } from "lightweight-charts";
-import { ExChart, rgba, signColor, UP, DOWN, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type Chip } from "../../components/ex";
+import { ExChart, rgba, signColor, UP, DOWN, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView, type Chip } from "../../components/ex";
+import { MASK, maskFormat } from "../../mask";
 import { REF_LINE } from "../../components/ex/palette";
 import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
 import { compact, num, int } from "../../format";
 import { PARTS, type HInterval, type Mode, type Part, type Row } from "./data";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style?: "dashed" | "dotted" }> = {
-  pi: { label: "Π", long: "Π", color: C.ink2, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
+  pi: { label: "Trading", long: "Trading PnL", color: C.ink2, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
   mm: { label: "MM", long: "Market making", color: MM_COLOR, title: "Market making: each fill against the mid 60 s later, minus fees" },
   inv: { label: "Inv", long: "Inventory PnL", color: INVPNL_COLOR, title: "Inventory PnL: what the held inventory made after those 60 s" },
   hedge: { label: "Hedge", long: "Hedge", color: HEDGE_COLOR, title: "Futures legs: price, fees, funding", style: "dashed" },
   reb: { label: "Reb", long: "Rebates", color: REBATE_COLOR, title: "Market-maker rebates" },
-  other: { label: "Other", long: "Other", color: "#6f7a8c", title: "What the split does not explain: day PnL − Π − hedge − rebates", style: "dotted" },
+  other: { label: "Other", long: "Other", color: "#6f7a8c", title: "What the split does not explain: Day PnL − trading − hedge − rebates", style: "dotted" },
 };
-/** The parts that add up to the P&L (Π is MM + Inv). */
+/** The parts that add up to the P&L (Trading is MM + Inv). */
 const STACK: Part[] = ["mm", "inv", "hedge", "reb", "other"];
 
 const sign2 = (v: number) => num(v, 2, true);
 const val2 = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
-const mask = () => "•••";
 
 // one cache per drawn series: a row object gives the same point object, so a live tick redraws only the tail
 const caches = new Map<string, WeakMap<Row, ExPoint | ExOhlc>>();
@@ -52,7 +51,7 @@ export function DeskChart({
   intervals,
   onInterval,
   modes,
-  chartRef,
+  view,
   hide,
 }: {
   rows: Row[];
@@ -66,14 +65,16 @@ export function DeskChart({
   intervals: { value: string; label: string }[];
   onInterval: (v: string) => void;
   modes: { label: string; options: { value: string; label: string; title?: string }[]; value: string; onChange: (v: string) => void }[];
-  chartRef: (c: IChartApi | null) => void;
+  /** A range the page zooms to (a chosen day). */
+  view: ExView | null;
   /** Hide amounts: the axis and legend figures read •••. */
   hide: boolean;
 }) {
-  const sgn = hide ? mask : sign2;
-  const val = hide ? (v: number | null | undefined) => (v == null ? "--" : "•••") : val2;
-  const amt = hide ? mask : (v: number) => num(v, 0);
-  const vol = hide ? mask : (v: number) => compact(v);
+  // Hide amounts: the axes, tags and legend read ••• (ExChart re-reads a format that prints otherwise)
+  const sgn = maskFormat(hide, sign2);
+  const val = (v: number | null | undefined) => (v == null ? "--" : hide ? MASK : val2(v));
+  const amt = maskFormat(hide, (v: number) => num(v, 0));
+  const vol = maskFormat(hide, (v: number) => compact(v));
   const stack = !hidden.includes("stack") && mode === "daily";
   const word = periodWord(interval);
   const pnlLabel = word === "Bar" ? "PnL" : `${word} PnL`;
@@ -95,7 +96,7 @@ export function DeskChart({
         signColor: true,
         lastValue: true,
         format: sgn,
-        data: points("d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })),
+        data: points(hide ? "d.pnl.h" : "d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: hide ? rgba(C.ink2, 0.5) : rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })),
       });
     } else if (mode === "daily") {
       // stacked: the positive parts upwards and the negative ones downwards, each bar drawn from the top of the
@@ -128,7 +129,7 @@ export function DeskChart({
         }
       }
       if (!out.length)
-        out.push({ key: "pnl", kind: "histogram", label: pnlLabel, toggle: false, signColor: true, format: sgn, data: points("d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })) });
+        out.push({ key: "pnl", kind: "histogram", label: pnlLabel, toggle: false, signColor: true, format: sgn, data: points(hide ? "d.pnl.h" : "d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: hide ? rgba(C.ink2, 0.5) : rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })) });
     } else if (mode === "cum") {
       out.push({ key: "cum", kind: "baseline", label: "Cumulative PnL", toggle: false, format: sgn, data: points("c.cum", rows, (r) => ({ time: r.t, value: r.cum })) });
       for (const k of PARTS) {
@@ -198,7 +199,7 @@ export function DeskChart({
       title: "Inventory plus futures notional",
       value: (t) => {
         const r = at(t);
-        return r && r.inventory != null && r.futures != null ? [hide ? "•••" : num(r.inventory + r.futures, 0, true), C.ink] : "--";
+        return r && r.inventory != null && r.futures != null ? [hide ? MASK : num(r.inventory + r.futures, 0, true), C.ink] : "--";
       },
     });
     return out;
@@ -241,7 +242,8 @@ export function DeskChart({
       chips={chips}
       initialBars={interval === "15m" ? 700 : undefined}
       resetKey={mode}
-      chartRef={chartRef}
+      rightOffset={1}
+      view={view}
     />
   );
 }

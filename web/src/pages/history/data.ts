@@ -313,7 +313,8 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
     const row: Row = {
       t: b.t,
       pnl: b.c - prevC,
-      cum: b.c,
+      // the running total from the range's start (the first bar opens at it), the same sum as the days' list
+      cum: b.c - (bars[0]?.o ?? 0),
       o: b.o - base,
       h: b.h - base,
       l: b.l - base,
@@ -334,11 +335,18 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
 
 // ================================ day rows (tables, calendar, summary) ================================
 
-/** A P&L day as the tables show it. `se`: Π's standard error when the desk kept it. */
+/**
+ * A P&L day as the tables, the calendar, the summaries and the phone show it. `pnl` is the Day PnL: the desk's
+ * own closing figure when it kept the day (`split`: the parts are there too), else the day's change on the
+ * equity history (/api/history's bars) with no split, else unknown (null: a day the desk has only its trading
+ * P&L for). `se`: the trading PnL's standard error when the desk kept it.
+ */
 export interface DayRow {
   day: string;
   start: number;
   pnl: number | null;
+  /** The desk kept the day's split (mm, inv, hedge, reb, other). */
+  split: boolean;
   mm: number | null;
   inv: number | null;
   hedge: number | null;
@@ -364,6 +372,7 @@ export function dayRows(snapDays: DayPnl[] | undefined, dayBars: HistBar[], days
       day,
       start: r.t,
       pnl: r.pnl,
+      split: r.bar.mm != null && r.bar.hedge != null && r.bar.reb != null,
       mm: r.bar.mm,
       inv: r.bar.inv,
       hedge: r.bar.hedge,
@@ -379,10 +388,13 @@ export function dayRows(snapDays: DayPnl[] | undefined, dayBars: HistBar[], days
   for (const d of snapDays ?? []) {
     const start = startOf.get(d.day) ?? byDay.get(d.day)?.start ?? Date.parse(d.day + "T00:00:00Z");
     if (start < from) continue;
+    const bar = byDay.get(d.day);
     byDay.set(d.day, {
       day: d.day,
       start,
-      pnl: d.pnl_day,
+      // a day kept without its Day PnL takes the equity history's figure (what the chart draws), if it has one
+      pnl: d.pnl_day ?? bar?.pnl ?? null,
+      split: d.pnl_day != null,
       mm: d.mm,
       inv: d.inventory,
       hedge: d.hedge,
@@ -397,10 +409,86 @@ export function dayRows(snapDays: DayPnl[] | undefined, dayBars: HistBar[], days
   return [...byDay.values()].filter((r) => r.start >= from).sort((a, b) => b.start - a.start);
 }
 
-/** Sums of day rows (null where no day had the figure); `se` combined as independent. */
-export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start"> {
+/**
+ * What a range of days adds up to, one way for every page (desktop History, phone History, the day page):
+ * `total` sums every day with a Day PnL, today's so far included (`today` says whether it is in); `finished`
+ * days (today left out, it is still moving) give `up`, `average`, `best` and `worst`. Days without a Day PnL
+ * (`missing`: only their trading P&L is known) count in none of them, and the pages say so.
+ */
+export interface DaySummary {
+  total: number | null;
+  /** Days in the range with a Day PnL (today included). */
+  days: number;
+  today: boolean;
+  finished: number;
+  up: number;
+  average: number | null;
+  best: DayRow | null;
+  worst: DayRow | null;
+  missing: number;
+  /** Days without the split (their parts are not in the split's sums). */
+  unsplit: number;
+  fills: number;
+  volume: number;
+}
+
+export function daySummary(rows: readonly DayRow[], todayDay: string | null): DaySummary {
+  let total: number | null = null;
+  let days = 0;
+  let today = false;
+  let finished = 0;
+  let sumDone = 0;
+  let up = 0;
+  let best: DayRow | null = null;
+  let worst: DayRow | null = null;
+  let missing = 0;
+  let unsplit = 0;
+  let fills = 0;
+  let volume = 0;
+  for (const r of rows) {
+    fills += r.fills;
+    volume += r.volume;
+    if (!r.split) unsplit++;
+    if (r.pnl == null) {
+      missing++;
+      continue;
+    }
+    total = (total ?? 0) + r.pnl;
+    days++;
+    if (r.day === todayDay) {
+      today = true;
+      continue;
+    }
+    finished++;
+    sumDone += r.pnl;
+    if (r.pnl > 0) up++;
+    if (!best || r.pnl > best.pnl!) best = r;
+    if (!worst || r.pnl < worst.pnl!) worst = r;
+  }
+  return { total, days, today, finished, up, average: finished ? sumDone / finished : null, best, worst, missing, unsplit, fills, volume };
+}
+
+/** "20 days, today so far included · 3 without Day PnL": what a summary covers, in words. */
+export function summaryNote(s: DaySummary): string {
+  const parts = [`${s.days} day${s.days === 1 ? "" : "s"}${s.today ? ", today so far included" : ""}`];
+  if (s.missing) parts.push(`${s.missing} without Day PnL, not counted`);
+  return parts.join(" · ");
+}
+
+/** The desk's days of a range: the snapshot's kept days and /api/history's day bars (desktop and phone alike). */
+export function useRangeDays(from: number | null): { rows: DayRow[]; todayDay: string | null; loading: boolean; error: string | null } {
+  const snapDays = useStore((s) => s.snap?.days);
+  const daily = useDeskHistory(86_400, from);
+  const rows = useMemo(() => (from == null ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
+  return { rows, todayDay: snapDays?.[snapDays.length - 1]?.day ?? null, loading: daily.loading, error: daily.error };
+}
+
+/** Sums of day rows (null where no day had the figure); `se` combined as independent. The parts (the split and
+ *  the trading PnL) sum the days with a split only, as the chart's running lines do (they start where the split
+ *  was first kept); the Day PnL sums every day that has one. */
+export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split"> {
   const s = (k: "pnl" | "mm" | "inv" | "hedge" | "reb" | "other" | "pi") => {
-    const xs = rows.map((r) => r[k]).filter((x): x is number => x != null);
+    const xs = (k === "pnl" ? rows : rows.filter((r) => r.split)).map((r) => r[k]).filter((x): x is number => x != null);
     return xs.length ? xs.reduce((a, x) => a + x, 0) : null;
   };
   const ses = rows.map((r) => r.se).filter((x): x is number => x != null);
@@ -444,9 +532,20 @@ export function useInstrumentFills(symbol: string | null, venue: Venue, from: nu
       let f = from;
       for (let i = 0; i < FILLS_PAGES; i++) {
         const page = await getJSON<HistFill[]>("/api/fills", { symbol, from: f, to }, ac.signal);
-        out.push(...page);
-        if (page.length < FILLS_PAGE) break;
-        f = page[page.length - 1]!.t + 1;
+        if (page.length < FILLS_PAGE) {
+          out.push(...page);
+          break;
+        }
+        // a full page may stop inside a millisecond: keep what is before it and ask again from that millisecond
+        const last = page[page.length - 1]!.t;
+        const before = page.filter((x) => x.t < last);
+        if (!before.length) {
+          out.push(...page); // one millisecond fills the page: nothing better to do
+          f = last + 1;
+          continue;
+        }
+        out.push(...before);
+        f = last;
       }
       if (cur.current === key) setSt({ key, to, fills: out.filter((x) => x.venue === venue) });
     })().catch(() => {

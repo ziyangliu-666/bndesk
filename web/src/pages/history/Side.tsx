@@ -4,9 +4,11 @@ import { useMemo } from "react";
 import type { HistFill } from "../../api";
 import type { Candle } from "../../components/ex";
 import type { SymbolRow } from "../../protocol";
-import { bps, compact, int, num, price, qty, signClass } from "../../format";
+import { bps, compact, int, num, price, signClass } from "../../format";
 import { PART_META } from "./DeskChart";
-import { sumDays, type DayRow, type Part } from "./data";
+import { daySummary, sumDays, summaryNote, type DayRow, type Part } from "./data";
+import { maskText, qtyText } from "../../mask";
+import { instPnl, useLegPnl } from "../../selectors";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
@@ -38,14 +40,14 @@ export function DeskSide({
   hide: boolean;
 }) {
   const tot = useMemo(() => sumDays(rows), [rows]);
-  const known = rows.filter((r) => r.pnl != null);
-  const up = known.filter((r) => r.pnl! > 0).length;
-  const ranked = known.slice().sort((a, b) => b.pnl! - a.pnl!);
+  // the same summary as the phone's: today counts in the total only; days without a Day PnL in none
+  const sm = useMemo(() => daySummary(rows, todayDay), [rows, todayDay]);
+  const ranked = rows.filter((r) => r.pnl != null && r.day !== todayDay).sort((a, b) => b.pnl! - a.pnl!);
   const best = ranked.length > 3 ? [...ranked.slice(0, 2), ...ranked.slice(-2)] : ranked;
   const parts: Part[] = ["mm", "inv", "hedge", "reb", "other", "pi"];
   const max = Math.max(1e-9, ...parts.filter((k) => k !== "pi").map((k) => Math.abs(tot[k] ?? 0)));
-  const m = (s: string) => (hide ? "•••" : s);
-  const tone = (v: number | null | undefined) => (hide ? "" : signClass(v));
+  const m = (s: string) => maskText(hide, s);
+  const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   return (
     <>
       <div className="hx-side-head">
@@ -53,13 +55,16 @@ export function DeskSide({
         <span className="muted">USDT</span>
       </div>
       <div className="hx-figs">
-        <Fig big label="PnL" value={m(sg(tot.pnl))} tone={tone(tot.pnl)} />
-        <Fig label="Average day" value={m(known.length ? sg(tot.pnl! / known.length) : "--")} tone={tone(tot.pnl)} />
-        <Fig label="Days up" value={known.length ? `${up} of ${known.length}` : "--"} />
-        <Fig label="Fills" value={rows.length ? int(tot.fills) : "--"} />
-        <Fig label="Volume" value={rows.length ? compact(tot.volume) : "--"} title="Filled notional, USDT" />
+        <Fig big label="PnL" value={m(sg(sm.total))} tone={tone(sm.total)} title={summaryNote(sm)} dot={sm.missing > 0} />
+        <Fig label="Average day" value={m(sg(sm.average))} tone={tone(sm.average)} title="Over the finished days (today left out)" />
+        <Fig label="Days up" value={sm.finished ? `${sm.up} of ${sm.finished}` : "--"} title="Finished days that made money, of the finished days with a Day PnL" />
+        <Fig label="Fills" value={rows.length ? int(sm.fills) : "--"} />
+        <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
       </div>
-      <div className="hx-sect">Split</div>
+      {sm.missing > 0 && <div className="hx-note muted">{sm.missing === 1 ? "1 day has" : `${sm.missing} days have`} no Day PnL (only trading PnL was kept): not in these figures.</div>}
+      <div className="hx-sect" title={sm.unsplit ? "The parts are kept only for the days the desk recorded its split" : undefined}>
+        Split{sm.unsplit > 0 && <span className="muted"> · {rows.length - sm.unsplit} of {rows.length} days</span>}
+      </div>
       <div className="hx-split">
         {parts.map((k) => {
           const v = tot[k];
@@ -119,10 +124,10 @@ function Calendar({ rows, todayDay, selected, onDay, hide }: { rows: DayRow[]; t
         disabled={!r}
         className={"hx-cal-c" + (r ? "" : " out") + (day === todayDay ? " today" : "") + (day === selected ? " on" : "")}
         onClick={() => r && onDay(day)}
-        title={r ? `${day}: ${sg(r.pnl)} USDT, ${int(r.fills)} fills` : day}
+        title={r ? `${day}: ${hide ? "" : sg(r.pnl) + " USDT, "}${int(r.fills)} fills` : day}
       >
         <i>{new Date(t).getUTCDate()}</i>
-        <b className={r && !hide ? signClass(r.pnl) : ""}>{future ? "" : r && r.pnl != null ? (hide ? "•••" : num(r.pnl, 0, true)) : "--"}</b>
+        <b className={r ? (hide ? "masked" : signClass(r.pnl)) : ""}>{future ? "" : r && r.pnl != null ? maskText(hide, num(r.pnl, 0, true)) : "--"}</b>
       </button>,
     );
   }
@@ -181,9 +186,11 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
   const net = s.buyQty - s.sellQty;
   const pnl = last != null && !loading ? s.sellNotional - s.buyNotional + net * last : null;
   const chg = first && last ? (last - first) / first : null;
-  const m = (x: string) => (hide ? "•••" : x);
-  const tone = (v: number | null | undefined) => (hide ? "" : signClass(v));
+  const m = (x: string) => maskText(hide, x);
+  const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   const dash = loading;
+  const legs = useLegPnl();
+  const tp = today ? instPnl(today, legs) : null;
   return (
     <>
       <div className="hx-side-head">
@@ -200,12 +207,12 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
           tone={tone(pnl)}
         />
         <Fig label="Fills" value={dash ? "--" : int(s.fills)} />
-        <Fig label="Volume" value={dash ? "--" : compact(s.buyNotional + s.sellNotional)} title="Filled notional, USDT" />
+        <Fig label="Volume" value={dash ? "--" : m(compact(s.buyNotional + s.sellNotional))} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
         <Fig label="Buys" value={dash ? "--" : int(s.buys)} tone="up" />
         <Fig label="Sells" value={dash ? "--" : int(s.sells)} tone="down" />
         <Fig label="Avg buy" value={s.buyQty > 0 ? price(s.buyNotional / s.buyQty) : "--"} />
         <Fig label="Avg sell" value={s.sellQty > 0 ? price(s.sellNotional / s.sellQty) : "--"} />
-        <Fig label="Net qty" value={dash ? "--" : qty(net, true)} title="Bought minus sold over the range, base asset" />
+        <Fig label="Net qty" value={dash ? "--" : qtyText(net, hide, true)} tone={hide ? "masked" : undefined} title="Bought minus sold over the range, base asset" />
         <Fig label="Maker" value={s.fills ? num((s.maker / s.fills) * 100, 0) + "%" : "--"} title="Share of the fills that were maker fills" />
       </div>
       <div className="hx-sect">Market over the range</div>
@@ -217,13 +224,13 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
       </div>
       <div className="hx-sect">Today</div>
       <div className="hx-figs">
-        <Fig label="Day PnL" value={m(sg(today?.trading_pnl))} tone={tone(today?.trading_pnl)} title="Trading PnL today: realized plus the inventory at mid, fees included" />
+        <Fig label="Trading PnL" value={m(sg(tp))} tone={tone(tp)} title="Today: market making + inventory PnL, fees included (a perp's: its hedge leg)" />
         <Fig label="Fills" value={today ? int(today.fills_day) : "--"} />
-        <Fig label="Inventory" value={today ? qty(today.inv_qty) : "--"} />
-        <Fig label="Value" value={m(today ? num(today.inv_value, 2) : "--")} />
+        <Fig label="Inventory" value={today ? qtyText(today.inv_qty, hide) : "--"} tone={hide ? "masked" : undefined} />
+        <Fig label="Value" value={m(today ? num(today.inv_value, 2) : "--")} tone={hide ? "masked" : undefined} />
         <Fig label="Avg cost" value={price(today?.avg_cost)} />
         <Fig dot label="Edge" value={today?.edge_bps == null ? "--" : bps(today.edge_bps) + " bps"} title="Edge at fill against fair, volume-weighted, bps" />
-        <Fig dot label="Markout 10s" value={today?.mk10_bps == null ? "--" : bps(today.mk10_bps) + " bps"} tone={signClass(today?.mk10_bps)} title="Each fill against the mid 10 s later, net of the reference's move, volume-weighted, bps" />
+        <Fig dot label="Markout 10 s" value={today?.mk10_bps == null ? "--" : bps(today.mk10_bps) + " bps"} tone={signClass(today?.mk10_bps)} title="Each fill against the mid 10 s later, net of the reference's move, volume-weighted, bps" />
         <Fig label="Spread" value={today?.spread_bps == null ? "--" : num(today.spread_bps, 1) + " bps"} />
       </div>
     </>

@@ -2,7 +2,6 @@
 // at our VWAP, hidden while the bars are dense; counts and prices in the legend), the market's volume with
 // ours, and what we bought net over the range.
 import { useMemo, useRef, type ReactNode } from "react";
-import type { IChartApi } from "lightweight-charts";
 import {
   ExChart,
   fillMarkers,
@@ -17,12 +16,14 @@ import {
   type ExPoint,
   type ExPriceLine,
   type ExSeries,
+  type ExView,
   type KInterval,
 } from "../../components/ex";
 import type { HistFill } from "../../api";
 import { C, INV_COLOR } from "../../theme";
 import { compact, price, qty } from "../../format";
 import type { HInterval } from "./data";
+import { maskFormat } from "../../mask";
 
 const KI: Record<HInterval, KInterval> = { "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w" };
 
@@ -37,7 +38,8 @@ export function InstChart({
   toolbarLeft,
   intervals,
   onInterval,
-  chartRef,
+  view,
+  hide,
 }: {
   symbol: string;
   bars: Candle[];
@@ -49,7 +51,9 @@ export function InstChart({
   toolbarLeft: ReactNode;
   intervals: { value: string; label: string }[];
   onInterval: (v: string) => void;
-  chartRef: (c: IChartApi | null) => void;
+  view: ExView | null;
+  /** Hide amounts: our notional and net quantity read •••. */
+  hide: boolean;
 }) {
   const kIv = KI[interval];
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
@@ -80,10 +84,10 @@ export function InstChart({
     () => [
       { key: "k", kind: "candles", label: symbol, data: bars, toggle: false, format: price },
       { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 1, data: volumePoints(bars, true), format: (v) => compact(v) },
-      { key: "ours", kind: "histogram", label: "Ours", pane: 1, data: ours, color: C.ink, format: (v) => compact(v) },
-      { key: "net", kind: "line", label: "Net qty", pane: 2, color: INV_COLOR, data: net, format: (v) => qty(v, true), lastValue: true },
+      { key: "ours", kind: "histogram", label: "Ours", pane: 1, data: ours, color: C.ink, format: maskFormat(hide, (v) => compact(v)) },
+      { key: "net", kind: "line", label: "Net qty", pane: 2, color: INV_COLOR, data: net, format: maskFormat(hide, (v) => qty(v, true)), lastValue: true },
     ],
-    [symbol, bars, ours, net],
+    [symbol, bars, ours, net, hide],
   );
 
   const legendExtra = useMemo<ExLegendItem[]>(
@@ -96,7 +100,7 @@ export function InstChart({
 
   const markers = useMemo(() => fillMarkers(byBar, "k"), [byBar]);
   const priceLines = useMemo<ExPriceLine[]>(
-    () => (avgCost ? [{ series: "k", key: "avg", price: avgCost, color: C.muted, title: "Avg cost", style: "large", labelColor: C.raised, labelTextColor: C.ink }] : []),
+    () => (avgCost ? [{ series: "k", key: "avg", price: avgCost, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink }] : []),
     [avgCost],
   );
   const chips: (Chip | "|")[] = [
@@ -128,7 +132,8 @@ export function InstChart({
       chips={chips}
       initialBars={interval === "15m" ? 700 : undefined}
       resetKey={symbol}
-      chartRef={chartRef}
+      rightOffset={interval === "1d" || interval === "1w" ? 1 : undefined}
+      view={view}
     />
   );
 }

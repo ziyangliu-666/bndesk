@@ -16,7 +16,8 @@ import {
   type ExBoxRow,
   type ExSeries,
 } from "../../components/ex";
-import type { DayPnl, SymbolRow } from "../../protocol";
+import type { SymbolRow } from "../../protocol";
+import { daySummary, rangeFrom, summaryNote, useRangeDays, type DayRow, type Range as HRange } from "../history/data";
 import { dayTitle } from "./index";
 import {
   Amt,
@@ -44,9 +45,7 @@ const RANGES: { value: Range; label: string }[] = [
 ];
 const OTHER = "#6b7484";
 
-/** A day's result: Day PnL, or Trading PnL on the old days kept before Day PnL was recorded. */
-const dayPnl = (d: DayPnl) => d.pnl_day ?? d.trading ?? 0;
-const dayMs = (d: DayPnl) => Date.parse(d.day + "T00:00:00Z");
+const RANGE_OF: Record<Range, HRange> = { "7": "7d", "30": "30d", "90": "90d", all: "all" };
 
 export function HistoryM() {
   const [tab, setTab] = useExPref<Tab>("m-hist", "tab", "desk", [
@@ -79,58 +78,34 @@ function DeskHistory() {
     "daily",
     "cum",
   ]);
-  const allDays = useThrottled(
-    useStore((s) => s.snap?.days),
-    1000,
-  );
   const hide = useStore((s) => s.hideAmounts);
   const money = useAmt();
-
-  // oldest first, the range's last n days
-  const days = useMemo(() => {
-    const xs = allDays ?? [];
-    return range === "all" ? xs : xs.slice(-Number(range));
-  }, [allDays, range]);
-  const todayKey = allDays?.[allDays.length - 1]?.day;
-
-  const sum = useMemo(() => {
-    let tot = 0;
-    let up = 0;
-    let fills = 0;
-    let best: DayPnl | null = null;
-    let worst: DayPnl | null = null;
-    let done = 0;
-    for (const d of days) {
-      const v = dayPnl(d);
-      tot += v;
-      fills += d.fills;
-      // today is not finished: it counts in the total, not among the days up, the best or the worst
-      if (d.day === todayKey) continue;
-      done++;
-      if (v > 0) up++;
-      if (!best || v > dayPnl(best)) best = d;
-      if (!worst || v < dayPnl(worst)) worst = d;
-    }
-    return { tot, up, done, fills, best, worst };
-  }, [days, todayKey]);
+  // the range's days, as the desktop History has them (the snapshot's kept days and the day bars of
+  // /api/history), summed the same way
+  const dayStart = useStore((s) => s.snap?.summary.day_start ?? null);
+  const from = dayStart == null ? null : rangeFrom(RANGE_OF[range], dayStart);
+  const { rows, todayDay: todayKey } = useRangeDays(from);
+  // oldest first
+  const days = useMemo(() => rows.slice().reverse(), [rows]);
+  const sum = useMemo(() => daySummary(rows, todayKey), [rows, todayKey]);
 
   const chart = useMemo(() => {
     const cum = view === "cum";
     const acc = { pnl: 0, pi: 0, mm: 0, inv: 0, hedge: 0, reb: 0, other: 0 };
     const pts = days.map((d) => {
-      const v = {
-        pnl: dayPnl(d),
-        pi: d.trading,
+      const v: Record<keyof typeof acc, number | null> = {
+        pnl: d.pnl,
+        pi: d.pi,
         mm: d.mm,
-        inv: d.inventory,
+        inv: d.inv,
         hedge: d.hedge,
-        reb: d.rebates,
+        reb: d.reb,
         other: d.other,
       };
       if (cum)
         for (const k of Object.keys(acc) as (keyof typeof acc)[])
           acc[k] += v[k] ?? 0;
-      return { time: dayMs(d), d, v: cum ? { ...acc } : v };
+      return { time: d.start, d, v: cum ? { ...acc } : v };
     });
     return { pts, by: new Map(pts.map((p) => [p.time, p])) };
   }, [days, view]);
@@ -172,7 +147,7 @@ function DeskHistory() {
             data: chart.pts.map((p) => ({
               time: p.time,
               value: p.v.pnl,
-              color: p.v.pnl >= 0 ? rgba(C.up, 0.85) : rgba(C.down, 0.85),
+              color: hide ? rgba(C.ink2, 0.5) : (p.v.pnl ?? 0) >= 0 ? rgba(C.up, 0.85) : rgba(C.down, 0.85),
             })),
           }
         : {
@@ -183,7 +158,7 @@ function DeskHistory() {
             format: fmt,
             data: chart.pts.map((p) => ({ time: p.time, value: p.v.pnl })),
           },
-      line("pi", "Π", C.ink2, { width: 1 }),
+      line("pi", "Trading", C.ink2, { width: 1 }),
       line("mm", "MM", MM_COLOR),
       line("inv", "Inv", INVPNL_COLOR),
       line("hedge", "Hedge", HEDGE_COLOR, { lineStyle: "dashed" }),
@@ -214,20 +189,15 @@ function DeskHistory() {
     ];
   };
 
-  const label =
-    range === "all"
-      ? `PnL, all ${days.length} days (USDT)`
-      : days.length < Number(range)
-        ? `PnL, ${days.length} days kept (USDT)`
-        : `PnL, last ${range} days (USDT)`;
-  const tradingOnly = days.filter((d) => d.pnl_day == null).length;
+  const label = range === "all" ? "PnL, all days (USDT)" : `PnL, last ${range} days (USDT)`;
 
   return (
     <>
       <div className="h-sum">
         <div className="h-sum-l">
           <div className="h-sum-label">{label}</div>
-          <Amt v={days.length ? sum.tot : null} className="h-sum-v" />
+          <Amt v={sum.total} className="h-sum-v" />
+          {rows.length > 0 && <div className="h-sum-note">{summaryNote(sum)}</div>}
         </div>
         <Stats
           cols={2}
@@ -236,23 +206,23 @@ function DeskHistory() {
             {
               label: "Days up",
               info: "Finished days that made money, of the finished days in the range. Today is still moving: it counts in the total, not here, nor as the best or worst day.",
-              value: sum.done ? `${sum.up} / ${sum.done}` : "--",
+              value: sum.finished ? `${sum.up} of ${sum.finished}` : "--",
             },
             {
               label: "Best day",
-              value: <Amt v={sum.best ? dayPnl(sum.best) : null} />,
+              value: <Amt v={sum.best?.pnl ?? null} />,
             },
-            { label: "Fills", value: days.length ? compact(sum.fills) : "--" },
+            { label: "Fills", value: rows.length ? compact(sum.fills) : "--" },
             {
               label: "Worst day",
-              value: <Amt v={sum.worst ? dayPnl(sum.worst) : null} />,
+              value: <Amt v={sum.worst?.pnl ?? null} />,
             },
           ]}
         />
       </div>
       <div className="r-chart">
         <ExChart
-          key={view + (hide ? ":h" : "")}
+          key={view}
           id={view === "cum" ? "m-hist-cum" : "m-hist-day"}
           title="Desk PnL"
           series={series}
@@ -280,7 +250,7 @@ function DeskHistory() {
               label: view === "cum" ? "Cumulative" : "Day PnL",
               color: C.up,
             },
-            { key: "pi", label: "Π", color: C.ink2 },
+            { key: "pi", label: "Trading", color: C.ink2 },
             { key: "mm", label: "MM", color: MM_COLOR },
             { key: "inv", label: "Inv", color: INVPNL_COLOR },
             { key: "hedge", label: "Hedge", color: HEDGE_COLOR },
@@ -294,13 +264,13 @@ function DeskHistory() {
 
       <Sec
         title="By day"
-        right={tradingOnly ? `${tradingOnly} older days: Trading PnL only` : "USDT"}
+        right={sum.missing ? `${sum.missing} without Day PnL` : "USDT"}
       >
         {days
           .slice()
           .reverse()
           .map((d) => (
-            <DayRow key={d.day} d={d} today={d.day === todayKey} />
+            <DayItem key={d.day} d={d} today={d.day === todayKey} />
           ))}
         {!days.length && <Empty>No days kept yet</Empty>}
       </Sec>
@@ -308,9 +278,8 @@ function DeskHistory() {
   );
 }
 
-function DayRow({ d, today }: { d: DayPnl; today: boolean }) {
+function DayItem({ d, today }: { d: DayRow; today: boolean }) {
   const money = useAmt();
-  const kept = d.pnl_day != null;
   return (
     <Row
       title={
@@ -320,11 +289,13 @@ function DayRow({ d, today }: { d: DayPnl; today: boolean }) {
         </>
       }
       sub={`${int(d.fills)} fills · Vol ${money(d.volume, "k")}`}
-      value={<Amt v={kept ? d.pnl_day : d.trading} />}
+      value={<Amt v={d.pnl} />}
       valueSub={
-        kept
-          ? `MM ${money(d.mm)} · Inv ${money(d.inventory)}`
-          : "Trading PnL only"
+        d.split
+          ? `MM ${money(d.mm)} · Inv ${money(d.inv)}`
+          : d.pnl != null
+            ? "No split kept"
+            : `Trading ${money(d.pi)} · no Day PnL`
       }
       to={{ page: "history", detail: { kind: "day", date: d.day } }}
     />
