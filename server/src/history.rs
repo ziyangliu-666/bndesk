@@ -1,8 +1,11 @@
 //! History endpoints: `/api/history`, `/api/fills`, `/api/klines`.
 //!
 //! Never on the desk's thread: SQLite reads run in `spawn_blocking` on a read-only connection to the desk's
-//! db (one per blocking thread, kept; WAL lets it read while the store writes). Klines are Binance's public
-//! ones, proxied in chunks of `CHUNK` bars; a chunk whose bars have all closed is cached in memory.
+//! db (one per blocking thread, kept; WAL lets it read while the store writes). The desk's P&L rows and each
+//! fill's time and notional are kept in memory once read, and each request reads only what was written since:
+//! on a small machine the db does not stay in the page cache, and reading the whole range from disk took half
+//! a minute. Klines are Binance's public ones, proxied in chunks of `CHUNK` bars; a chunk whose bars have all
+//! closed is cached in memory.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -65,6 +68,86 @@ pub struct Api {
     cache: Mutex<Cache>,
     /// After a 429 / 418: no kline request before this (epoch ms).
     blocked_until: AtomicI64,
+    mem: Arc<Mutex<Mem>>,
+    /// The store's retention (`keep_fine_days`, `keep_days`), ms: the in-memory rows are thinned alike.
+    keep_fine_ms: i64,
+    keep_ms: i64,
+}
+
+/// What `/api/history` reads, kept in memory: the desk rows (account "*") by time, thinned as the store
+/// thins them, and the fills' notional and count per minute. Every bar size is whole minutes on a
+/// minute-aligned anchor, so minute sums add up to any bar. A fill written again (same id) within
+/// `FILL_IDS_MS` replaces its earlier part.
+#[derive(Default)]
+struct Mem {
+    rows: Vec<DeskRow>,
+    minutes: HashMap<i64, (f64, i64)>,
+    ids: HashMap<String, (i64, f64)>,
+    fill_rowid: i64,
+    trimmed: i64,
+}
+
+/// Rows this recent are read again on each refresh: a row can be rewritten for the same time.
+const REREAD_MS: i64 = 120_000;
+/// How long a fill's id is remembered.
+const FILL_IDS_MS: i64 = 3 * DAY;
+const MIN: i64 = 60_000;
+
+impl Mem {
+    /// Reads what was written since the last call (everything, the first time).
+    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64) -> rusqlite::Result<()> {
+        let from = self.rows.last().map_or(i64::MIN, |r| r.t - REREAD_MS);
+        let new = desk_rows(c, from, i64::MAX)?;
+        let keep = self.rows.partition_point(|r| r.t < from);
+        self.rows.truncate(keep);
+        self.rows.extend(new);
+        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty FROM fills WHERE rowid > ? ORDER BY rowid")?;
+        let mut q = st.query([self.fill_rowid])?;
+        while let Some(r) = q.next()? {
+            self.fill_rowid = r.get(0)?;
+            let (id, ts, n): (String, Option<i64>, Option<f64>) = (r.get(1)?, r.get(2)?, r.get(3)?);
+            let Some(ts) = ts else { continue };
+            let n = n.unwrap_or(0.0);
+            if let Some((t0, n0)) = self.ids.get(&id).copied() {
+                let e = self.minutes.entry(t0 - t0.rem_euclid(MIN)).or_default();
+                e.0 -= n0;
+                e.1 -= 1;
+            }
+            if ts >= now - FILL_IDS_MS {
+                self.ids.insert(id, (ts, n));
+            }
+            let e = self.minutes.entry(ts - ts.rem_euclid(MIN)).or_default();
+            e.0 += n;
+            e.1 += 1;
+        }
+        if now - self.trimmed > 3_600_000 {
+            self.trimmed = now;
+            self.ids.retain(|_, v| v.0 >= now - FILL_IDS_MS);
+            let (fine, old) = (now - keep_fine_ms, now - keep_ms);
+            self.rows.retain(|r| r.t >= old && (r.t >= fine || r.t % MIN == 0));
+            self.minutes.retain(|t, _| *t >= old);
+        }
+        Ok(())
+    }
+
+    fn rows(&self, from: i64, to: i64) -> Vec<DeskRow> {
+        let a = self.rows.partition_point(|r| r.t < from);
+        let b = self.rows.partition_point(|r| r.t < to);
+        self.rows[a..b].to_vec()
+    }
+
+    /// Bar start -> (Σ notional, fills) over the fills in [from, to) (to the minute).
+    fn flows(&self, from: i64, to: i64, step_ms: i64, anchor: i64) -> HashMap<i64, (f64, i64)> {
+        let mut out: HashMap<i64, (f64, i64)> = HashMap::new();
+        for (&t, &(n, k)) in &self.minutes {
+            if t >= from - from.rem_euclid(MIN) && t < to && k > 0 {
+                let e = out.entry(bar_of(t, step_ms, anchor)).or_default();
+                e.0 += n;
+                e.1 += k;
+            }
+        }
+        out
+    }
 }
 
 impl Api {
@@ -82,7 +165,41 @@ impl Api {
             fapi: fapi.into(),
             cache: Mutex::default(),
             blocked_until: AtomicI64::new(0),
+            mem: Arc::default(),
+            keep_fine_ms: 7 * DAY,
+            keep_ms: 365 * DAY,
         })
+    }
+
+    pub fn retention(mut self: Arc<Self>, keep_fine_days: f64, keep_days: f64) -> Arc<Self> {
+        if let Some(a) = Arc::get_mut(&mut self) {
+            a.keep_fine_ms = (keep_fine_days * DAY as f64) as i64;
+            a.keep_ms = (keep_days * DAY as f64) as i64;
+        }
+        self
+    }
+
+    /// Reads the history into memory ahead of the first request (the first read is the slow one).
+    pub fn warm(self: &Arc<Self>) {
+        let api = self.clone();
+        tokio::spawn(async move {
+            let t0 = std::time::Instant::now();
+            match api.with_mem(|m| m.rows.len()).await {
+                Ok(n) => tracing::info!("history in memory: {n} rows in {:.1} s", t0.elapsed().as_secs_f64()),
+                Err(e) => tracing::warn!("history warm-up: {}", e.1),
+            }
+        });
+    }
+
+    /// `f` on the in-memory history, brought up to date first.
+    async fn with_mem<R: Send + 'static>(&self, f: impl FnOnce(&Mem) -> R + Send + 'static) -> Result<R, ApiError> {
+        let (mem, fine, keep) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms);
+        blocking(self, move |c| {
+            let mut m = mem.lock().unwrap();
+            m.refresh(c, now_ms(), fine, keep)?;
+            Ok(f(&m))
+        })
+        .await
     }
 
     fn cache_get(&self, k: &CacheKey) -> Option<Arc<Vec<Kline>>> {
@@ -252,17 +369,6 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
             mm: r.get(7)?,
             rebates: r.get(8)?,
         })
-    })?
-    .collect()
-}
-
-/// Bar start -> (Σ price × qty, fills) over every fill in [from, to).
-fn fill_flows(c: &Connection, from: i64, to: i64, step_ms: i64, anchor: i64) -> rusqlite::Result<HashMap<i64, (f64, i64)>> {
-    let mut st = c.prepare(
-        "SELECT ts - (((ts - ?1) % ?2) + ?2) % ?2 AS b, SUM(price * qty), COUNT(*) FROM fills \
-         WHERE ts >= ?3 AND ts < ?4 GROUP BY b")?;
-    st.query_map([anchor, step_ms, from, to], |r| {
-        Ok((r.get::<_, i64>(0)?, (r.get::<_, Option<f64>>(1)?.unwrap_or(0.0), r.get::<_, i64>(2)?)))
     })?
     .collect()
 }
@@ -460,8 +566,7 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
     let (from, to) = range(&q, DAY)?;
     let from = from.max(to - MAX_BARS * sm);
     let dsm = api.day_start_min;
-    let (rows, flows) =
-        blocking(&api, move |c| Ok((desk_rows(c, from, to)?, fill_flows(c, from, to, sm, dsm * 60_000)?))).await?;
+    let (rows, flows) = api.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
     let h = P::History { step, bars: bars(&rows, &flows, sm, dsm), days: days(from, to, dsm) };
     Ok(json(&h))
 }
@@ -577,6 +682,34 @@ mod tests {
         assert_eq!(r, [DeskRow { t: 5000, pnl_day: 2.0, inventory: 3.0, futures: 4.0, ..Default::default() }]);
     }
 
+    #[test]
+    fn memory_reads_only_what_is_new_and_a_rewritten_fill_once() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("m.db");
+        let c = Connection::open(&p).unwrap();
+        c.execute_batch(crate::store::SCHEMA).unwrap();
+        let eq = |t: i64, pnl: f64| c.execute("INSERT OR REPLACE INTO equity (t, account, pnl_day) VALUES (?, '*', ?)", rusqlite::params![t, pnl]).unwrap();
+        let fill = |id: &str, ts: i64, px: f64| c.execute(
+            "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty) VALUES (?, ?, 'a', 'X', 'spot', 'buy', ?, 1.0)",
+            rusqlite::params![id, ts, px]).unwrap();
+        let now = 10 * DAY;
+        eq(now - 300_000, 1.0);
+        eq(now - 60_000, 2.0);
+        fill("f1", now - 290_000, 5.0);
+        let mut m = Mem::default();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY).unwrap();
+        assert_eq!(m.rows.len(), 2);
+        eq(now - 60_000, 3.0); // rewritten
+        eq(now, 4.0);
+        fill("f1", now - 290_000, 7.0); // written again
+        fill("f2", now - 10_000, 1.0);
+        m.refresh(&c, now, 7 * DAY, 365 * DAY).unwrap();
+        assert_eq!(m.rows.iter().map(|r| r.pnl_day).collect::<Vec<_>>(), [1.0, 3.0, 4.0]);
+        let f = m.flows(now - DAY, now + 1, 3_600_000, 0);
+        assert_eq!(f.values().map(|v| v.1).sum::<i64>(), 2);
+        assert_eq!(f.values().map(|v| v.0).sum::<f64>(), 8.0);
+    }
+
     async fn fake_binance(hits: Arc<AtomicUsize>) -> String {
         async fn k(State(hits): State<Arc<AtomicUsize>>, Query(q): Params) -> Response {
             hits.fetch_add(1, Ordering::SeqCst);
@@ -621,7 +754,7 @@ mod tests {
         let fake = fake_binance(hits.clone()).await;
         let hub = Hub::new();
         let h = hub.handle();
-        let api = Api::with_bases(db.clone(), 0, &fake, &fake);
+        let api = Api::with_bases(db.clone(), 0, &fake, &fake).retention(3650.0, 3650.0);
         let srv = serve(&h, make_app(&h, None, dir.path().to_path_buf(), api), "127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", srv.addr);
         let get = |p: String| reqwest::get(format!("{base}{p}"));

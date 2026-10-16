@@ -1349,7 +1349,9 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let history = {
         let d = desk.borrow();
         crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min)
+            .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
     };
+    history.warm();
     let app = server::make_app(&handle, auth, server::web_dist(), history);
     let srv = server::serve(&handle, app, &listen).await.with_context(|| format!("listen {listen}"))?;
     info!("listening on http://{} (simulate={simulate})", srv.addr);

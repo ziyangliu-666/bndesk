@@ -218,7 +218,10 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   its value now (days without rows add nothing), less each series' first value in the range, so it starts
   at 0 even when the range starts mid-day. o/h/l/c of that cumulative day PnL; pi (Π), realized,
   hedge: the bar's last non-null cumulative value; inventory, futures: the bar's last row; volume (Σ price
-  × qty) and fills over every fill, spot and USD-M. Bars without equity rows are left out.
+  × qty) and fills over every fill, spot and USD-M. Bars without equity rows are left out. The desk rows
+  and per-minute fill sums are kept in memory (read once at start, then only what was written since,
+  thinned like the store), so a request does not read the db: on a small machine it does not stay in
+  the page cache, and a month of rows took 30 s from disk.
 - `GET /api/fills?symbol&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` optional.
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
   (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 5000 (the latest).
