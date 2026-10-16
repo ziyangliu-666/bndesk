@@ -233,7 +233,7 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
 - `GET /api/fills?symbol&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` optional.
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
   (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 5000 (the latest).
-  `venue` spot (default) or usdm; `interval` 1m (default), 5m, 15m, 1h, 4h, 1d; `symbol` [A-Z0-9]{2,20}.
+  `venue` spot (default) or usdm; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
   Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
   400, a 429 / 418 a 503 until its Retry-After.
 

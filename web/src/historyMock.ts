@@ -289,22 +289,68 @@ function minuteBar(p: Path, m: number, basis: number): [number, number, number, 
   return [o, h, l, c];
 }
 
-const STEP: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
+const STEP: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080 };
+/** Binance's weeks open on Monday 00:00 UTC; the epoch was a Thursday. */
+const WEEK_OFF = 4 * DAY;
+const HOUR = 3_600_000;
+/** How far back the long intervals go (the minute path covers the last 20 days). */
+const BACK_H = 3 * 365 * 24;
 
 /** A symbol the mock's snapshot carries: others have no klines or fills (a real server has none for them). */
 const tracked = (symbol: string) => useStore.getState().snap?.symbols.some((s) => s.symbol === symbol) ?? false;
+
+/** Before the minute path: log price at each hour back from ORIGIN (index k = k hours before), 0 at ORIGIN. */
+const back = new Map<string, Float64Array>();
+function backPath(p: Path): Float64Array {
+  let a = back.get(String(p.seed));
+  if (!a) {
+    a = new Float64Array(BACK_H + 1);
+    // a slow drift up over the years, as the market had, with ~0.45 % an hour of noise
+    for (let k = 1; k <= BACK_H; k++) a[k] = a[k - 1]! - gauss(k, p.seed + 40) * 0.0045 - 0.00002;
+    back.set(String(p.seed), a);
+  }
+  return a;
+}
 
 function klines(symbol: string, venue: string, interval: string, from: number, to: number): Kline[] {
   if (!tracked(symbol)) return [];
   const p = path(symbol);
   const basis = venue === "usdm" ? 1.0002 : 1;
   const sm = STEP[interval] ?? 1;
-  const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN / sm) * sm);
-  const m1 = Math.min(p.n - 1, Math.floor((to - ORIGIN) / MIN));
+  const ms = sm * MIN;
+  const align = (t: number) => (interval === "1w" ? Math.floor((t - WEEK_OFF) / ms) * ms + WEEK_OFF : Math.floor(t / ms) * ms);
   const notional = 40_000 / Math.exp(p.anchor);
   const out: Kline[] = [];
-  for (let s = m0; s <= m1; s += sm) {
-    const e = Math.min(m1, s + sm - 1);
+  const first = align(ORIGIN) < ORIGIN ? align(ORIGIN) + ms : align(ORIGIN);
+
+  // long intervals reach back before the minute path: bars from an hourly walk that ends at its first price
+  if (ms >= 4 * HOUR && from < ORIGIN) {
+    const bp = backPath(p);
+    const p0 = minuteBar(p, 0, basis)[0];
+    const at = (t: number) => p0 * Math.exp(bp[Math.min(BACK_H, Math.max(0, Math.round((ORIGIN - t) / HOUR)))]!);
+    for (let t = align(Math.max(from, ORIGIN - BACK_H * HOUR)); t < first && t <= to; t += ms) {
+      const o = at(t);
+      const end = Math.min(t + ms, ORIGIN);
+      let h = o;
+      let l = o;
+      for (let u = t + HOUR; u <= end; u += HOUR) {
+        const x = at(u);
+        if (x > h) h = x;
+        if (x < l) l = x;
+      }
+      const c = at(end);
+      const k = Math.round((ORIGIN - t) / HOUR);
+      h *= 1 + Math.abs(gauss(k, p.seed + 41)) * 0.004;
+      l *= 1 - Math.abs(gauss(k, p.seed + 42)) * 0.004;
+      out.push([t, o, h, l, c, (end - t) / MIN * (0.4 + hash(k, p.seed + 43)) * notional]);
+    }
+  }
+
+  const m1 = Math.min(p.n - 1, Math.floor((to - ORIGIN) / MIN));
+  for (let t = Math.max(first, align(Math.max(from, ORIGIN))); ; t += ms) {
+    const s = Math.max(0, minuteOf(t));
+    if (s > m1 || t > to) break;
+    const e = Math.min(m1, minuteOf(t + ms) - 1);
     let [o, h, l, c] = minuteBar(p, s, basis);
     let v = 0;
     for (let m = s; m <= e; m++) {
@@ -314,9 +360,37 @@ function klines(symbol: string, venue: string, interval: string, from: number, t
       c = b[3];
       v += p.vol[m]! * notional;
     }
-    out.push([ORIGIN + s * MIN, o, h, l, c, v]);
+    out.push([t, o, h, l, c, v]);
   }
   return out;
+}
+
+/** Binance's 24h rolling stats for an instrument (its `<sym>@miniTicker`), from the mock's minute path: the
+ *  last close, the close 24 h ago, the high and low, and the base and quote volume. Null for an instrument the
+ *  mock does not carry. */
+export function mockTicker24h(symbol: string, venue: string): { last: number; open: number; high: number; low: number; volume: number; quoteVolume: number } | null {
+  if (!tracked(symbol)) return null;
+  const p = path(symbol);
+  const basis = venue === "usdm" ? 1.0002 : 1;
+  const m1 = p.n - 1;
+  const m0 = Math.max(0, m1 - 1439);
+  const notional = 40_000 / Math.exp(p.anchor);
+  const open = minuteBar(p, m0, basis)[0];
+  let high = open;
+  let low = open;
+  let volume = 0;
+  let quoteVolume = 0;
+  let last = open;
+  for (let m = m0; m <= m1; m++) {
+    const b = minuteBar(p, m, basis);
+    if (b[1] > high) high = b[1];
+    if (b[2] < low) low = b[2];
+    last = b[3];
+    const v = p.vol[m]! * notional * (venue === "usdm" ? 6 : 1);
+    volume += v;
+    quoteVolume += v * b[3];
+  }
+  return { last, open, high, low, volume, quoteVolume };
 }
 
 const ACCTS = ["sub-a", "sub-b", "sub-c", "sub-d"];

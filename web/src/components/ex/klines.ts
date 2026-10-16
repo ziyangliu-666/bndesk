@@ -19,9 +19,8 @@ export const INTERVAL_MS: Record<KInterval, number> = {
   "1w": 604_800_000,
 };
 
-/** The intervals the server proxies (server/src/history.rs INTERVALS). The others are built here from a finer
- *  one: 30m from 15m, 1w from 1d. (TODO server: add 30m and 1w to INTERVALS, then drop DERIVED.) */
-const SERVER: ReadonlySet<KInterval> = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
+/** Every interval comes from the server (server/src/history.rs INTERVALS). A server from before 30m and 1w were
+ *  added answers 400 to them: they are then built here from a finer one, 30m from 15m and 1w from 1d. */
 const DERIVED: Partial<Record<KInterval, KInterval>> = { "30m": "15m", "1w": "1d" };
 
 /** Monday 00:00 UTC is a week's start (Binance); the epoch was a Thursday. */
@@ -124,15 +123,21 @@ export function useKlines(symbol: string | null, venue: Venue, interval: KInterv
       });
 
     // ---- history ----
-    const base = SERVER.has(interval) ? interval : DERIVED[interval]!;
     const to = serverNow();
     const from = to - n * step;
     setSt({ key, bars: [], error: null, live: null });
-    getJSON<Kline[]>("/api/klines", { symbol, venue, interval: base, from, to }, ac.signal)
-      .then((ks) => {
+    const load = (iv: KInterval) => getJSON<Kline[]>("/api/klines", { symbol, venue, interval: iv, from, to }, ac.signal);
+    load(interval)
+      .then(
+        (ks) => ks.map(fromKline),
+        (e: unknown) => {
+          const base = DERIVED[interval];
+          if (!base || !(e instanceof Error) || !e.message.startsWith("400")) throw e;
+          return load(base).then((ks) => aggregate(ks.map(fromKline), interval));
+        },
+      )
+      .then((bars) => {
         if (done) return;
-        let bars = ks.map(fromKline);
-        if (base !== interval) bars = aggregate(bars, interval);
         setSt({ key, bars, error: bars.length ? null : "No klines for this instrument", live: null });
       })
       .catch((e: unknown) => {

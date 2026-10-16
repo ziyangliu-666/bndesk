@@ -30,8 +30,10 @@ pub const STEPS: [i64; 6] = [60, 300, 900, 3600, 14400, 86400];
 /// Bars at most per response (history and klines); a longer range keeps its latest part.
 pub const MAX_BARS: i64 = 25_000;
 pub const MAX_FILLS: i64 = 20000;
-pub const INTERVALS: [(&str, i64); 6] = [
-    ("1m", 60_000), ("5m", 300_000), ("15m", 900_000), ("1h", 3_600_000), ("4h", 14_400_000), ("1d", 86_400_000),
+/// Kline intervals `/api/klines` proxies (Binance's names; a week opens on Monday 00:00 UTC, which Binance aligns).
+pub const INTERVALS: [(&str, i64); 8] = [
+    ("1m", 60_000), ("5m", 300_000), ("15m", 900_000), ("30m", 1_800_000), ("1h", 3_600_000), ("4h", 14_400_000),
+    ("1d", 86_400_000), ("1w", 604_800_000),
 ];
 /// Klines per Binance request and per cache entry (spot allows 1000, USD-M 1500; 1000 costs USD-M weight 5, not 10).
 const CHUNK: i64 = 1000;
@@ -793,6 +795,12 @@ mod tests {
         let q = format!("/api/klines?symbol=XUSDT&interval=1m&from=0&to={}", now_ms());
         let v: Vec<Vec<f64>> = get(q).await.unwrap().json().await.unwrap();
         assert_eq!(v.len(), MAX_BARS as usize);
+        // 30m and 1w pass through under Binance's names
+        for (name, iv) in [("30m", 1_800_000_i64), ("1w", 604_800_000)] {
+            let q = format!("/api/klines?symbol=XUSDT&interval={name}&from=0&to={}", 9 * iv);
+            let v: Vec<Vec<f64>> = get(q).await.unwrap().json().await.unwrap();
+            assert_eq!((v.len(), v[1][0]), (10, iv as f64), "{name}");
+        }
         for (q, code) in [("symbol=NOPE&interval=1m", 400), ("symbol=XUSDT&interval=2m", 400),
                           ("symbol=XUSDT&venue=coinm", 400), ("interval=1m", 400), ("symbol=A&interval=1m", 400)] {
             assert_eq!(get(format!("/api/klines?{q}")).await.unwrap().status(), code, "{q}");

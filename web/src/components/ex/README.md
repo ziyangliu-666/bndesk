@@ -85,7 +85,8 @@ instrument plot about 360 + 80 px, and fullscreen takes everything (use `fill` i
 `useKlines(symbol, venue, interval, { bars = 500, stream = true })` returns `{ bars, loading, error, live }`:
 
 - History comes from `/api/klines`. In mock mode, `historyMock` generates bars around the instrument's mid.
-- `30m` and `1w` are built here from `15m` and `1d`. Weeks start on Monday 00:00 UTC.
+- `30m` and `1w` come from the server too. When an older server answers 400, they are built here from `15m`
+  and `1d`. Weeks start on Monday 00:00 UTC.
 - The forming candle follows Binance's public `<sym>@kline_<i>` stream: spot on `stream.binance.com:9443/ws`,
   USD-M on `fstream.binance.com/market/ws`. When that stream is quiet, it falls back to the store's mid for
   the instrument, which it reads at most four times a second.
@@ -114,9 +115,16 @@ Helpers: `barStart(ms, interval)`, `aggregate(bars, interval)` and `INTERVAL_MS`
 `267.20M`, `1.23B`. Existing callers of `usd` and `usdShort` keep their lowercase `k` and `m` until their
 page is redone.
 
-## Open
+## 24h ticker
 
-- Server: add `30m` and `1w` to `INTERVALS` in `server/src/history.rs`, then remove `DERIVED` in
-  `klines.ts`.
-- Phone fullscreen route `#/chart/<id>`: this needs a route in `store.ts`. Until then the overlay keeps its
-  own Back entry, as a sheet does.
+`useTicker24h(symbol, venue)` returns Binance's rolling 24 h stats (`last open high low volume quoteVolume
+change changePct t`) or null until the first message. The data comes from the public `<sym>@miniTicker` stream:
+one combined-stream socket per venue (`stream.binance.com:9443/stream`, USD-M `fstream.binance.com/market/stream`)
+serves every subscriber, and instruments are added and dropped with SUBSCRIBE and UNSUBSCRIBE. For a list, use
+`useTickers24h(list)`, which returns a Map keyed by `tickerKey(symbol, venue)`. Outside React, use
+`watchTicker24h`. In mock mode the stats come from `historyMock.mockTicker24h`.
+
+## Fullscreen route
+
+An ExChart with an `id` opens its fullscreen through the store (`openChart(id)`, `#/chart/<id>`). Back closes it,
+and a reload brings it back over the page it was opened from.
