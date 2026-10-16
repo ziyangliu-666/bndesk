@@ -486,6 +486,27 @@ pub struct AccountSeries {
     pub pnl_day: Vec<f64>,
 }
 
+/// Today's desk at one minute, as columns: each minute's last 5 s point (minute start `t`), the notional
+/// filled in it. Money rounded to cents: what the day chart draws, and the series before the snapshot's own.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct DayBars {
+    pub t: Vec<i64>,
+    pub equity: Vec<f64>,
+    pub pnl_day: Vec<f64>,
+    pub trading: Vec<Option<f64>>,
+    pub mm: Vec<Option<f64>>,
+    pub hedge: Vec<Option<f64>>,
+    pub inventory: Vec<f64>,
+    pub futures: Vec<f64>,
+    pub volume: Vec<f64>,
+}
+
+impl DayBars {
+    pub fn is_empty(&self) -> bool {
+        self.t.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Snapshot {
     pub now: i64,
@@ -503,12 +524,29 @@ pub struct Snapshot {
     pub days: Vec<DayPnl>,
     pub hours: Vec<HourPnl>,
     pub account_series: Vec<AccountSeries>,
+    pub bars: DayBars,
 }
 
-pub const SNAPSHOT_KEYS: [&str; 15] = [
+pub const SNAPSHOT_KEYS: [&str; 16] = [
     "now", "summary", "accounts", "symbols", "fills", "series", "exposure", "engines", "alerts", "feeds",
-    "markouts", "orders", "days", "hours", "account_series",
+    "markouts", "orders", "days", "hours", "account_series", "bars",
 ];
+
+/// What a WebSocket snapshot leaves out, sent when the client asks (`older`): the fills before its newest
+/// `WS_FILLS`, newest first, and each account's points before its last `WS_ACCOUNT_MS`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Older {
+    pub fills: Vec<Fill>,
+    pub account_series: Vec<AccountSeries>,
+}
+
+/// A WebSocket snapshot: the newest fills only, the series of the last `WS_SERIES_MS` (earlier minutes are in
+/// `bars`), each account's points of the last `WS_ACCOUNT_MS`.
+pub const WS_FILLS: usize = 100;
+pub const WS_SERIES_MS: i64 = 15 * 60_000;
+pub const WS_ACCOUNT_MS: i64 = 65 * 60_000;
+/// Fills a snapshot holds at most (the WebSocket's newest `WS_FILLS`, then `Older`'s).
+pub const MAX_FILLS: usize = 2000;
 
 /// `GET /api/history`: the desk's P&L since `from` in bars of `step` seconds.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -657,6 +695,8 @@ mod tests {
             ("Feed", struct_fields(&Feed::default())),
             ("MarkoutStats", struct_fields(&MarkoutStats::default())),
             ("AccountSeries", struct_fields(&AccountSeries::default())),
+            ("DayBars", struct_fields(&DayBars::default())),
+            ("Older", struct_fields(&Older::default())),
             ("History", struct_fields(&History::default())),
             ("HistoryBar", struct_fields(&HistoryBar::default())),
             ("HistoryFill", struct_fields(&HistoryFill::default())),
@@ -719,7 +759,7 @@ mod tests {
             Regex::new(r#"type: "(\w+)""#).unwrap().captures_iter(ts).map(|c| c[1].to_string()).collect();
         got.sort();
         got.dedup();
-        assert_eq!(got, ["account_series", "fills", "patch", "series", "snapshot"]);
+        assert_eq!(got, ["account_series", "bars", "fills", "older", "patch", "series", "snapshot"]);
     }
 
     #[test]

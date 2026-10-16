@@ -25,7 +25,7 @@ import type {
   Summary,
   SymbolRow,
 } from "./protocol";
-import { MIN, RECORDED_FROM, activity as minuteActivity, desk, deskAt, minuteOf, rebate, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
+import { MIN, RECORDED_FROM, activity as minuteActivity, dayBars, desk, deskAt, minuteOf, rebate, setLiveFrom, writeLive, type DeskMinute } from "./historyMock";
 
 type Emit = (m: Msg) => void;
 
@@ -1508,6 +1508,7 @@ function snapshot(): Snapshot {
     days: days(sum),
     hours: hours(),
     account_series: accountSeriesHistory(acc),
+    bars: dayBars(dayStart, dayStart, BASE_EQUITY),
   };
 }
 function funding(): Exposure["funding"] {
@@ -1542,6 +1543,8 @@ export function startMock(emit: Emit): () => void {
     const m = minuteOf(now);
     if (m !== curMin) {
       writeLive(curMin, deskRow());
+      // as the server: the minute that closed and the few before it
+      emit({ type: "bars", data: dayBars(dayStart, now - 5 * MIN, BASE_EQUITY) });
       curMin = m;
       rebates += rebate(m);
       minVol = 0;

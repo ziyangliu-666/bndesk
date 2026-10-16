@@ -205,9 +205,17 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 
 ## Wire protocol (server -> web)
 
-`GET /api/snapshot` returns the `Snapshot`. `GET /ws` sends one `snapshot` on connect, then
+`GET /api/snapshot` returns the `Snapshot` in full. `GET /ws` sends one `snapshot` on connect, then
 messages at most every 125 ms. JSON; money in USDT; times in epoch ms.
 `web/src/protocol.ts` mirrors these names exactly.
+
+The WebSocket's snapshot carries what the first screen draws, so it is small (tens of KB deflated at the end
+of a day): the newest 100 fills, the series of the last 15 minutes (`bars` hold the whole day at one minute),
+each account's points of the last 65 minutes. The page sends the text `older` once it has drawn a snapshot;
+the server answers with one `older` message, the rest as of that snapshot (fills up to 2000 in all, the
+accounts' earlier points). The page adds the fills it does not have and puts the points before its first:
+whatever came since the snapshot is newer and stays. After a day roll the server broadcasts `snapshot` then
+`older` to every client.
 
 History, read from `desk.db` off the desk's thread (a read-only connection) and behind the same login;
 `from` / `to` epoch ms UTC (`to` defaults to now, `from` to a day before it), a bad parameter is a 400:
@@ -235,15 +243,17 @@ type Msg =
   | { type: "patch"; data: Partial<Snapshot> }      // top-level keys replaced wholesale
   | { type: "fills"; data: Fill[] }                 // upsert by id
   | { type: "series"; data: SeriesPoint[] }         // appended
-  | { type: "account_series"; data: AccountSeries[] };   // points appended per account
+  | { type: "account_series"; data: AccountSeries[] }    // points appended per account
+  | { type: "bars"; data: DayBars }                 // when a minute closes: the last 5 minute bars, replaced by t
+  | { type: "older"; data: Older };                 // asked for with the text "older": what the snapshot left out
 
 interface Snapshot {
   now: number;
   summary: Summary;
   accounts: Account[];
   symbols: SymbolRow[];
-  fills: Fill[];            // today's, newest first, at most 2000
-  series: SeriesPoint[];    // today's, 5 s grid
+  fills: Fill[];            // today's, newest first, at most 2000 (the newest 100 on the WebSocket)
+  series: SeriesPoint[];    // today's, 5 s grid (the last 15 minutes on the WebSocket)
   exposure: Exposure;
   engines: Engine[];
   alerts: Alert[];
@@ -258,8 +268,20 @@ interface Snapshot {
                                                            // where kept, a past day's trading is its closed-form Π
   hours: { t: number; trading: number; hedged: number; factor: number; fills: number; volume: number;
            mm: number; inventory: number }[];   // today's UTC hours
-  account_series: AccountSeries[];   // today's, 45 s grid
+  account_series: AccountSeries[];   // today's, 45 s grid (the last 65 minutes on the WebSocket)
+  bars: DayBars;            // today's minute bars
 }
+
+// Today's desk at one minute, as columns: each minute's last series point (t = the minute's start), with market
+// making and the hedge legs' P&L as booked then, and the notional filled in the minute (Σ price × qty, every
+// fill). Money rounded to cents. The day chart draws these; the page takes the series before its own from them.
+interface DayBars {
+  t: number[]; equity: number[]; pnl_day: number[]; trading: (number | null)[];
+  mm: (number | null)[]; hedge: (number | null)[];
+  inventory: number[]; futures: number[]; volume: number[];
+}
+
+interface Older { fills: Fill[]; account_series: AccountSeries[] }   // newest first; points per account, ascending
 
 interface Summary {
   equity: number; pnl_day: number; pnl_1h: number;

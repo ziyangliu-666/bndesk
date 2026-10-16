@@ -5,15 +5,17 @@ export type Msg =
   | { type: "patch"; data: Partial<Snapshot> } // top-level keys replaced wholesale
   | { type: "fills"; data: Fill[] } // upsert by id
   | { type: "series"; data: SeriesPoint[] } // appended
-  | { type: "account_series"; data: AccountSeries[] }; // points appended per account
+  | { type: "account_series"; data: AccountSeries[] } // points appended per account
+  | { type: "bars"; data: DayBars } // when a minute closes: the last minute bars, replaced by t
+  | { type: "older"; data: Older }; // asked for with the text "older": what the WebSocket's snapshot left out
 
 export interface Snapshot {
   now: number;
   summary: Summary;
   accounts: Account[];
   symbols: SymbolRow[];
-  fills: Fill[]; // today's, newest first, at most 2000
-  series: SeriesPoint[]; // today's, 5 s grid
+  fills: Fill[]; // today's, newest first, at most 2000 (the newest 100 on the WebSocket, then `older`)
+  series: SeriesPoint[]; // today's, 5 s grid (the last 15 minutes on the WebSocket; the store adds the minutes before from `bars`)
   exposure: Exposure;
   engines: Engine[];
   alerts: Alert[];
@@ -22,7 +24,28 @@ export interface Snapshot {
   orders: OpenOrder[]; // every resting order across accounts
   days: DayPnl[]; // last 60, incl. today
   hours: HourPnl[]; // today's UTC hours
-  account_series: AccountSeries[]; // today's, 45 s grid
+  account_series: AccountSeries[]; // today's, 45 s grid (the last 65 minutes on the WebSocket, then `older`)
+  bars: DayBars; // today's minute bars
+}
+
+/** Today's desk at one minute, as columns: each minute's last series point (t = the minute's start), market
+ *  making and the hedge legs' P&L as booked then, the notional filled in the minute. Money rounded to cents. */
+export interface DayBars {
+  t: number[];
+  equity: number[];
+  pnl_day: number[];
+  trading: (number | null)[];
+  mm: (number | null)[];
+  hedge: (number | null)[];
+  inventory: number[];
+  futures: number[];
+  volume: number[];
+}
+
+/** What the WebSocket's snapshot left out, as of that snapshot: fills newest first, account points ascending. */
+export interface Older {
+  fills: Fill[];
+  account_series: AccountSeries[];
 }
 
 export interface AccountSeries {

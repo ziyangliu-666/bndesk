@@ -1,6 +1,6 @@
 // Today's desk on TradingView Lightweight Charts v5 (Apache-2.0; the attribution logo stays on).
-// Per-minute bars from /api/history, refetched every minute; the websocket's 5 s series and fills move the
-// current minute in between. Pane 0: P&L lines over session bands; pane 1: notional filled; pane 2: exposure.
+// Per-minute bars from the store (the snapshot's, then one `bars` message a minute); the websocket's 5 s series
+// and fills move the current minute in between. Pane 0: P&L lines over session bands; pane 1: notional filled; pane 2: exposure.
 import { useEffect, useRef, useState } from "react";
 import { UnstyledButton } from "@mantine/core";
 import {
@@ -23,11 +23,10 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useStore, serverNow } from "../store";
+import { useStore } from "../store";
 import { hm, pnl, usdShort, type TzMode } from "../format";
 import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1, S2, SANS } from "../theme";
-import { getJSON, type HistBar, type History } from "../api";
-import type { Fill, SeriesPoint, Summary } from "../protocol";
+import type { DayBars, Fill, SeriesPoint, Summary } from "../protocol";
 import { KV, PhoneWords, capAt, maskAxis, useHeldHeight, chartOptions, phonePlotHeight, quiet, usdFmt, useMask } from "./HistoryChart";
 import { Panel, SeriesWord, useSeriesToggle } from "./ui";
 
@@ -35,7 +34,6 @@ export { timeAxis, usdTicks, usdAxis } from "./uplotAxes";
 
 const MIN = 60_000;
 const DAY_MIN = 1440;
-const REFETCH = 60_000;
 const HEDGE = HEDGE_COLOR;
 const INV = INV_COLOR;
 const FUT = FUT_COLOR;
@@ -60,9 +58,12 @@ const ts = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 function emptyRow(t: number): Row {
   return { t, day: null, trading: null, mm: null, invPnl: null, hedge: null, inv: null, fut: null, vol: 0 };
 }
-function fromBar(b: HistBar): Row {
-  return { t: b.t, day: b.c, trading: b.pi, mm: b.mm, invPnl: b.pi != null && b.mm != null ? b.pi - b.mm : null, hedge: b.hedge, inv: b.inventory, fut: b.futures, vol: b.volume };
+function fromBar(b: DayBars, i: number): Row {
+  const pi = b.trading[i] ?? null;
+  const mm = b.mm[i] ?? null;
+  return { t: b.t[i]!, day: b.pnl_day[i]!, trading: pi, mm, invPnl: pi != null && mm != null ? pi - mm : null, hedge: b.hedge[i] ?? null, inv: b.inventory[i]!, fut: b.futures[i]!, vol: b.volume[i]! };
 }
+const NO_BARS: DayBars = { t: [], equity: [], pnl_day: [], trading: [], mm: [], hedge: [], inventory: [], futures: [], volume: [] };
 /** The live series is the desk's own 5 s grid: its last point in a minute sets that minute's lines. */
 function applyPoint(r: Row, p: SeriesPoint) {
   r.day = p.pnl_day;
@@ -71,10 +72,10 @@ function applyPoint(r: Row, p: SeriesPoint) {
   r.fut = p.futures_notional;
 }
 
-/** All of today's minute rows: history bars, overlaid by the live series, with fills after the last bar. */
-function buildRows(dayStart: number, bars: HistBar[], series: SeriesPoint[], fills: Fill[]): Map<number, Row> {
+/** All of today's minute rows: the minute bars, overlaid by the live series, with fills after the last bar. */
+function buildRows(dayStart: number, bars: DayBars, series: SeriesPoint[], fills: Fill[]): Map<number, Row> {
   const rows = new Map<number, Row>();
-  for (const b of bars) if (b.t >= dayStart) rows.set(b.t, fromBar(b));
+  bars.t.forEach((t, i) => t >= dayStart && rows.set(t, fromBar(bars, i)));
   for (const p of series) {
     if (p.t < dayStart) continue;
     const m = minute(p.t);
@@ -87,8 +88,8 @@ function buildRows(dayStart: number, bars: HistBar[], series: SeriesPoint[], fil
 }
 
 /** Notional filled per minute from the fills tape, for minutes the last history fetch has not covered. */
-function addFills(rows: Map<number, Row>, bars: HistBar[], dayStart: number, fills: Fill[]) {
-  const lastBar = bars.length ? bars[bars.length - 1]!.t : dayStart - MIN;
+function addFills(rows: Map<number, Row>, bars: DayBars, dayStart: number, fills: Fill[]) {
+  const lastBar = bars.t.length ? bars.t[bars.t.length - 1]! : dayStart - MIN;
   const sums = new Map<number, number>();
   for (const f of fills) {
     if (f.ts < dayStart) continue;
@@ -252,7 +253,7 @@ function DayChartIn({ phone = false, height = 220, group: group0 = "pnl" }: DayC
   const tz = useStore((s) => s.tz);
   const [full, setFull] = useState(false);
   const [group, setGroup] = useState<DayGroup>(group0);
-  const [bars, setBars] = useState<{ dayStart: number; bars: HistBar[] } | null>(null);
+  const bars = useStore((s) => s.snap?.bars);
   const [hover, setHover] = useState<number | null>(null);
 
   const host = useRef<HTMLDivElement>(null);
@@ -422,34 +423,18 @@ function DayChartIn({ phone = false, height = 220, group: group0 = "pnl" }: DayC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [masked]);
 
-  // ---- history: today so far at one minute, every minute ----
-  useEffect(() => {
-    if (!dayStart) return;
-    const ac = new AbortController();
-    const load = () =>
-      getJSON<History>("/api/history", { from: dayStart, to: serverNow(), step: 60 }, ac.signal)
-        .then((h) => setBars({ dayStart, bars: h.bars }))
-        .catch(() => {});
-    load();
-    const id = setInterval(() => document.visibilityState !== "hidden" && load(), REFETCH);
-    return () => {
-      clearInterval(id);
-      ac.abort();
-    };
-  }, [dayStart]);
-
   // session bands follow the summary
   useEffect(() => {
     s.current?.bands.forEach((b) => b.set(summary));
   }, [summary]);
 
   // ---- full rebuild: on a history fetch or a new day ----
-  const histBars = bars && bars.dayStart === dayStart ? bars.bars : null;
+  const histBars = bars ?? NO_BARS;
   useEffect(() => {
     const x = s.current;
     if (!x || !dayStart) return;
     const st = useStore.getState().snap;
-    const r = buildRows(dayStart, histBars ?? [], st?.series ?? [], st?.fills ?? []);
+    const r = buildRows(dayStart, histBars, st?.series ?? [], st?.fills ?? []);
     rows.current = r;
     const list = [...r.values()];
     x.axis.setData(Array.from({ length: DAY_MIN }, (_, i) => ({ time: ts(dayStart + i * MIN) })));
@@ -486,7 +471,8 @@ function DayChartIn({ phone = false, height = 220, group: group0 = "pnl" }: DayC
       touchedRows.set(m, r);
     }
     // the fills tape fills in volume after the last history bar
-    const lastBar = histBars?.length ? histBars[histBars.length - 1]! : null;
+    const n = histBars.t.length;
+    const lastBar = n ? { t: histBars.t[n - 1]!, volume: histBars.volume[n - 1]! } : null;
     const sums = new Map<number, number>();
     for (const f of fills ?? []) {
       if (f.ts < from) break; // newest first

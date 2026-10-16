@@ -2,6 +2,7 @@
 // fixed origin with hashed noise up to the minute the live mock starts; from then on the live mock writes each
 // minute itself (writeLive), so the day chart, the history page and the websocket agree.
 import type { HistBar, HistDay, HistFill, History, Kline } from "./api";
+import type { DayBars } from "./protocol";
 import { useStore } from "./store";
 
 export const MIN = 60_000;
@@ -169,6 +170,32 @@ export function deskAt(m: number): DeskMinute {
   const row = {} as DeskMinute;
   for (const k of KEYS) row[k] = desk[k][m] ?? 0;
   return row;
+}
+
+/** The snapshot's minute bars (and a `bars` message's): the day starting at `dayStart`, the minutes from `from`
+ *  to now, money in cents. Equity is `equity0` plus the day PnL. */
+export function dayBars(dayStart: number, from: number, equity0: number): DayBars {
+  const now = nowMin();
+  extendDesk(now);
+  const d0 = minuteOf(dayStart);
+  const at = (xs: number[], m: number) => xs[m]! - (d0 > 0 ? xs[d0 - 1]! : 0);
+  const tot = (m: number) => desk.pi[m]! + desk.he[m]! + desk.rb[m]! + desk.ot[m]!;
+  const rec = minuteOf(RECORDED_FROM);
+  const c = (v: number) => Math.round(v * 100) / 100;
+  const b: DayBars = { t: [], equity: [], pnl_day: [], trading: [], mm: [], hedge: [], inventory: [], futures: [], volume: [] };
+  for (let m = Math.max(d0, minuteOf(from)); m <= now; m++) {
+    const pnl = tot(m) - (d0 > 0 ? tot(d0 - 1) : 0);
+    b.t.push(ORIGIN + m * MIN);
+    b.pnl_day.push(c(pnl));
+    b.equity.push(c(equity0 + pnl));
+    b.trading.push(m >= rec ? c(at(desk.pi, m)) : null);
+    b.mm.push(m >= rec ? c(at(desk.mm, m)) : null);
+    b.hedge.push(m >= rec ? c(at(desk.he, m)) : null);
+    b.inventory.push(c(desk.inv[m]!));
+    b.futures.push(c(desk.fut[m]!));
+    b.volume.push(c(desk.vol[m]!));
+  }
+  return b;
 }
 
 function history(from: number, to: number, step: number): History {

@@ -46,6 +46,9 @@ pub const TICKS_1S: u64 = 8;
 /// no curve points this long after start
 const WARMUP_S: f64 = 30.0;   // round(1 / TICK_S)
 pub const ACCT_STEP: i64 = 45_000;   // per-account series grid: at most 1920 points a day
+const MINUTE: i64 = 60_000;
+/// Minute bars each `bars` message carries: the one that closed and those before it, for fills that came late.
+const BARS_RESENT: i64 = 5;
 
 /// What one compute produced; the patch and the alerts read it.
 pub struct View {
@@ -103,6 +106,10 @@ pub struct Desk {
     pub public_feed: FeedRef,
     pub day_start: Rc<Cell<i64>>,
     pub series: Vec<P::SeriesPoint>,
+    /// market making and the hedge legs' P&L at each series point (the day chart's bars draw them)
+    series_x: Vec<(Option<f64>, Option<f64>)>,
+    /// the minute bars from this minute on go out with the next tick (a minute has closed)
+    new_bars: Option<i64>,
     agg: Option<(i64, Rc<FillAgg>)>,
     /// market making over today's fills, redone with the aggregate
     mm: Rc<MmSplit>,
@@ -211,6 +218,8 @@ impl Desk {
             public_feed,
             day_start: Rc::new(Cell::new(day_start)),
             series: vec![],
+            series_x: vec![],
+            new_bars: None,
             agg: None,
             mm: Rc::default(),
             held: 0,
@@ -520,6 +529,7 @@ impl Desk {
         for r in &data.equity {
             if r.account == "*" {
                 if r.t.rem_euclid(5000) == 0 {
+                    self.series_x.push((r.mm, r.hedge));
                     self.series.push(P::SeriesPoint {
                         t: r.t,
                         equity: r.equity,
@@ -677,23 +687,50 @@ impl Desk {
         });
     }
 
-    /// The snapshot of the current view (computed by the caller).
+    /// The snapshot of the current view (computed by the caller): the newest MAX_FILLS of today's fills, the
+    /// series and account points in full, and the minute bars.
     pub fn snapshot(&self) -> P::Snapshot {
-        let v = self.view.as_ref().expect("view computed");
+        let mut s = self.snapshot_with(P::MAX_FILLS, i64::MIN);
+        s.series = self.series.clone();
+        s
+    }
+
+    /// The WebSocket's snapshot and what it leaves out: the newest `WS_FILLS` fills, the last `WS_SERIES_MS`
+    /// of the series (the minute bars hold the day before it), the last `WS_ACCOUNT_MS` of each account.
+    pub fn snapshot_ws(&self) -> (P::Snapshot, P::Older) {
+        let now = self.view.as_ref().expect("view computed").now;
+        let acct_from = now - P::WS_ACCOUNT_MS;
+        let mut s = self.snapshot_with(P::WS_FILLS, acct_from);
+        let from = self.series.partition_point(|p| p.t < now - P::WS_SERIES_MS);
+        s.series = self.series[from..].to_vec();
+        let older = P::Older {
+            fills: self.recent_fills(P::MAX_FILLS).into_iter().skip(P::WS_FILLS).collect(),
+            account_series: self.account_series_in(i64::MIN, acct_from),
+        };
+        (s, older)
+    }
+
+    /// The newest `n` of today's fills, newest first.
+    fn recent_fills(&self, n: usize) -> Vec<P::Fill> {
         let fb = self.fills.borrow();
-        let n = fb.fills.len();
-        let fills = fb.fills[n.saturating_sub(2000)..]
+        let k = fb.fills.len();
+        fb.fills[k.saturating_sub(n)..]
             .iter()
             .rev()
             .map(|f| self.fill_protos.get(&f.id).cloned().unwrap_or_else(|| f.proto()))
-            .collect();
+            .collect()
+    }
+
+    /// The view, the newest `fills` fills, each account's points from `acct_from`, every minute bar; no series.
+    fn snapshot_with(&self, fills: usize, acct_from: i64) -> P::Snapshot {
+        let v = self.view.as_ref().expect("view computed");
         P::Snapshot {
             now: v.now,
             summary: v.summary.clone(),
             accounts: v.accounts.clone(),
             symbols: v.symbols.clone(),
-            fills,
-            series: self.series.clone(),
+            fills: self.recent_fills(fills),
+            series: vec![],
             exposure: v.exposure.clone(),
             engines: v.engines.clone(),
             alerts: v.alerts.clone(),
@@ -702,17 +739,26 @@ impl Desk {
             orders: v.orders.clone(),
             days: v.days.clone(),
             hours: v.hours.clone(),
-            account_series: self.account_series(),
+            account_series: self.account_series_in(acct_from, i64::MAX),
+            bars: self.day_bars(i64::MIN),
         }
     }
 
-    /// Today's per-account equity and day PnL on a 45 s grid.
-    pub fn account_series(&self) -> Vec<P::AccountSeries> {
+    /// Today's minute bars from `from`'s minute on: each minute's last series point, and the notional filled in it.
+    pub fn day_bars(&self, from: i64) -> P::DayBars {
+        day_bars(&self.series, &self.series_x, &self.fills.borrow().fills, from)
+    }
+
+    /// Today's per-account equity and day PnL on a 45 s grid, the points in [from, to).
+    pub fn account_series_in(&self, from: i64, to: i64) -> Vec<P::AccountSeries> {
         self.accounts
             .iter()
             .filter_map(|a| {
                 let id = a.borrow().id.clone();
-                self.acct_series.get(&id).map(|s| P::AccountSeries { account: id, t: s.0.clone(), equity: s.1.clone(), pnl_day: s.2.clone() })
+                self.acct_series.get(&id).map(|s| {
+                    let (a, b) = (s.0.partition_point(|t| *t < from), s.0.partition_point(|t| *t < to));
+                    P::AccountSeries { account: id, t: s.0[a..b].to_vec(), equity: s.1[a..b].to_vec(), pnl_day: s.2[a..b].to_vec() }
+                })
             })
             .collect()
     }
@@ -847,9 +893,17 @@ impl Desk {
             inventory: s.inventory_value,
             futures_notional: v.exposure.futures_notional,
         };
-        if self.series.last().is_some_and(|l| l.t >= t) {
+        let prev = self.series.last().map(|l| l.t);
+        if prev.is_some_and(|l| l >= t) {
             return;
         }
+        if let Some(prev) = prev
+            && t.div_euclid(MINUTE) > prev.div_euclid(MINUTE)
+        {
+            // a minute closed: its bar, and the few before it (fills that came late), go out
+            self.new_bars = Some(prev - prev.rem_euclid(MINUTE) - (BARS_RESENT - 1) * MINUTE);
+        }
+        let hedge = v.exposure.hedge_day.as_ref().and_then(|h| h.hedge_pnl).filter(|_| fresh);
         self.store.put(Row::Equity(EquityRow {
             t,
             account: "*".into(),
@@ -862,7 +916,7 @@ impl Desk {
             hedged: p.hedged,
             realized: some(s.pnl.realized + s.pnl.realized_old),
             floating: some(s.pnl.floating),
-            hedge: v.exposure.hedge_day.as_ref().and_then(|h| h.hedge_pnl).filter(|_| fresh),
+            hedge,
             mm: some(s.pnl.mm),
             rebates: some(s.rebates),
         }));
@@ -876,6 +930,7 @@ impl Desk {
             }
         }
         self.series.push(p.clone());
+        self.series_x.push((some(s.pnl.mm), hedge));
         self.new_series.push(p);
         let pts: Vec<(f64, Option<f64>)> =
             rows.iter().map(|r| (r.2, self.acct_series.get(&r.0).and_then(|s| s.2.last().copied()))).collect();
@@ -927,6 +982,8 @@ impl Desk {
             self.fill_protos.retain(|k, _| keep.contains(k.as_str()));
         }
         self.series.clear();
+        self.series_x.clear();
+        self.new_bars = None;
         self.acct_series.clear();
         self.new_acct.clear();
         self.transfers.borrow_mut().roll(ds);
@@ -1003,6 +1060,7 @@ impl Desk {
         }
         let series = std::mem::take(&mut self.new_series);
         let acct = if self.new_acct.is_empty() { vec![] } else { self.account_series_new() };
+        let bars = self.new_bars.take().map(|from| self.day_bars(from)).unwrap_or_default();
         let v = self.view.as_ref().expect("view");
         let patch = Patch {
             now: v.now,
@@ -1018,7 +1076,10 @@ impl Desk {
             days: &v.days,
             hours: &v.hours,
         };
-        self.hub.borrow_mut().tick(&patch, &dirty, &series, &acct, || P::encode(&self.snapshot()));
+        self.hub.borrow_mut().tick(&patch, &dirty, &series, &acct, &bars, || {
+            let (s, o) = self.snapshot_ws();
+            (P::encode(&s), P::encode(&o))
+        });
     }
 
     fn health(&self) -> DeskHealth {
@@ -1040,7 +1101,16 @@ impl Desk {
 struct Source(DeskRef);
 
 impl DeskSource for Source {
-    fn snapshot(&self) -> Vec<u8> {
+    fn snapshot(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut d = self.0.borrow_mut();
+        if d.view.is_none() {
+            d.compute(true);
+        }
+        let (s, o) = d.snapshot_ws();
+        (P::encode(&s), P::encode(&o))
+    }
+
+    fn snapshot_full(&self) -> Vec<u8> {
         let mut d = self.0.borrow_mut();
         if d.view.is_none() {
             d.compute(true);
@@ -1433,8 +1503,67 @@ pub fn main() {
     }
 }
 
+/// Minute bars from `from`'s minute on: each minute's last point of `series` (with its `x`: market making,
+/// hedge), money in cents, and the notional of `fills` in the minute.
+fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: &[FillRec], from: i64) -> P::DayBars {
+    let cents = |v: f64| (v * 100.0).round() / 100.0;
+    let mut b = P::DayBars::default();
+    let start = series.partition_point(|p| p.t < from.saturating_sub(from.rem_euclid(MINUTE)));
+    for (p, (mm, hedge)) in series[start..].iter().zip(&x[start..]) {
+        let m = p.t - p.t.rem_euclid(MINUTE);
+        if b.t.last() != Some(&m) {
+            b.t.push(m);
+            b.trading.push(None);
+            b.mm.push(None);
+            b.hedge.push(None);
+            b.equity.push(0.0);
+            b.pnl_day.push(0.0);
+            b.inventory.push(0.0);
+            b.futures.push(0.0);
+        }
+        let i = b.t.len() - 1;
+        b.equity[i] = cents(p.equity);
+        b.pnl_day[i] = cents(p.pnl_day);
+        b.trading[i] = p.trading.map(cents).or(b.trading[i]);
+        b.mm[i] = mm.map(cents).or(b.mm[i]);
+        b.hedge[i] = hedge.map(cents).or(b.hedge[i]);
+        b.inventory[i] = cents(p.inventory);
+        b.futures[i] = cents(p.futures_notional);
+    }
+    let first = b.t.first().copied().unwrap_or(i64::MAX);
+    let mut vol: HashMap<i64, f64> = HashMap::new();
+    for f in fills.iter().filter(|f| f.ts >= first) {
+        *vol.entry(f.ts - f.ts.rem_euclid(MINUTE)).or_default() += f.notional();
+    }
+    b.volume = b.t.iter().map(|t| cents(vol.get(t).copied().unwrap_or(0.0))).collect();
+    b
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::protocol::Side;
+
+    #[test]
+    fn day_bars_take_each_minutes_last_point() {
+        let pt = |t: i64, pnl: f64, trading: Option<f64>| P::SeriesPoint { t, pnl_day: pnl, equity: 100.0 + pnl, trading, ..Default::default() };
+        let series = [pt(60_000, 1.004, Some(0.5)), pt(65_000, 2.0, None), pt(125_000, 3.333, Some(1.0)), pt(185_000, 4.0, Some(2.0))];
+        let x = [(Some(0.1), None), (None, Some(-1.0)), (Some(0.2), Some(-2.0)), (None, None)];
+        let fill = |ts: i64| FillRec::new("f", ts, "a", "S", Venue::Spot, Side::Buy, 2.0, 1.5);
+        let fills = [fill(61_000), fill(70_000), fill(130_000), fill(10_000)];
+        let b = day_bars(&series, &x, &fills, i64::MIN);
+        assert_eq!(b.t, [60_000, 120_000, 180_000]);
+        assert_eq!(b.pnl_day, [2.0, 3.33, 4.0]);
+        assert_eq!(b.equity, [102.0, 103.33, 104.0]);
+        // a null leaves the minute's last value standing
+        assert_eq!(b.trading, [Some(0.5), Some(1.0), Some(2.0)]);
+        assert_eq!(b.mm, [Some(0.1), Some(0.2), None]);
+        assert_eq!(b.hedge, [Some(-1.0), Some(-2.0), None]);
+        assert_eq!(b.volume, [6.0, 3.0, 0.0]);
+        let b = day_bars(&series, &x, &fills, 150_000);
+        assert_eq!((b.t, b.volume), (vec![120_000, 180_000], vec![3.0, 0.0]));
+    }
+
     #[test]
     fn transfer_in_flight_between_accounts_is_held() {
         use super::in_flight;

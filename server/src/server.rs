@@ -7,6 +7,9 @@
 //!   request over an mpsc channel; `answer` (a local task on the desk side) replies through a oneshot.
 //!   A snapshot reply carries the sequence number of the last broadcast before it was encoded, so a new
 //!   client skips the messages its snapshot already holds (fills and series are appended client-side).
+//! - A WebSocket snapshot is the first screen's: the newest fills, the last minutes of the series (the minute
+//!   bars hold the day), the last hour of each account. What it leaves out (`P::Older`, encoded with it) waits
+//!   in the client's task until the page asks for it (the text `older`), once it has drawn the snapshot.
 //! - axum has no permessage-deflate, so a message of `DEFLATE_MIN` bytes or more is compressed once (raw
 //!   DEFLATE, shared by every client) and sent as a binary frame; the browser inflates it with
 //!   `DecompressionStream("deflate-raw")`. Smaller messages stay text frames.
@@ -151,13 +154,19 @@ struct Health {
 
 /// The desk side of the bridge: called on the desk's thread by `answer`.
 pub trait DeskSource {
-    /// `P::encode(&desk.snapshot())`.
-    fn snapshot(&self) -> Vec<u8>;
+    /// The WebSocket's snapshot and what it leaves out: `P::encode` of `desk.snapshot_ws()`.
+    fn snapshot(&self) -> (Vec<u8>, Vec<u8>);
+    /// `P::encode(&desk.snapshot())`: everything (`/api/snapshot`).
+    fn snapshot_full(&self) -> Vec<u8>;
     fn health(&self) -> DeskHealth;
 }
 
+/// A WebSocket snapshot: the sequence number of the last broadcast before it, its JSON, its `P::Older`'s.
+type Snap = (u64, Bytes, Bytes);
+
 pub enum Req {
-    Snapshot(oneshot::Sender<(u64, Bytes)>),
+    Snapshot(oneshot::Sender<Snap>),
+    Full(oneshot::Sender<Bytes>),
     Health(oneshot::Sender<DeskHealth>),
 }
 
@@ -183,9 +192,15 @@ impl Shared {
         let _ = self.tx.send(Out { seq, frame });
     }
 
-    async fn snapshot(&self) -> Option<(u64, Bytes)> {
+    async fn snapshot(&self) -> Option<Snap> {
         let (tx, rx) = oneshot::channel();
         self.req.send(Req::Snapshot(tx)).ok()?;
+        tokio::time::timeout(REPLY_TIMEOUT, rx).await.ok()?.ok()
+    }
+
+    async fn snapshot_full(&self) -> Option<Bytes> {
+        let (tx, rx) = oneshot::channel();
+        self.req.send(Req::Full(tx)).ok()?;
         tokio::time::timeout(REPLY_TIMEOUT, rx).await.ok()?.ok()
     }
 
@@ -210,14 +225,18 @@ pub async fn answer<D: DeskSource>(mut r: Requests, desk: D) {
         while let Ok(q) = r.rx.try_recv() {
             pending.push(q);
         }
-        let mut snap: Option<(u64, Bytes)> = None;
+        let mut snap: Option<Snap> = None;
         for q in pending {
             match q {
                 Req::Snapshot(tx) => {
                     let s = snap.get_or_insert_with(|| {
-                        (r.shared.seq.load(Ordering::SeqCst), Bytes::from(desk.snapshot()))
+                        let (s, o) = desk.snapshot();
+                        (r.shared.seq.load(Ordering::SeqCst), Bytes::from(s), Bytes::from(o))
                     });
                     let _ = tx.send(s.clone());
+                }
+                Req::Full(tx) => {
+                    let _ = tx.send(Bytes::from(desk.snapshot_full()));
                 }
                 Req::Health(tx) => {
                     let _ = tx.send(desk.health());
@@ -228,7 +247,8 @@ pub async fn answer<D: DeskSource>(mut r: Requests, desk: D) {
 }
 
 /// Fans the desk state out to WebSocket clients: a snapshot on connect, then at most one
-/// patch / fills / series message each per tick; a patch holds only the top-level keys that changed.
+/// patch / fills / series / account_series / bars message each per tick; a patch holds only the top-level keys
+/// that changed.
 pub struct Hub {
     shared: Arc<Shared>,
     requests: Option<Requests>,
@@ -271,16 +291,20 @@ impl Hub {
         self.full = true;
     }
 
-    /// One tick: `snapshot` is called (`P::encode(&desk.snapshot())`) only after a reset.
+    /// One tick: `snapshot` is called (`P::encode` of `desk.snapshot_ws()`) only after a reset; the snapshot
+    /// then goes out with its `older` (every client gets both).
+    #[allow(clippy::too_many_arguments)]
     pub fn tick(&mut self, v: &Patch, fills: &[P::Fill], series: &[P::SeriesPoint], acct: &[P::AccountSeries],
-                snapshot: impl FnOnce() -> Vec<u8>) {
+                bars: &P::DayBars, snapshot: impl FnOnce() -> (Vec<u8>, Vec<u8>)) {
         if self.clients() == 0 {
             self.last = Default::default();
             return;
         }
         if self.full {
             self.full = false;
-            self.shared.broadcast(msg("snapshot", &snapshot()));
+            let (s, o) = snapshot();
+            self.shared.broadcast(msg("snapshot", &s));
+            self.shared.broadcast(msg("older", &o));
             return;
         }
         let mut body: Vec<u8> = Vec::new();
@@ -309,6 +333,9 @@ impl Hub {
         if !acct.is_empty() {
             self.shared.broadcast(msg("account_series", &P::encode(acct)));
         }
+        if !bars.is_empty() {
+            self.shared.broadcast(msg("bars", &P::encode(bars)));
+        }
     }
 
     pub fn handle(&self) -> HubHandle {
@@ -323,12 +350,15 @@ pub struct HubHandle(Arc<Shared>);
 async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
     let mut rx = shared.tx.subscribe(); // before the snapshot, so nothing between falls through
     let mut closing = shared.closing.subscribe();
-    let Some((seq0, snap)) = shared.snapshot().await else { return };
-    // deflating a snapshot takes ~20 ms: off the desk's thread
+    let Some((seq0, snap, older)) = shared.snapshot().await else { return };
+    // deflating a snapshot takes a few ms: off the desk's thread
     let Ok(first) = tokio::task::spawn_blocking(move || frame(msg("snapshot", &snap))).await else { return };
     if !matches!(tokio::time::timeout(SEND_TIMEOUT, ws.send(first)).await, Ok(Ok(()))) {
         return;
     }
+    // sent when the page asks (it has drawn the snapshot by then); it holds the snapshot's state, which the page
+    // merges under whatever came since (fills it has not got, account points before its first)
+    let mut older = Some(older);
     shared.clients.fetch_add(1, Ordering::Relaxed);
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     let mut pong = true;
@@ -345,6 +375,13 @@ async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
             },
             m = ws.recv() => match m {
                 Some(Ok(Message::Pong(_))) => pong = true,
+                Some(Ok(Message::Text(t))) if t.as_str() == "older" => {
+                    let Some(o) = older.take() else { continue };
+                    let Ok(f) = tokio::task::spawn_blocking(move || frame(msg("older", &o))).await else { break };
+                    if !matches!(tokio::time::timeout(SEND_TIMEOUT, ws.send(f)).await, Ok(Ok(()))) {
+                        break;
+                    }
+                }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                 Some(Ok(_)) => {}
             },
@@ -383,8 +420,8 @@ async fn ws_handler(State(st): State<AppState>, up: WebSocketUpgrade) -> Respons
 }
 
 async fn snapshot(State(st): State<AppState>) -> Response {
-    match st.shared.snapshot().await {
-        Some((_, b)) => ([(header::CONTENT_TYPE, "application/json")], b).into_response(),
+    match st.shared.snapshot_full().await {
+        Some(b) => ([(header::CONTENT_TYPE, "application/json")], b).into_response(),
         None => unavailable(),
     }
 }
@@ -539,13 +576,13 @@ pub async fn serve(hub: &HubHandle, app: Router, listen: &str) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
+    use futures_util::{SinkExt, StreamExt};
     use std::collections::HashSet;
 
     #[test]
     fn test_patch_keys_cover_snapshot() {
         let a: HashSet<&str> = PATCH_KEYS.into_iter().collect();
-        let skip = ["now", "fills", "series", "account_series"];
+        let skip = ["now", "fills", "series", "account_series", "bars"];
         let b: HashSet<&str> = P::SNAPSHOT_KEYS.into_iter().filter(|k| !skip.contains(k)).collect();
         assert_eq!(a, b);
         // Patch's fields are "now" then PATCH_KEYS, in order
@@ -612,21 +649,22 @@ mod tests {
         let mut hub = Hub::new();
         let mut rx = hub.shared.tx.subscribe();
         let mut s = P::Snapshot::default();
-        hub.tick(&Patch::of(&s), &[], &[], &[], || unreachable!());
+        let nb = P::DayBars::default();
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
         assert!(drain(&mut rx).is_empty()); // no clients
         hub.shared.clients.store(1, Ordering::Relaxed);
-        hub.tick(&Patch::of(&s), &[], &[], &[], || unreachable!());
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
         let m = drain(&mut rx);
         assert_eq!(m.len(), 1);
         let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
         assert_eq!(v["type"], "patch");
         assert_eq!(v["data"].as_object().unwrap().len(), 12);
         s.now = 5;
-        hub.tick(&Patch::of(&s), &[], &[], &[], || unreachable!());
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
         assert!(drain(&mut rx).is_empty()); // only "now" moved
         s.summary.equity = 2.5;
         let f = P::Fill { id: "f".into(), ..Default::default() };
-        hub.tick(&Patch::of(&s), std::slice::from_ref(&f), &[], &[], || unreachable!());
+        hub.tick(&Patch::of(&s), std::slice::from_ref(&f), &[], &[], &nb, || unreachable!());
         let m = drain(&mut rx);
         assert_eq!(m.len(), 2);
         let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
@@ -634,16 +672,22 @@ mod tests {
         assert_eq!(keys, ["now", "summary"]);
         assert_eq!(v["data"]["now"], 5);
         assert!(m[1].starts_with("{\"type\":\"fills\",\"data\":[{\"id\":\"f\""));
+        let bars = P::DayBars { t: vec![60_000], volume: vec![2.5], ..Default::default() };
+        hub.tick(&Patch::of(&s), &[], &[], &[], &bars, || unreachable!());
+        assert_eq!(drain(&mut rx), [r#"{"type":"bars","data":{"t":[60000],"equity":[],"pnl_day":[],"trading":[],"mm":[],"hedge":[],"inventory":[],"futures":[],"volume":[2.5]}}"#]);
         hub.reset();
-        hub.tick(&Patch::of(&s), &[f], &[], &[], || b"{\"x\":1}".to_vec());
-        assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}"]);
+        hub.tick(&Patch::of(&s), &[f], &[], &[], &nb, || (b"{\"x\":1}".to_vec(), b"{\"y\":2}".to_vec()));
+        assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}", "{\"type\":\"older\",\"data\":{\"y\":2}}"]);
     }
 
     struct Fake(std::rc::Rc<std::cell::Cell<i64>>);
 
     impl DeskSource for Fake {
-        fn snapshot(&self) -> Vec<u8> {
-            format!("{{\"n\":{}}}", self.0.get()).into_bytes()
+        fn snapshot(&self) -> (Vec<u8>, Vec<u8>) {
+            (format!("{{\"n\":{}}}", self.0.get()).into_bytes(), b"{\"o\":1}".to_vec())
+        }
+        fn snapshot_full(&self) -> Vec<u8> {
+            format!("{{\"full\":{}}}", self.0.get()).into_bytes()
         }
         fn health(&self) -> DeskHealth {
             DeskHealth { feeds: 3, started: epoch_s() - 10.0, ..Default::default() }
@@ -667,7 +711,7 @@ mod tests {
                 let base = format!("http://{}", srv.addr);
                 let get = |p: &str| reqwest::get(format!("{base}{p}"));
                 assert_eq!(get("/healthz").await.unwrap().text().await.unwrap(), "ok");
-                assert_eq!(get("/api/snapshot").await.unwrap().text().await.unwrap(), "{\"n\":1}");
+                assert_eq!(get("/api/snapshot").await.unwrap().text().await.unwrap(), "{\"full\":1}");
                 let r = get("/assets/a.js").await.unwrap();
                 assert_eq!(r.headers()["x-frame-options"], "DENY");
                 assert_eq!(r.text().await.unwrap(), "js");
@@ -689,10 +733,14 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
                 let s = P::Snapshot::default();
-                hub.tick(&Patch::of(&s), &[], &[], &[], || unreachable!());
+                hub.tick(&Patch::of(&s), &[], &[], &[], &P::DayBars::default(), || unreachable!());
                 let m = ws.next().await.unwrap().unwrap();
                 assert!(m.is_binary()); // a full patch is over DEFLATE_MIN
                 assert!(inflate(&m.into_data()).starts_with("{\"type\":\"patch\",\"data\":{\"now\":0,\"summary\":"));
+                // what the snapshot left out, once asked for
+                ws.send(tokio_tungstenite::tungstenite::Message::text("older")).await.unwrap();
+                let m = ws.next().await.unwrap().unwrap();
+                assert_eq!(m.to_text().unwrap(), "{\"type\":\"older\",\"data\":{\"o\":1}}");
                 let hv: serde_json::Value = get("/api/health").await.unwrap().json().await.unwrap();
                 assert_eq!(hv["clients"], 1);
                 assert_eq!(hv["feeds"], 3);

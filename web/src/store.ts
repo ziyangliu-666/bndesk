@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AccountSeries, Alert, Fill, Msg, SeriesPoint, Snapshot, Venue } from "./protocol";
+import type { AccountSeries, Alert, DayBars, Fill, Msg, Older, SeriesPoint, Snapshot, Venue } from "./protocol";
 import type { TzMode } from "./format";
 import { isPhoneLayout } from "./responsive";
 
@@ -127,6 +127,81 @@ function appendSeries(cur: SeriesPoint[], pts: SeriesPoint[]): SeriesPoint[] {
   let base = cur;
   if (same) base = cur.slice(0, -1).concat(same);
   return fresh.length ? base.concat(fresh) : base;
+}
+
+const MINUTE = 60_000;
+
+/** The series with the minutes before its first point taken from the minute bars (the WebSocket's snapshot
+ *  carries the last minutes only): one point a minute, at the minute's start. */
+function withBars(series: SeriesPoint[], bars: DayBars | undefined): SeriesPoint[] {
+  if (!bars?.t.length) return series;
+  const first = series.length ? series[0]!.t : Infinity;
+  const cut = first - (((first % MINUTE) + MINUTE) % MINUTE);
+  const head: SeriesPoint[] = [];
+  for (let i = 0; i < bars.t.length && bars.t[i]! < cut; i++) {
+    head.push({
+      t: bars.t[i]!,
+      equity: bars.equity[i]!,
+      pnl_day: bars.pnl_day[i]!,
+      trading: bars.trading[i] ?? null,
+      hedged: null,
+      inventory: bars.inventory[i]!,
+      futures_notional: bars.futures[i]!,
+    });
+  }
+  return head.length ? head.concat(series) : series;
+}
+
+const BAR_KEYS = ["t", "equity", "pnl_day", "trading", "mm", "hedge", "inventory", "futures", "volume"] as const;
+
+/** The bars with `add`'s minutes (ascending, one run) in place of the store's over the same span. */
+function mergeBars(cur: DayBars, add: DayBars): DayBars {
+  if (!add.t.length) return cur;
+  const from = add.t[0]!;
+  const to = add.t[add.t.length - 1]!;
+  let a = 0;
+  while (a < cur.t.length && cur.t[a]! < from) a++;
+  let b = a;
+  while (b < cur.t.length && cur.t[b]! <= to) b++;
+  const out = {} as Record<(typeof BAR_KEYS)[number], unknown[]>;
+  for (const k of BAR_KEYS) out[k] = [...cur[k].slice(0, a), ...add[k], ...cur[k].slice(b)];
+  return out as unknown as DayBars;
+}
+
+/** What the snapshot left out goes under what came since: fills the store does not have (any it has are as new
+ *  or newer), each account's points before its first. */
+function mergeOlder(cur: Snapshot, o: Older): { fills: Fill[]; add: Fill[]; remove: Fill[]; account_series: AccountSeries[] } {
+  const have = new Set(cur.fills.map((f) => f.id));
+  const add = o.fills.filter((f) => !have.has(f.id));
+  let fills = cur.fills;
+  let remove: Fill[] = [];
+  if (add.length) {
+    const merged = cur.fills.concat(add).sort((a, b) => b.ts - a.ts);
+    fills = merged.slice(0, MAX_FILLS);
+    remove = merged.slice(MAX_FILLS);
+  }
+  let account_series = cur.account_series;
+  for (const a of o.account_series) {
+    if (!a.t.length) continue;
+    if (account_series === cur.account_series) account_series = account_series.slice();
+    const i = account_series.findIndex((x) => x.account === a.account);
+    if (i < 0) {
+      account_series.push(a);
+      continue;
+    }
+    const c = account_series[i]!;
+    const first = c.t.length ? c.t[0]! : Infinity;
+    let k = 0;
+    while (k < a.t.length && a.t[k]! < first) k++;
+    if (!k) continue;
+    account_series[i] = {
+      account: c.account,
+      t: a.t.slice(0, k).concat(c.t),
+      equity: a.equity.slice(0, k).concat(c.equity),
+      pnl_day: a.pnl_day.slice(0, k).concat(c.pnl_day),
+    };
+  }
+  return { fills, add, remove, account_series };
 }
 
 function appendAccountSeries(cur: AccountSeries[], add: AccountSeries[]): AccountSeries[] {
@@ -362,7 +437,7 @@ export const useStore = create<State>((set, get) => ({
     const snap = get().snap;
     switch (m.type) {
       case "snapshot": {
-        const s = m.data;
+        const s = { ...m.data, series: withBars(m.data.series, m.data.bars) };
         set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts) });
         fillListeners.forEach((fn) => fn({ kind: "reset", fills: s.fills }));
         return;
@@ -395,6 +470,18 @@ export const useStore = create<State>((set, get) => ({
       case "account_series": {
         if (!snap) return;
         set({ snap: { ...snap, account_series: appendAccountSeries(snap.account_series, m.data) }, lastMsg: now });
+        return;
+      }
+      case "bars": {
+        if (!snap) return;
+        set({ snap: { ...snap, bars: mergeBars(snap.bars, m.data) }, lastMsg: now });
+        return;
+      }
+      case "older": {
+        if (!snap) return;
+        const r = mergeOlder(snap, m.data);
+        set({ snap: { ...snap, fills: r.fills, account_series: r.account_series }, lastMsg: now });
+        if (r.add.length) fillListeners.forEach((fn) => fn({ kind: "upsert", add: r.add, update: [], remove: r.remove }));
         return;
       }
     }

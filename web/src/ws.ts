@@ -7,6 +7,12 @@ async function inflate(buf: ArrayBuffer): Promise<string> {
   return new Response(body).text();
 }
 
+/** `fn` once the browser has drawn what is queued now and is idle (or after a second at most). */
+export function afterPaint(fn: () => void, timeout = 1000) {
+  const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  requestAnimationFrame(() => setTimeout(() => (ric ? ric(fn, { timeout }) : fn()), 0));
+}
+
 let kick: (() => void) | null = null;
 
 /** Drop the socket and open a fresh one now, skipping any backoff wait. */
@@ -70,6 +76,8 @@ export function connect(): () => void {
         return;
       }
       apply(m);
+      // the snapshot holds the first screen; the rest of it (older fills, account points) once it is drawn
+      if (m.type === "snapshot") afterPaint(() => ws === sock && sock.readyState === WebSocket.OPEN && sock.send("older"));
     };
     ws.onopen = () => {
       attempt = 0;
