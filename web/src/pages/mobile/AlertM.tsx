@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { useStore } from "../../store";
+import { canHide, isHidden, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { bps, hm, hms, int, num, pct, price } from "../../format";
 import { LevelIcon } from "../../components/ui";
@@ -15,6 +15,9 @@ export function AlertM({ id }: { id: string }) {
   const alert = useStore((s) => s.snap?.alerts.find((a) => a.id === id));
   const tz = useStore((s) => s.tz);
   const hide = useStore((s) => s.hideAmounts);
+  const keys = useStore((s) => s.hiddenAlerts);
+  const hideAlert = useStore((s) => s.hideAlert);
+  const showAlert = useStore((s) => s.showAlert);
   const now = useNow(1000) + useStore.getState().skew;
 
   if (!alert) {
@@ -45,6 +48,22 @@ export function AlertM({ id }: { id: string }) {
           ]}
         />
       </Section>
+      {/* a warning or info can leave the badge and the Desk on this browser until it clears; a critical one never */}
+      {canHide(alert) && (
+        <Section>
+          {isHidden(alert, keys) ? (
+            <ListRow dense chevron={false} title="Show this alert" subtitle="Hidden on this browser" onClick={() => showAlert(alert)} />
+          ) : (
+            <ListRow
+              dense
+              chevron={false}
+              title="Hide this alert"
+              subtitle="Off the badge and the Desk on this browser, until it clears"
+              onClick={() => hideAlert(alert)}
+            />
+          )}
+        </Section>
+      )}
       {alert.active ? <Evidence a={alert} now={now} /> : <Subject a={alert} />}
     </>
   );

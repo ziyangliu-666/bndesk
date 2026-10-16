@@ -118,12 +118,12 @@ impl Sim {
             a.set_balances([("USDT", s, 0.0)], true);
             (a.spot_loaded, a.fut_loaded) = (true, true);
             (a.orders_10s_limit, a.orders_1d_limit) = (100, 200_000);
-            a.set_fee(Venue::Spot, "*", SPOT_MAKER, SPOT_TAKER);
+            a.set_fee(Venue::Spot, "*", SPOT_MAKER, SPOT_TAKER, CLOCK.now());
         }
         {
             let mut f = self.fut.borrow_mut();
             (f.fut_wallet, f.fut_available) = (FUT_WALLET, FUT_WALLET);
-            f.set_fee(Venue::Usdm, "*", FUT_MAKER, FUT_TAKER);
+            f.set_fee(Venue::Usdm, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
         }
         self.by_id["sub-2"].borrow_mut().set_balances([("DOT", 0.5, 0.0)], false);   // a dust lot, discovered from the balance
         let fills: Vec<FillRec> = desk.fills.borrow().fills.iter().filter(|f| f.id.starts_with("sim")).cloned().collect();

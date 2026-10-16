@@ -1,5 +1,5 @@
 //! Alert rules and their active set.
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A public market-data connection silent this long is reported (the watchdog reconnects it at 60 s).
 const SILENT_MS: i64 = 45_000;
@@ -7,6 +7,7 @@ const SILENT_MS: i64 = 45_000;
 use chrono::{Local, NaiveDate, TimeZone};
 
 use crate::app::{Desk, View};
+use crate::market::{self, Inst};
 use crate::protocol::{self as P, FeedKind, Level, Venue};
 use crate::store::AlertRow;
 
@@ -56,6 +57,20 @@ pub fn fmt_num(x: f64, dec: usize, plus: bool) -> String {
 /// Python's `format(x, ".0%")`.
 fn pct(x: f64) -> String {
     format!("{:.0}%", x * 100.0)
+}
+
+/// Local "MM-DD HH:MM".
+fn clock_text(ms: i64) -> String {
+    Local.timestamp_millis_opt(ms).single().map_or_else(String::new, |t| t.format("%m-%d %H:%M").to_string())
+}
+
+/// The quoted instruments with no bookTicker for longer than `stale_ms`, as the alert names them.
+fn stale_quotes(insts: &[Inst], quoted: &HashSet<String>, now: i64, stale_ms: f64) -> Vec<String> {
+    insts
+        .iter()
+        .filter(|i| quoted.contains(&i.key) && (now - i.recv.unwrap_or(i.created)) as f64 > stale_ms)
+        .map(|i| i.symbol.clone() + if i.venue == Venue::Spot { "" } else { " (usdm)" })
+        .collect()
 }
 
 /// Persists an alert when it opens, changes or clears.
@@ -186,15 +201,15 @@ impl Alerts {
                     add("stream_silent", &f.name, Level::Warn, format!("{} no data for {}s", f.name, (now - last).div_euclid(1000)));
                 }
             }
-            let stale_ms = ac.stale_quote_s * 1000.0;
-            let tracked = desk.tracked.borrow();
-            let m = desk.market.borrow();
-            let stale: Vec<String> = m
-                .insts
-                .iter()
-                .filter(|i| tracked.contains(&i.key) && (now - i.recv.unwrap_or(i.created)) as f64 > stale_ms)
-                .map(|i| i.symbol.clone() + if i.venue == Venue::Spot { "" } else { " (usdm)" })
-                .collect();
+            // what the desk quotes: its configured markets, their references (a stale one leaves the fair stale)
+            // and whatever it has orders resting on, not every symbol an account holds or traded (a tokenized
+            // stock held as dust)
+            let mut quoted: HashSet<String> = cfg.markets.iter().map(|mc| market::key(&mc.symbol, mc.venue)).collect();
+            quoted.extend(cfg.markets.iter().filter_map(|mc| mc.reference.as_ref()).map(|r| market::key(&r.symbol, r.venue)));
+            for a in &desk.accounts {
+                quoted.extend(a.borrow().open.values().map(|o| market::key(&o.symbol, o.venue)));
+            }
+            let stale = stale_quotes(&desk.market.borrow().insts, &quoted, now, ac.stale_quote_s * 1000.0);
             if !stale.is_empty() {
                 add("stale_quote", "", Level::Warn, format!("no quote > {}s: {}", ac.stale_quote_s, names(&stale)));
             }
@@ -206,17 +221,22 @@ impl Alerts {
                     add(name, &a.id, Level::Warn, format!("{} {n}/{lim} orders ({})", a.id, pct(n as f64 / lim as f64)));
                 }
             }
+            let acct = desk.account(&a.id);
             if a.fees.iter().any(|f| f.changed) {
+                // a change is reported for FEE_CHANGE_HOLD_MS from when it was seen, then becomes the baseline
+                let since = |venue: Venue| {
+                    acct.and_then(|x| x.borrow().fee_changed.iter().filter(|(k, _)| k.0 == venue).map(|(_, t)| *t).max())
+                };
                 let fees = a
                     .fees
                     .iter()
                     .filter(|f| f.changed)
-                    .map(|f| format!("{} {:+.2}/{:+.2} bps", f.venue, f.maker_bps, f.taker_bps))
+                    .map(|f| format!("{} {:+.2}/{:+.2} bps{}", f.venue, f.maker_bps, f.taker_bps,
+                        since(f.venue).map_or_else(String::new, |t| format!(" since {}", clock_text(t)))))
                     .collect::<Vec<_>>()
                     .join("; ");
                 add("fee_change", &a.id, Level::Warn, format!("{} commission changed: {fees}", a.id));
             }
-            let acct = desk.account(&a.id);
             let (spot_active, futures) = acct.map_or((false, false), |x| {
                 let x = x.borrow();
                 (x.traded.iter().any(|k| k.starts_with("spot:")), x.cfg.futures)
@@ -376,6 +396,21 @@ mod tests {
         assert_eq!(fmt_num(999.6, 0, false), "1,000");
         assert_eq!(pct(0.854), "85%");
         assert_eq!(names(&(0..8).map(|i| i.to_string()).collect::<Vec<_>>()), "0, 1, 2, 3, 4, 5 +2");
+    }
+
+    #[test]
+    fn stale_quote_only_on_quoted_instruments() {
+        let mut m = market::Market::new(HashMap::new(), 120.0, 50.0);
+        for (sym, venue) in [("AUSDT", Venue::Spot), ("BUSDT", Venue::Usdm), ("TSLAUSDT", Venue::Spot)] {
+            let id = m.ensure(sym, venue, None);
+            m.insts[id].recv = Some(0);
+        }
+        let id = m.ensure("DUSDT", Venue::Spot, None);
+        m.insts[id].recv = Some(90_000);
+        // a configured market, one with resting orders, and a fresh one; TSLAUSDT is held, not quoted
+        let quoted: HashSet<String> = ["spot:AUSDT", "usdm:BUSDT", "spot:DUSDT"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(stale_quotes(&m.insts, &quoted, 100_000, 60_000.0), ["AUSDT", "BUSDT (usdm)"]);
+        assert!(stale_quotes(&m.insts, &quoted, 50_000, 60_000.0).is_empty());
     }
 
     #[test]

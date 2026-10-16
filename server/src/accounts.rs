@@ -29,8 +29,14 @@ pub type MarketRef = Rc<RefCell<Market>>;
 pub type AccountRef = Rc<RefCell<Account>>;
 /// Called with each fill seen on a user stream. Runs while the account is borrowed: must not borrow it.
 pub type OnFill = Rc<dyn Fn(FillRec)>;
-/// Called with the first commission rate seen per (venue, symbol).
+/// Called with each commission baseline per (venue, symbol): the first rate seen, or a change once held
+/// `FEE_CHANGE_HOLD_MS`.
 pub type OnFee = Rc<dyn Fn(&Account, Venue, &str, (f64, f64))>;
+/// Called when a commission change is first seen (its time) and when it ends (None): back to the baseline,
+/// or held long enough to become it.
+pub type OnFeeChange = Rc<dyn Fn(&Account, Venue, &str, Option<i64>)>;
+/// A commission change is reported this long from when it was seen, then becomes the baseline.
+pub const FEE_CHANGE_HOLD_MS: i64 = 24 * 3_600_000;
 /// Called once per new asset distribution (the store keeps them).
 pub type OnDividend = Rc<dyn Fn(&Account, &str, &Dividend)>;
 
@@ -197,6 +203,10 @@ fn venue_key(venue: Venue, x: impl std::fmt::Display) -> String {
 }
 
 /// Python `f"{type(e).__name__}: {e}"[:200]`.
+fn same_fee(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9
+}
+
 fn err_text(e: &anyhow::Error) -> String {
     let s = if e.downcast_ref::<RestError>().is_some() { format!("RestError: {e}") } else { format!("{e:#}") };
     s.chars().take(200).collect()
@@ -233,7 +243,8 @@ pub struct Account {
     pub fee_turn: usize,
     pub fee_next: [i64; 2],   // ms, indexed by Venue::index(); each venue's next per-symbol commission lookup
     pub fees: Vec<((Venue, String), (f64, f64))>,   // insertion-ordered like the Python dict
-    pub first_fees: HashMap<(Venue, String), (f64, f64)>,
+    pub first_fees: HashMap<(Venue, String), (f64, f64)>,   // the baseline a rate is compared with
+    pub fee_changed: HashMap<(Venue, String), i64>,       // since when a rate differs from its baseline
     pub equity_open: Option<f64>,
     pub day_start: i64,                      // set by the desk; the futures day below is read from it
     pub fut_day: HashMap<String, FutDay>,
@@ -247,6 +258,7 @@ pub struct Account {
     pub rest_feed: FeedRef,
     pub on_fill: OnFill,
     pub on_fee: OnFee,
+    pub on_fee_change: OnFeeChange,
     pub market: Option<MarketRef>,
     pub via_master: bool,
     pub moves: Vec<Move>,   // balance changes apart from trading, from the user streams
@@ -296,6 +308,7 @@ impl Account {
             fee_next: [0, 0],
             fees: vec![],
             first_fees: HashMap::new(),
+            fee_changed: HashMap::new(),
             equity_open: None,
             day_start: 0,
             fut_day: HashMap::new(),
@@ -307,6 +320,7 @@ impl Account {
             rest_feed,
             on_fill: Rc::new(|_| {}),
             on_fee: Rc::new(|_, _, _, _| {}),
+            on_fee_change: Rc::new(|_, _, _, _| {}),
             market: None,
             via_master: false,
             moves: vec![],
@@ -597,17 +611,54 @@ impl Account {
         self.fees.iter().find(|((v, s), _)| *v == venue && s == symbol).map(|x| x.1)
     }
 
-    pub fn set_fee(&mut self, venue: Venue, symbol: &str, maker: f64, taker: f64) {
+    /// A rate read at `now`. One that differs from the baseline is a change from now on, unless it is the
+    /// rate already held: a change seen before a restart keeps its time, and one already there with no time
+    /// counts from the first read after it.
+    pub fn set_fee(&mut self, venue: Venue, symbol: &str, maker: f64, taker: f64, now: i64) {
         let v = (maker, taker);
-        match self.fees.iter_mut().find(|((ve, s), _)| *ve == venue && s == symbol) {
-            Some(x) => x.1 = v,
-            None => self.fees.push(((venue, symbol.to_string()), v)),
-        }
+        let prev = match self.fees.iter_mut().find(|((ve, s), _)| *ve == venue && s == symbol) {
+            Some(x) => Some(std::mem::replace(&mut x.1, v)),
+            None => {
+                self.fees.push(((venue, symbol.to_string()), v));
+                None
+            }
+        };
         let k = (venue, symbol.to_string());
-        if let std::collections::hash_map::Entry::Vacant(slot) = self.first_fees.entry(k) {
-            slot.insert(v);
+        let Some(&base) = self.first_fees.get(&k) else {
+            self.first_fees.insert(k, v);
             let cb = self.on_fee.clone();
             cb(self, venue, symbol, v);
+            return;
+        };
+        let since = if same_fee(v, base) {
+            None
+        } else if prev.is_some_and(|p| !same_fee(p, v)) || !self.fee_changed.contains_key(&k) {
+            Some(now)
+        } else {
+            return;   // the change already held
+        };
+        match since {
+            Some(t) => {
+                self.fee_changed.insert(k, t);
+            }
+            None if self.fee_changed.remove(&k).is_none() => return,
+            None => {}
+        }
+        let cb = self.on_fee_change.clone();
+        cb(self, venue, symbol, since);
+    }
+
+    /// Changes held `FEE_CHANGE_HOLD_MS` become the baseline.
+    pub fn expire_fees(&mut self, now: i64) {
+        let done: Vec<(Venue, String)> =
+            self.fee_changed.iter().filter(|(_, t)| now - **t >= FEE_CHANGE_HOLD_MS).map(|(k, _)| k.clone()).collect();
+        for k in done {
+            let Some(v) = self.fee(k.0, &k.1) else { continue };   // not read since a restart: waits for it
+            self.fee_changed.remove(&k);
+            self.first_fees.insert(k.clone(), v);
+            let (cb, cc) = (self.on_fee.clone(), self.on_fee_change.clone());
+            cb(self, k.0, &k.1, v);
+            cc(self, k.0, &k.1, None);
         }
     }
 
@@ -620,10 +671,7 @@ impl Account {
             }
             let specific: Vec<_> = ks.iter().filter(|((_, s), _)| s != "*").collect();
             let (maker, taker) = specific.last().map_or_else(|| ks.last().unwrap().1, |x| x.1);
-            let changed = ks.iter().any(|(k, (m, t))| {
-                let (m0, t0) = self.first_fees.get(k).copied().unwrap_or((*m, *t));
-                (m - m0).abs() > 1e-9 || (t - t0).abs() > 1e-9
-            });
+            let changed = ks.iter().any(|(k, v)| !same_fee(*v, self.first_fees.get(k).copied().unwrap_or(*v)));
             out.push(P::FeeRate { venue, maker_bps: maker * 1e4, taker_bps: taker * 1e4, changed });
         }
         out
@@ -1033,7 +1081,7 @@ async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let mut a = acct.borrow_mut();
     a.apply_spot_snapshot(&r)?;
     if let Some(c) = first(&r, &["commissionRates"]) {
-        a.set_fee(Venue::Spot, "*", f(c, "maker")?, f(c, "taker")?);
+        a.set_fee(Venue::Spot, "*", f(c, "maker")?, f(c, "taker")?, CLOCK.now());
     }
     a.spot_loaded = true;
     Ok(())
@@ -1232,14 +1280,14 @@ pub async fn commissions(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             parts.iter().map(|p| p.get(k).map_or(Ok(0.0), to_f)).sum()
         };
         let (maker, taker) = (sum("maker")?, sum("taker")?);
-        acct.borrow_mut().set_fee(Venue::Spot, sym, maker, taker);
+        acct.borrow_mut().set_fee(Venue::Spot, sym, maker, taker, now);
     }
     if !usdm.is_empty() {
         acct.borrow_mut().fee_next[Venue::Usdm.index()] = now + 3_600_000;
         let sym = &usdm[turn % usdm.len()];
         let r = rest.get_json("/fapi/v1/commissionRate", &params!["symbol" => sym], 20, true).await?;
         let (maker, taker) = (f(&r, "makerCommissionRate")?, f(&r, "takerCommissionRate")?);
-        acct.borrow_mut().set_fee(Venue::Usdm, sym, maker, taker);
+        acct.borrow_mut().set_fee(Venue::Usdm, sym, maker, taker, now);
     }
     Ok(())
 }
@@ -1901,6 +1949,66 @@ mod tests {
         assert!(rows[0].venue == Venue::Spot && !rows[0].changed);
         assert_relative_eq!(rows[0].maker_bps, 1.0);
         assert_relative_eq!(rows[0].taker_bps, 2.0);
+    }
+
+    #[test]
+    fn fee_change_holds_a_day_then_becomes_the_baseline() {
+        type Log = Rc<RefCell<Vec<String>>>;
+        let log: Log = Rc::default();
+        let hooked = |log: &Log| {
+            let mut a = Account::new(cfg("a", ""), None, "");
+            let (l1, l2) = (log.clone(), log.clone());
+            a.on_fee = Rc::new(move |_, v, s, x| l1.borrow_mut().push(format!("fee:{v}:{s}={},{}", x.0, x.1)));
+            a.on_fee_change = Rc::new(move |_, v, s, t| l2.borrow_mut().push(format!("feechg:{v}:{s}={t:?}")));
+            a
+        };
+        let h = 3_600_000;
+        let mut a = hooked(&log);
+        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.0001, 0);   // the first rate seen is the baseline
+        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.0001, h);
+        assert!(!a.fee_rows()[0].changed && a.fee_changed.is_empty());
+        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 2 * h);   // changed: active from now
+        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 3 * h);   // the same change: keeps its time
+        assert!(a.fee_rows()[0].changed);
+        assert_eq!(a.fee_changed[&(Venue::Spot, "XUSDT".into())], 2 * h);
+        a.expire_fees(2 * h + FEE_CHANGE_HOLD_MS - 1);
+        assert!(a.fee_rows()[0].changed);
+        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.002, 4 * h);   // changed again: the day restarts
+        a.expire_fees(2 * h + FEE_CHANGE_HOLD_MS);
+        assert_eq!(a.fee_changed[&(Venue::Spot, "XUSDT".into())], 4 * h);
+        a.expire_fees(4 * h + FEE_CHANGE_HOLD_MS);   // held a day: the new baseline
+        assert!(!a.fee_rows()[0].changed && a.fee_changed.is_empty());
+        assert_eq!(a.first_fees[&(Venue::Spot, "XUSDT".into())], (0.0, 0.002));
+        assert_eq!(*log.borrow(), [
+            "fee:spot:XUSDT=0,0.0001",
+            &format!("feechg:spot:XUSDT=Some({})", 2 * h),
+            &format!("feechg:spot:XUSDT=Some({})", 4 * h),
+            "fee:spot:XUSDT=0,0.002",
+            "feechg:spot:XUSDT=None",
+        ]);
+
+        // a restart inside the day: the baseline and the change's time come back from kv and the clock runs on
+        log.borrow_mut().clear();
+        let mut b = hooked(&log);
+        b.first_fees.insert((Venue::Spot, "XUSDT".into()), (0.0, 0.0001));
+        b.fee_changed.insert((Venue::Spot, "XUSDT".into()), 2 * h);
+        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 10 * h);
+        assert!(b.fee_rows()[0].changed && log.borrow().is_empty());
+        assert_eq!(b.fee_changed[&(Venue::Spot, "XUSDT".into())], 2 * h);
+        b.expire_fees(2 * h + FEE_CHANGE_HOLD_MS);
+        assert_eq!(b.first_fees[&(Venue::Spot, "XUSDT".into())], (0.0, 0.001));
+        // back to the baseline inside the day: the change ends
+        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.002, 30 * h);
+        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 31 * h);
+        assert!(!b.fee_rows()[0].changed && b.fee_changed.is_empty());
+
+        // a rate already differing at startup with no time kept counts from the first read
+        let mut c = hooked(&log);
+        c.first_fees.insert((Venue::Usdm, "*".into()), (0.0002, 0.0005));
+        c.set_fee(Venue::Usdm, "*", 0.0, 0.0004, 50 * h);
+        assert_eq!(c.fee_changed[&(Venue::Usdm, "*".into())], 50 * h);
+        c.expire_fees(50 * h + FEE_CHANGE_HOLD_MS);
+        assert!(!c.fee_rows()[0].changed);
     }
 
     struct DivRest(Value);

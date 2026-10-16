@@ -170,11 +170,16 @@ rows and 60 days of hourly blocks are reloaded on start; per-account series are 
 Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 - `stream_down`: a feed disconnected > 10 s (crit for user data).
 - `stream_silent`: a public market-data connection with no data for 45 s while the session is open.
-- `stale_quote`: no bookTicker on a tracked instrument > `stale_quote_s` (default 60) while its session is open.
+- `stale_quote`: no bookTicker > `stale_quote_s` (default 60) while its session is open, on an instrument the desk
+  quotes: one in `[[markets]]`, a market's reference, or one with an order resting. Others held or traded (dust)
+  are not watched.
   bookTicker only sends on a change at the top of the book, and thin markets can sit unchanged for tens of seconds.
 - `orders_10s`, `orders_1d`: unfilled order count > 80 % of the limit.
 - `rest_ban`: 418 or 429 seen (also engine rate-limit cooldowns).
-- `fee_change`: commission differs from the first value seen; `fee_expiry` within 7 days if configured.
+- `fee_change`: commission differs from its baseline (the first value seen, kv `fee:<acct>:<venue>:<symbol>`),
+  for 24 h from when the change was seen (kv `feechg:…`, so a restart keeps the clock; a rate already differing
+  at startup counts from then), then the new value is the baseline; another change restarts the 24 h.
+  `fee_expiry` within 7 days if configured.
 - `drawdown`: day PnL below `day_drawdown_usd`, or a drop over 15 min larger than `drop_15m_usd`.
 - `inventory`: total inventory value > `inventory_cap_usd`, or one asset > `asset_cap_usd`.
 - `exposure_gap`: |gap| > band for > 60 s (when configured); inside a hedge pause, info: hedge left to close.
@@ -418,6 +423,14 @@ account (one line per account, labelled at its end).
 
 Dark slate ground for long sessions; gains teal-green, losses coral, every signed figure carries
 its sign; amber for warnings; one accent for selection.
+
+Hiding an alert: a warning or info alert can be hidden on this browser (localStorage `desk.hiddenAlerts`),
+never a critical one. The key is the alert's id and `since`, so it stays hidden while its text's figures
+change at each check, and comes back if it clears and fires again; a key goes when its alert is no longer
+active. A hidden alert leaves the banner (a Hide after each warning's age; "n hidden" shows them all again),
+the title's count, the phone's Alerts badge and the Desk's alert strip. The Engine page's list keeps it,
+muted, marked hidden, with Show; the phone's Alerts tab folds it under Hidden, and its page has Hide this
+alert or Show this alert. Nothing reaches the server.
 
 ### Phone
 

@@ -1,5 +1,5 @@
 import { useMemo, useRef } from "react";
-import { serverNow, useStore } from "../../store";
+import { isHidden, serverNow, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { hm, int, num, usdShort } from "../../format";
 import { Dot, LevelIcon } from "../../components/ui";
@@ -242,11 +242,15 @@ export function DeskM() {
 
 function AlertStrip() {
   const alerts = useStore((s) => s.snap?.alerts);
+  const keys = useStore((s) => s.hiddenAlerts);
   const tz = useStore((s) => s.tz);
   const hide = useStore((s) => s.hideAmounts);
   useNow(5000);
-  // the Alerts tab's order: by level, then the one that has held longest
-  const active = useMemo(() => (alerts ?? []).filter((a) => a.active && a.level !== "info").sort(byUrgency), [alerts]);
+  // the Alerts tab's order: by level, then the one that has held longest; none hidden on this browser
+  const active = useMemo(
+    () => (alerts ?? []).filter((a) => a.active && a.level !== "info" && !isHidden(a, keys)).sort(byUrgency),
+    [alerts, keys],
+  );
   const top = active[0];
   if (!top) return null;
   const more = active.length - 1;

@@ -57,6 +57,7 @@ const SQL_TRANSFER: &str = "INSERT INTO transfers (id, ts, from_email, to_email,
 const SQL_DIVIDEND: &str = "INSERT OR IGNORE INTO dividends (id, ts, account, asset, amount, info) VALUES (?,?,?,?,?,?)";
 const SQL_ALERT: &str = "INSERT OR REPLACE INTO alerts VALUES (?,?,?,?,?,?)";
 const SQL_KV: &str = "INSERT OR REPLACE INTO kv VALUES (?,?)";
+const SQL_KV_DEL: &str = "DELETE FROM kv WHERE k = ?";
 
 /// equity row; `trading` / `hedged` are NULL in rows written before those columns existed. `realized`
 /// (realized + realized_old), `floating` and `hedge` (the futures legs' P&L) are the desk row's ("*")
@@ -138,6 +139,7 @@ pub enum Row {
     Dividend(DividendRow),
     Alert(AlertRow),
     Kv(String, String),
+    KvDel(String),
 }
 
 enum Item {
@@ -467,6 +469,9 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::Kv(k, v)) => {
                 c.prepare_cached(SQL_KV)?.execute(params![k, v])?;
             }
+            Item::Row(Row::KvDel(k)) => {
+                c.prepare_cached(SQL_KV_DEL)?.execute([k])?;
+            }
         }
     }
     tx.commit()
@@ -523,9 +528,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let s = Store::new(d.path().join("sub/q.db"));
         s.put(Row::Kv("a".into(), "1".into()));
+        s.put(Row::Kv("b".into(), "2".into()));
+        s.put(Row::KvDel("b".into()));
         s.start().unwrap();
         s.close();
-        assert_eq!(s.load(0, 0).unwrap().kv.get("a").map(String::as_str), Some("1"));
+        let kv = s.load(0, 0).unwrap().kv;
+        assert_eq!((kv.get("a").map(String::as_str), kv.get("b")), (Some("1"), None));
     }
 
     #[test]

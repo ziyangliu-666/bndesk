@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AccountSeries, Fill, Msg, SeriesPoint, Snapshot, Venue } from "./protocol";
+import type { AccountSeries, Alert, Fill, Msg, SeriesPoint, Snapshot, Venue } from "./protocol";
 import type { TzMode } from "./format";
 import { isPhoneLayout } from "./responsive";
 
@@ -71,8 +71,13 @@ interface State {
   hideAmounts: boolean;
   /** Series names hidden per chart, from the legend words. */
   hidden: Record<string, string[]>;
+  /** Alerts hidden on this browser, as alertKey()s; a key goes when its alert is no longer active. */
+  hiddenAlerts: string[];
   /** Exposure samples since this page opened (last hour). */
   ring: RingPoint[];
+  hideAlert: (a: Alert) => void;
+  showAlert: (a: Alert) => void;
+  showAllAlerts: () => void;
   setHidden: (chart: string, names: string[]) => void;
   setConn: (c: Conn) => void;
   setTz: (tz: TzMode) => void;
@@ -163,6 +168,41 @@ function savedHidden(): Record<string, string[]> {
   } catch {
     return {};
   }
+}
+
+// ---- hidden alerts: a warning or info the desk has seen leaves the banner, badge and Desk on this browser ----
+
+/** One firing of an alert: the same key while it holds (its text's figures change at each check), a new one
+ *  when it clears and fires again. */
+export const alertKey = (a: Alert) => `${a.id}|${a.since}`;
+/** A critical alert is never hidden. */
+export const canHide = (a: Alert) => a.level !== "crit" && a.active;
+export const isHidden = (a: Alert, keys: string[]) => canHide(a) && keys.includes(alertKey(a));
+
+const HIDDEN_ALERTS_KEY = "desk.hiddenAlerts";
+function savedHiddenAlerts(): string[] {
+  try {
+    const v = JSON.parse((typeof localStorage !== "undefined" && localStorage.getItem(HIDDEN_ALERTS_KEY)) || "[]");
+    return Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function saveHiddenAlerts(keys: string[]) {
+  try {
+    localStorage.setItem(HIDDEN_ALERTS_KEY, JSON.stringify(keys));
+  } catch {
+    /* private mode */
+  }
+}
+/** The keys whose alert is still active and hideable; null when none went. */
+function pruneHidden(keys: string[], alerts: Alert[]): { hiddenAlerts: string[] } | null {
+  if (!keys.length) return null;
+  const live = new Set(alerts.filter(canHide).map(alertKey));
+  const keep = keys.filter((k) => live.has(k));
+  if (keep.length === keys.length) return null;
+  saveHiddenAlerts(keep);
+  return { hiddenAlerts: keep };
 }
 
 const savedTz = (typeof localStorage !== "undefined" && localStorage.getItem("desk.tz")) as TzMode | null;
@@ -282,7 +322,26 @@ export const useStore = create<State>((set, get) => ({
   stacks: {} as Record<Tab, NavEntry[]>,
   hideAmounts: savedHide,
   hidden: savedHidden(),
+  hiddenAlerts: savedHiddenAlerts(),
   ring: [],
+  hideAlert: (a) => {
+    const keys = get().hiddenAlerts;
+    const k = alertKey(a);
+    if (!canHide(a) || keys.includes(k)) return;
+    const hiddenAlerts = keys.concat(k);
+    saveHiddenAlerts(hiddenAlerts);
+    set({ hiddenAlerts });
+  },
+  showAlert: (a) => {
+    const k = alertKey(a);
+    const hiddenAlerts = get().hiddenAlerts.filter((x) => x !== k);
+    saveHiddenAlerts(hiddenAlerts);
+    set({ hiddenAlerts });
+  },
+  showAllAlerts: () => {
+    saveHiddenAlerts([]);
+    set({ hiddenAlerts: [] });
+  },
   setHidden: (chart, names) => {
     const hidden = { ...get().hidden, [chart]: names };
     localStorage.setItem("desk.hidden", JSON.stringify(hidden));
@@ -304,7 +363,7 @@ export const useStore = create<State>((set, get) => ({
     switch (m.type) {
       case "snapshot": {
         const s = m.data;
-        set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s) });
+        set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts) });
         fillListeners.forEach((fn) => fn({ kind: "reset", fills: s.fills }));
         return;
       }
@@ -316,6 +375,7 @@ export const useStore = create<State>((set, get) => ({
           lastMsg: now,
           skew: m.data.now != null ? m.data.now - now : get().skew,
           ...(m.data.exposure ? sample(get().ring, next) : null),
+          ...(m.data.alerts ? pruneHidden(get().hiddenAlerts, m.data.alerts) : null),
         });
         if (m.data.fills) fillListeners.forEach((fn) => fn({ kind: "reset", fills: next.fills }));
         return;

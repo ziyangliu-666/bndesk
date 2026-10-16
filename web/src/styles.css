@@ -87,7 +87,7 @@ kbd {
 }
 .ab-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, max-content) auto;
+  grid-template-columns: 16px minmax(0, max-content) auto auto;
   justify-content: start;
   gap: 8px;
   align-items: center;
@@ -112,13 +112,29 @@ kbd {
   color: var(--muted);
   font-size: 11px;
 }
-.ab-more {
+.ab-foot {
+  display: flex;
+  gap: 16px;
   margin-left: 24px;
+}
+.ab-more,
+.ab-hide {
   font-size: 11px;
   color: var(--ink-2);
 }
-.ab-more:hover {
+.ab-hide {
+  margin-left: 8px;
+  color: var(--muted);
+}
+.ab-more:hover,
+.ab-hide:hover {
   color: var(--ink);
+}
+.ab-more:focus-visible,
+.ab-hide:focus-visible,
+.alert-act:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 .waiting {
   padding: 40px;
@@ -578,7 +594,7 @@ kbd {
 }
 .alert {
   display: grid;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 16px 1fr auto 32px;
   gap: 8px;
   align-items: start;
   padding: 5px 10px 5px 12px;
@@ -602,8 +618,22 @@ kbd {
 .alert.info .alert-level {
   color: var(--ink-2);
 }
-.alert.cleared {
+.alert.cleared,
+.alert.hidden {
   opacity: 0.55;
+}
+.alert-hidden {
+  margin-right: 6px;
+  color: var(--muted);
+}
+.alert-act {
+  justify-self: end;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.alert-act:hover {
+  color: var(--ink);
 }
 .alert-age {
   color: var(--muted);

@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { IconBell, IconChartCandle, IconDots, IconLayoutDashboard, IconWallet } from "@tabler/icons-react";
-import { switchTab, useStore, type Tab } from "../../store";
+import { isHidden, switchTab, useStore, type Tab } from "../../store";
 
 const TABS: { tab: Tab; label: string; icon: (active: boolean) => ReactNode }[] = [
   { tab: "desk", label: "Desk", icon: (a) => <IconLayoutDashboard size={22} stroke={a ? 2 : 1.6} /> },
@@ -11,13 +11,14 @@ const TABS: { tab: Tab; label: string; icon: (active: boolean) => ReactNode }[] 
   { tab: "more", label: "More", icon: (a) => <IconDots size={22} stroke={a ? 2 : 1.6} /> },
 ];
 
-/** Active warnings and critical alerts: the count, and whether any is critical. */
+/** Active warnings and critical alerts not hidden on this browser: the count, and whether any is critical. */
 export function useAlertCount(): { n: number; crit: boolean } {
   const alerts = useStore((s) => s.snap?.alerts);
+  const keys = useStore((s) => s.hiddenAlerts);
   let n = 0;
   let crit = false;
   for (const a of alerts ?? []) {
-    if (!a.active || a.level === "info") continue;
+    if (!a.active || a.level === "info" || isHidden(a, keys)) continue;
     n++;
     crit ||= a.level === "crit";
   }

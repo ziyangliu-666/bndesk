@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::accounts::{self, Account, AccountRef, Dividend, MarketRef, OnDividend, OnFee, OnFill, Transfer, Transfers, TransfersRef};
+use crate::accounts::{self, Account, AccountRef, Dividend, MarketRef, OnDividend, OnFee, OnFeeChange, OnFill, Transfer, Transfers, TransfersRef};
 use crate::alerts::Alerts;
 use crate::backfill;
 use crate::beta::Betas;
@@ -315,6 +315,11 @@ impl Desk {
             store.put(Row::Kv(format!("fee:{}:{venue}:{symbol}", a.id), format!("{},{}", repr(v.0), repr(v.1))));
         });
         let store = self.store.clone();
+        let on_fee_change: OnFeeChange = Rc::new(move |a: &Account, venue: Venue, symbol: &str, since: Option<i64>| {
+            let k = format!("feechg:{}:{venue}:{symbol}", a.id);
+            store.put(since.map_or(Row::KvDel(k.clone()), |t| Row::Kv(k, t.to_string())));
+        });
+        let store = self.store.clone();
         let on_dividend: OnDividend = Rc::new(move |a: &Account, id: &str, d: &Dividend| {
             store.put(Row::Dividend(DividendRow {
                 id: format!("{}:{id}", a.id),
@@ -332,6 +337,7 @@ impl Desk {
             a.market = Some(self.market.clone());
             a.on_fill = self.on_fill.clone();
             a.on_fee = on_fee.clone();
+            a.on_fee_change = on_fee_change.clone();
             a.on_dividend = on_dividend.clone();
             a.spot_symbols = spot_symbols.clone();
         }
@@ -501,6 +507,13 @@ impl Desk {
                     if let [mk, tk] = xs[..] {
                         a.first_fees.insert((venue, parts[3].to_string()), (mk, tk));
                     }
+                }
+                // a change seen before the restart keeps its clock
+                if parts.len() == 4 && parts[0] == "feechg" && parts[1] == a.id
+                    && let Ok(venue) = parts[2].parse::<Venue>()
+                    && let Ok(t) = v.parse::<i64>()
+                {
+                    a.fee_changed.insert((venue, parts[3].to_string()), t);
                 }
             }
         }
@@ -796,6 +809,7 @@ impl Desk {
                 for o in a.open.values() {
                     tracked.insert(format!("{}:{}", o.venue, o.symbol));
                 }
+                a.expire_fees(now);
             }
         }
         if let Some(v) = &self.view {
