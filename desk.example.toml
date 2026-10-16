@@ -30,6 +30,7 @@ reference = { symbol = "ETHUSDT", venue = "usdm" }
 # beta_halflife_h = 8
 # beta_prior_samples = 1440    # weight of the prior, in samples
 # beta_sample_s = 10
+# beta_horizon_s = 10          # return horizon; longer than beta_sample_s: overlapping returns, one per sample
 # beta_clip = 1.5
 # per market: beta_prior = -0.4 on a [[markets]] entry (a market that moves against beta_vs)
 #

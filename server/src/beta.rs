@@ -1,10 +1,11 @@
 //! Betas of the configured markets against one instrument, for a beta-weighted hedge target.
 //!
 //! Every `sample_s` each market's price (its reference if it has one, else its own mid) and the
-//! beta instrument's mid are sampled; log returns feed exponentially weighted cov/var with a
-//! half-life. The estimate is shrunk to a prior while samples are few:
-//! beta = clip(prior + w * (cov/var - prior)), w = n / (n + prior_samples).
-use std::collections::HashMap;
+//! beta instrument's mid are sampled; log returns over `horizon_s` (overlapping when longer than
+//! `sample_s`: one per sample) feed exponentially weighted cov/var with a half-life. A longer horizon
+//! takes in what a market follows the beta instrument with a lag. The estimate is shrunk to a prior
+//! while samples are few: beta = clip(prior + w * (cov/var - prior)), w = n / (n + prior_samples).
+use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +16,7 @@ pub struct BetaCfg {
     pub halflife_h: f64,
     pub prior_samples: f64,
     pub sample_s: f64,
+    pub horizon_s: f64,   // return horizon, a whole number of samples (at least one)
     pub clip: f64,
     pub priors: HashMap<String, f64>,   // per market key, e.g. negative for a market that moves against beta_vs
 }
@@ -27,6 +29,7 @@ impl BetaCfg {
             halflife_h: 8.0,
             prior_samples: 1440.0,
             sample_s: 10.0,
+            horizon_s: 10.0,
             clip: 1.5,
             priors: HashMap::new(),
         }
@@ -35,6 +38,10 @@ impl BetaCfg {
 
 #[derive(Serialize, Deserialize)]
 struct State {
+    #[serde(default)]
+    horizon_s: Option<f64>,   // None: kept before the horizon was configurable (one sample)
+    #[serde(default)]
+    sample_s: Option<f64>,
     var: f64,
     n_vs: i64,
     cov: HashMap<String, f64>,
@@ -49,13 +56,26 @@ pub struct Betas {
     pub n_vs: i64,
     pub cov: HashMap<String, f64>,
     pub n: HashMap<String, i64>,
-    pub last: HashMap<String, f64>,
+    /// the last `steps` + 1 prices of each market (the beta instrument under ""), one per sample
+    pub last: HashMap<String, VecDeque<f64>>,
+    pub steps: usize,
 }
 
 impl Betas {
     pub fn new(cfg: BetaCfg) -> Self {
         let alpha = 1.0 - 0.5f64.powf(cfg.sample_s / (cfg.halflife_h * 3600.0));
-        Betas { cfg, alpha, var: 0.0, n_vs: 0, cov: HashMap::new(), n: HashMap::new(), last: HashMap::new() }
+        let steps = ((cfg.horizon_s / cfg.sample_s).round() as usize).max(1);
+        Betas { cfg, alpha, var: 0.0, n_vs: 0, cov: HashMap::new(), n: HashMap::new(), last: HashMap::new(), steps }
+    }
+
+    /// Adds p to k's prices; its log return over the horizon once they reach back that far.
+    fn push(&mut self, k: &str, p: f64) -> Option<f64> {
+        let q = self.last.entry(k.to_string()).or_default();
+        q.push_back(p);
+        if q.len() > self.steps + 1 {
+            q.pop_front();
+        }
+        (q.len() == self.steps + 1).then(|| (p / q[0]).ln())
     }
 
     /// One sampling step: vs_px is the beta instrument's price, prices maps market -> price.
@@ -64,19 +84,12 @@ impl Betas {
             Some(v) if v > 0.0 => v,
             _ => return,
         };
-        let prev = self.last.insert(String::new(), vs_px);
-        let Some(prev) = prev else {
-            for (k, p) in prices {
-                if let Some(p) = p.filter(|p| *p != 0.0) {
-                    self.last.insert(k.to_string(), p);
-                }
-            }
-            return;
-        };
-        let r = (vs_px / prev).ln();
+        let r = self.push("", vs_px);
         let a = self.alpha;
-        self.var += a * (r * r - self.var);
-        self.n_vs += 1;
+        if let Some(r) = r {
+            self.var += a * (r * r - self.var);
+            self.n_vs += 1;
+        }
         for (k, p) in prices {
             let p = match p {
                 Some(p) if p > 0.0 => p,
@@ -85,15 +98,9 @@ impl Betas {
                     continue;
                 }
             };
-            let q = match self.last.get_mut(k) {
-                Some(q) => std::mem::replace(q, p),
-                None => {
-                    self.last.insert(k.to_string(), p);
-                    continue;
-                }
-            };
+            let (Some(rk), Some(r)) = (self.push(k, p), r) else { continue };
             let c = self.cov.entry(k.to_string()).or_insert(0.0);
-            *c += a * ((p / q).ln() * r - *c);
+            *c += a * (rk * r - *c);
             *self.n.entry(k.to_string()).or_insert(0) += 1;
         }
     }
@@ -110,12 +117,24 @@ impl Betas {
     }
 
     pub fn dump(&self) -> String {
-        serde_json::to_string(&State { var: self.var, n_vs: self.n_vs, cov: self.cov.clone(), n: self.n.clone() })
-            .expect("beta state serializes")
+        let st = State {
+            horizon_s: Some(self.cfg.horizon_s),
+            sample_s: Some(self.cfg.sample_s),
+            var: self.var,
+            n_vs: self.n_vs,
+            cov: self.cov.clone(),
+            n: self.n.clone(),
+        };
+        serde_json::to_string(&st).expect("beta state serializes")
     }
 
+    /// State kept for another horizon or sample interval is not taken: the estimate starts again.
     pub fn load(&mut self, s: &str) -> anyhow::Result<()> {
         let d: State = serde_json::from_str(s)?;
+        let kept = (d.horizon_s.unwrap_or(d.sample_s.unwrap_or(self.cfg.sample_s)), d.sample_s.unwrap_or(self.cfg.sample_s));
+        anyhow::ensure!(kept == (self.cfg.horizon_s, self.cfg.sample_s),
+                        "kept for a {} s horizon sampled every {} s, not {} s every {} s", kept.0, kept.1,
+                        self.cfg.horizon_s, self.cfg.sample_s);
         (self.var, self.n_vs, self.cov, self.n) = (d.var, d.n_vs, d.cov, d.n);
         Ok(())
     }
@@ -152,5 +171,32 @@ mod tests {
         let mut c = Betas::new(b.cfg.clone());
         c.load(&b.dump()).unwrap();
         approx::assert_relative_eq!(c.beta("x"), b.beta("x"), max_relative = 1e-12);
+    }
+
+    #[test]
+    fn a_longer_horizon_takes_in_a_lagged_follower() {
+        // x makes the beta instrument's move 0.8 times over, three samples later
+        let run = |horizon_s: f64| {
+            let mut cfg = BetaCfg::new("usdm:VS");
+            (cfg.prior, cfg.prior_samples, cfg.sample_s, cfg.horizon_s) = (0.0, 1.0, 15.0, horizon_s);
+            let mut b = Betas::new(cfg);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(2);
+            let (mut vs, mut px) = (100.0f64, 100.0f64);
+            let mut moves = VecDeque::from([0.0; 3]);
+            for _ in 0..20_000 {
+                let r = gauss(&mut rng, 1e-3);
+                vs *= r.exp();
+                moves.push_back(r);
+                px *= (0.8 * moves.pop_front().unwrap() + gauss(&mut rng, 2e-4)).exp();
+                b.sample(Some(vs), [("x", Some(px))]);
+            }
+            b
+        };
+        assert!(run(15.0).beta("x").abs() < 0.1);
+        let b = run(900.0);
+        assert!((b.beta("x") - 0.8).abs() <= 0.1, "{}", b.beta("x"));
+        let mut c = Betas::new(BetaCfg::new("usdm:VS"));   // 10 s returns: state kept for 900 s is not taken
+        assert!(c.load(&b.dump()).is_err());
+        c.load(r#"{"var": 1.0, "n_vs": 1, "cov": {}, "n": {}}"#).unwrap();   // kept before the horizon: 10 s
     }
 }

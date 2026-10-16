@@ -143,8 +143,10 @@ All times are exchange event times (ms).
   target is 0 and any hedge left counts as to be closed. The betas are the desk's own, which may
   differ from a trading engine's,
   with `beta` per `[[markets]]` entry (default 1), or `beta = "estimate"`: EWMA cov/var of each
-  market's (reference) 10 s log returns against `beta_vs`, shrunk to `beta_prior` by
-  n / (n + `beta_prior_samples`) and clipped, persisted across restarts. `markets_only` limits the
+  market's (reference) log returns against `beta_vs` over `beta_horizon_s` (default `beta_sample_s`,
+  10 s), sampled every `beta_sample_s` (overlapping when the horizon is longer), shrunk to `beta_prior`
+  by n / (n + `beta_prior_samples`) and clipped, persisted across restarts (state kept for another
+  horizon or sample interval starts the estimate again). `markets_only` limits the
   hedge target and inventory alerts to configured markets.
 - Accounts without their own key but with an email are read through the master key's
   sub-account endpoints (balances, futures account and positions; no fills or orders).

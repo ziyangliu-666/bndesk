@@ -367,12 +367,14 @@ fn beta(exp: &Table) -> Result<Option<BetaCfg>> {
         bail!("[exposure] beta = \"estimate\" needs beta_vs or hedge_symbols");
     };
     let venue = s(exp, "beta_vs_venue", "usdm")?;
+    let sample_s = f(exp, "beta_sample_s", 10.0)?;
     Ok(Some(BetaCfg {
         vs: format!("{venue}:{vs}"),
         prior: f(exp, "beta_prior", 1.0)?,
         halflife_h: f(exp, "beta_halflife_h", 8.0)?,
         prior_samples: f(exp, "beta_prior_samples", 1440.0)?,
-        sample_s: f(exp, "beta_sample_s", 10.0)?,
+        sample_s,
+        horizon_s: opt_f(exp, "beta_horizon_s")?.unwrap_or(sample_s),   // one sample: non-overlapping returns
         clip: f(exp, "beta_clip", 1.5)?,
         priors: Default::default(),
     }))
