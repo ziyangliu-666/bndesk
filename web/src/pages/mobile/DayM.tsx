@@ -7,6 +7,7 @@ import { ExChart, type ExBoxRow, type ExSeries } from "../../components/ex";
 import { showInfo } from "../../components/mobile";
 import { DAY, PART_INFO, useLoad } from "./shared";
 import { Amt, Big, MASK, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
+import "./rest/assets.css";
 import "./history.css";
 
 const DEF_SE =
@@ -176,6 +177,7 @@ function DayPath({ start, live }: { start: number; live: boolean }) {
         key={hide ? "h" : "s"}
         id="m-day"
         title="Day PnL"
+        toolbarLeft={<span className="a-chart-t">Through the day, 5 min</span>}
         series={series}
         height={240}
         fullscreen

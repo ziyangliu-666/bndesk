@@ -502,8 +502,14 @@ export function ExChart(p: ExChartProps) {
     for (const l of live.current.values()) n = Math.max(n, l.data?.length ?? 0);
     if (!n) return;
     const want = cbs.current.initialBars;
-    if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
-    else c.timeScale().fitContent();
+    const apply = () => {
+      if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
+      else c.timeScale().fitContent();
+    };
+    apply();
+    // a chart created with its data at hand is laid out (autoSize) a frame or two later, and a fit before that
+    // keeps the default bar spacing: fit again once it is
+    requestAnimationFrame(() => requestAnimationFrame(() => chart.current === c && apply()));
   }, [touch]);
 
   useLayoutEffect(() => {
