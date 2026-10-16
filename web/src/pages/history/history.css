@@ -368,6 +368,19 @@
 .hx-t tbody td {
   color: var(--ink);
 }
+.hx-t thead th.sortable {
+  cursor: pointer;
+}
+.hx-t thead th.sortable:hover,
+.hx-t thead th.on {
+  color: var(--ink);
+}
+.hx-sort {
+  display: inline-block;
+  width: 10px;
+  margin-left: 2px;
+  text-align: left;
+}
 .hx-t tbody tr.click {
   cursor: pointer;
 }
@@ -396,6 +409,23 @@
   background: var(--raised);
   color: var(--ink-2);
   font-size: 11px;
+}
+/* a text button: the chosen day's ✕, its Intraday / Days switch */
+.hx-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.hx-side-head .hx-link {
+  margin-left: auto;
+  color: var(--muted);
+}
+.hx-link:hover {
+  color: var(--ink);
 }
 .hx-note {
   padding: 0 16px 10px;

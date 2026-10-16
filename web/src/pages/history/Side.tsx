@@ -29,17 +29,28 @@ export function DeskSide({
   title,
   todayDay,
   selected,
+  day,
   onDay,
+  onClearDay,
+  intraday,
+  onIntraday,
   hide,
 }: {
   rows: DayRow[];
   title: string;
   todayDay: string | null;
   selected: string | null;
+  /** The chosen day: its figures replace the range's at the top. */
+  day: DayRow | null;
   onDay: (day: string) => void;
+  onClearDay: () => void;
+  /** The chart is on an intraday interval. */
+  intraday: boolean;
+  /** Switch the chart between the chosen day's intraday bars and the days. */
+  onIntraday: () => void;
   hide: boolean;
 }) {
-  const tot = useMemo(() => sumDays(rows), [rows]);
+  const tot = useMemo(() => (day ? day : sumDays(rows)), [rows, day]);
   // the same summary as the phone's: today counts in the total only; days without a Day PnL in none
   const sm = useMemo(() => daySummary(rows, todayDay), [rows, todayDay]);
   const ranked = rows.filter((r) => r.pnl != null && r.day !== todayDay).sort((a, b) => b.pnl! - a.pnl!);
@@ -50,20 +61,49 @@ export function DeskSide({
   const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   return (
     <>
-      <div className="hx-side-head">
-        <span className="hx-side-title">{title}</span>
-        <span className="muted">USDT</span>
-      </div>
-      <div className="hx-figs">
-        <Fig big label="PnL" value={m(sg(sm.total))} tone={tone(sm.total)} title={summaryNote(sm)} dot={sm.missing > 0} />
-        <Fig label="Average day" value={m(sg(sm.average))} tone={tone(sm.average)} title="Over the finished days (today left out)" />
-        <Fig label="Days up" value={sm.finished ? `${sm.up} of ${sm.finished}` : "--"} title="Finished days that made money, of the finished days with a Day PnL" />
-        <Fig label="Fills" value={rows.length ? int(sm.fills) : "--"} />
-        <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
-      </div>
-      {sm.missing > 0 && <div className="hx-note muted">{sm.missing === 1 ? "1 day has" : `${sm.missing} days have`} no Day PnL (only trading PnL was kept): not in these figures.</div>}
-      <div className="hx-sect" title={sm.unsplit ? "The parts are kept only for the days the desk recorded its split" : undefined}>
-        Split{sm.unsplit > 0 && <span className="muted"> · {rows.length - sm.unsplit} of {rows.length} days</span>}
+      {day ? (
+        <>
+          {/* the chosen day: its figures and split; the chart zooms to it and its legend reads it */}
+          <div className="hx-side-head">
+            <span className="hx-side-title">
+              {day.day}
+              {day.day === todayDay && <span className="hx-tag">Today</span>}
+            </span>
+            <button type="button" className="hx-link" onClick={onClearDay} title={`Back to ${title}`} aria-label={`Back to ${title}`}>
+              ✕
+            </button>
+          </div>
+          <div className="hx-figs">
+            <Fig big label="Day PnL" value={m(sg(day.pnl))} tone={tone(day.pnl)} />
+            <Fig label="Fills" value={int(day.fills)} />
+            <Fig label="Volume" value={m(compact(day.volume))} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
+            <div className="hx-fig">
+              <span className="hx-fig-l">Chart</span>
+              <button type="button" className="hx-link hx-fig-v" onClick={onIntraday} title={intraday ? "Back to one bar a day" : "The day in 15 minute bars, as on the phone's day page"}>
+                {intraday ? "Days (1D)" : "Intraday (15m)"}
+              </button>
+            </div>
+          </div>
+          {!day.split && <div className="hx-note muted">The desk kept no split this day.</div>}
+        </>
+      ) : (
+        <>
+          <div className="hx-side-head">
+            <span className="hx-side-title">{title}</span>
+            <span className="muted">USDT</span>
+          </div>
+          <div className="hx-figs">
+            <Fig big label="PnL" value={m(sg(sm.total))} tone={tone(sm.total)} title={summaryNote(sm)} dot={sm.missing > 0} />
+            <Fig label="Average day" value={m(sg(sm.average))} tone={tone(sm.average)} title="Over the finished days (today left out)" />
+            <Fig label="Days up" value={sm.finished ? `${sm.up} of ${sm.finished}` : "--"} title="Finished days that made money, of the finished days with a Day PnL" />
+            <Fig label="Fills" value={rows.length ? int(sm.fills) : "--"} />
+            <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
+          </div>
+          {sm.missing > 0 && <div className="hx-note muted">{sm.missing === 1 ? "1 day has" : `${sm.missing} days have`} no Day PnL (only trading PnL was kept): not in these figures.</div>}
+        </>
+      )}
+      <div className="hx-sect" title={!day && sm.unsplit ? "The parts are kept only for the days the desk recorded its split" : undefined}>
+        Split{!day && sm.unsplit > 0 && <span className="muted"> · {rows.length - sm.unsplit} of {rows.length} days</span>}
       </div>
       <div className="hx-split">
         {parts.map((k) => {

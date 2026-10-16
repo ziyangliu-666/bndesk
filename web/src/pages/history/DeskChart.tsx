@@ -5,20 +5,22 @@ import { useMemo, type ReactNode } from "react";
 import { ExChart, rgba, signColor, UP, DOWN, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView, type Chip } from "../../components/ex";
 import { MASK, maskFormat } from "../../mask";
 import { REF_LINE } from "../../components/ex/palette";
-import { C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
+import { C, FUT_COLOR, PNL_COLORS } from "../../theme";
 import { compact, num, int } from "../../format";
 import { PARTS, type HInterval, type Mode, type Part, type Row } from "./data";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style?: "dashed" | "dotted" }> = {
-  pi: { label: "Trading", long: "Trading PnL", color: C.ink2, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
-  mm: { label: "MM", long: "Market making", color: MM_COLOR, title: "Market making: each fill against the mid 60 s later, minus fees" },
-  inv: { label: "Inv", long: "Inventory PnL", color: INVPNL_COLOR, title: "Inventory PnL: what the held inventory made after those 60 s" },
-  hedge: { label: "Hedge", long: "Hedge", color: HEDGE_COLOR, title: "Futures legs: price, fees, funding", style: "dashed" },
-  reb: { label: "Reb", long: "Rebates", color: REBATE_COLOR, title: "Market-maker rebates" },
-  other: { label: "Other", long: "Other", color: "#6f7a8c", title: "What the split does not explain: Day PnL − trading − hedge − rebates", style: "dotted" },
+  pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
+  mm: { label: "MM", long: "Market making", color: PNL_COLORS.mm, title: "Market making: each fill against the mid 60 s later, minus fees" },
+  inv: { label: "Inv", long: "Inventory PnL", color: PNL_COLORS.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
+  hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, title: "Futures legs: price, fees, funding", style: "dashed" },
+  reb: { label: "Reb", long: "Rebates", color: PNL_COLORS.reb, title: "Market-maker rebates" },
+  other: { label: "Other", long: "Other", color: PNL_COLORS.other, title: "What the split does not explain: Day PnL − trading − hedge − rebates", style: "dotted" },
 };
 /** The parts that add up to the P&L (Trading is MM + Inv). */
 const STACK: Part[] = ["mm", "inv", "hedge", "reb", "other"];
+/** The inventory pane's line: a quantity, not a gain or a warning (amber is market making's). */
+const HELD = C.ink2;
 
 const sign2 = (v: number) => num(v, 2, true);
 const val2 = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
@@ -52,6 +54,7 @@ export function DeskChart({
   onInterval,
   modes,
   view,
+  legendTime,
   hide,
 }: {
   rows: Row[];
@@ -67,6 +70,8 @@ export function DeskChart({
   modes: { label: string; options: { value: string; label: string; title?: string }[]; value: string; onChange: (v: string) => void }[];
   /** A range the page zooms to (a chosen day). */
   view: ExView | null;
+  /** The bar the legend shows at rest (the chosen day's). */
+  legendTime?: number | null;
   /** Hide amounts: the axis and legend figures read •••. */
   hide: boolean;
 }) {
@@ -167,7 +172,7 @@ export function DeskChart({
       format: vol,
       data: points("vol", rows, (r) => ({ time: r.t, value: r.volume })),
     });
-    out.push({ key: "held", kind: "line", label: "Inventory", pane: 2, color: INV_COLOR, format: amt, lastValue: true, data: points("held", rows, (r) => ({ time: r.t, value: r.inventory })) });
+    out.push({ key: "held", kind: "line", label: "Inventory", pane: 2, color: HELD, format: amt, lastValue: true, data: points("held", rows, (r) => ({ time: r.t, value: r.inventory })) });
     out.push({ key: "fut", kind: "line", label: "Futures", pane: 2, color: FUT_COLOR, format: amt, lastValue: true, data: points("fut", rows, (r) => ({ time: r.t, value: r.futures })) });
     return out;
   }, [rows, mode, stack, shownStack, pnlLabel, hide]);
@@ -213,7 +218,7 @@ export function DeskChart({
     if (parts.length && out.length) out.push("|");
     for (const k of parts) out.push({ key: k, label: PART_META[k].label, color: PART_META[k].color, title: PART_META[k].long });
     if (out.length) out.push("|");
-    out.push({ key: "vol", label: "Vol" }, { key: "held", label: "Inventory", color: INV_COLOR }, { key: "fut", label: "Futures", color: FUT_COLOR });
+    out.push({ key: "vol", label: "Vol" }, { key: "held", label: "Inventory", color: HELD }, { key: "fut", label: "Futures", color: FUT_COLOR });
     return out;
   }, [mode, stack]);
 
@@ -244,6 +249,7 @@ export function DeskChart({
       resetKey={mode}
       rightOffset={1}
       view={view}
+      legendTime={legendTime}
     />
   );
 }
