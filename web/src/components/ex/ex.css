@@ -509,6 +509,8 @@
 .ex-chart.touch .ex-chip,
 .touch .ex-chip {
   height: 44px;
+  min-width: 44px;
+  justify-content: center;
   font-size: 14px;
 }
 .ex-chip-div {
