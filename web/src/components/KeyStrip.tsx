@@ -58,13 +58,13 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const items: (TickerItem | "|")[] = [
     { label: <span title="The change of Day PnL over the last hour">1h PnL</span>, value: m(pnl(sm?.pnl_1h)), tone: tone(sm?.pnl_1h) },
     "|",
+    // tooltips on the plain words without the dotted underline (kept for jargon: Other, Exposure gap, Markout)
     {
-      label: "Market making",
+      label: <span title={`Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} USDT.`}`}>Market making</span>,
       value: m(pnl(p?.mm)),
       tone: tone(p?.mm),
-      title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} USDT.`}`,
     },
-    { label: "Inventory PnL", value: m(pnl(p?.inventory)), tone: tone(p?.inventory), title: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
+    { label: <span title="Trading PnL minus market making: what the inventory made after the first 60 s of each fill.">Inventory PnL</span>, value: m(pnl(p?.inventory)), tone: tone(p?.inventory) },
     { label: <span title="The futures legs since the day start: price at mark, minus fees, plus funding.">Hedge</span>, value: m(pnl(hedge)), tone: tone(hedge) },
     { label: <span title="Market-maker rebates Binance credited since the day start, hourly per account.">Rebates</span>, value: m(pnl(sm?.rebates)), tone: tone(sm?.rebates) },
     { label: "Other", value: m(pnl(sm?.other)), tone: tone(sm?.other), title: "Day PnL minus trading PnL, the hedge and the rebates: what the split does not explain." },
@@ -119,7 +119,6 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
     { label: "24h Chg", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", tone: chg },
     { label: "24h High", value: price(t?.high) },
     { label: "24h Low", value: price(t?.low) },
-    { label: `24h Vol(${base})`, value: t ? compact(t.volume) : "--" },
     { label: "24h Vol(USDT)", value: t ? compact(t.quoteVolume) : "--" },
     "|",
     { label: <span title="Held across accounts, free + locked">Inventory</span>, value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--" },
@@ -134,7 +133,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
           ? "Today: the hedge leg, price at mark − fees + funding, USDT"
           : "Today: market making + inventory PnL, fees included, USDT. The desk's Day PnL adds the hedge, rebates and other",
     },
-    ...(inst.venue === "spot" ? [{ label: "Market making", value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl), title: "Each fill against the mid 60 s later, minus fees, USDT" }] : []),
+    ...(inst.venue === "spot" ? [{ label: <span title="Each fill against the mid 60 s later, minus fees, USDT">Market making</span>, value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl) }] : []),
     { label: <span title="Market spread: (ask − bid) / mid">Spread</span>, value: row?.spread_bps == null ? "--" : `${bps(row.spread_bps, false)} bps` },
     { label: "Edge", value: row?.edge_bps == null ? "--" : `${bps(row.edge_bps)} bps`, tone: signTone(row?.edge_bps) || undefined, title: "Edge at fill against fair, volume-weighted over today's fills" },
     { label: <span title="Fills today">Fills</span>, value: int(row?.fills_day) },
@@ -145,7 +144,8 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
       <TickerStrip
         className="dk-tk"
         lead={{
-          title: <span title="Binance's last trade price">Last price</span>,
+          // Binance's last trade: the one market price up here; the ladder's middle row is our mid and fair
+          title: <span title="Binance's last trade price, from its 24 h ticker">Last price</span>,
           value: price(t?.last),
           tone: prev.current.dir,
         }}

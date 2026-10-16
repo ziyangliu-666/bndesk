@@ -11,6 +11,7 @@ import { Ladder } from "./desk/Ladder";
 import { Instruments } from "./desk/Instruments";
 import { LatestFills } from "./desk/LatestFills";
 import { BottomPanel } from "./desk/BottomPanel";
+import { NamePicker } from "./desk/NamePicker";
 import "./desk/desk.css";
 
 const LADDER_KEY = "desk.ladder";
@@ -92,8 +93,10 @@ export function Desk() {
           name={
             <div className="dk-name">
               <div className="dk-name-row">
-                <span className="dk-name-big">{sel.symbol}</span>
-                <span className="dk-tag">{sel.venue === "usdm" ? "Perp" : "Spot"}</span>
+                <NamePicker sel={sel}>
+                  <span className="dk-name-big">{sel.symbol}</span>
+                  <span className="dk-tag">{sel.venue === "usdm" ? "Perp" : "Spot"}</span>
+                </NamePicker>
                 <button type="button" className="dk-x" onClick={() => selectInstrument(null)} title="Back to the desk (Esc)" aria-label="Back to the desk">
                   ✕
                 </button>
@@ -107,7 +110,9 @@ export function Desk() {
           name={
             <div className="dk-name">
               <div className="dk-name-row">
-                <span className="dk-name-big">Desk</span>
+                <NamePicker sel={null}>
+                  <span className="dk-name-big">Desk</span>
+                </NamePicker>
               </div>
               <div className="dk-name-sub">All accounts</div>
             </div>

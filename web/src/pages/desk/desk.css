@@ -153,7 +153,98 @@
   min-width: 0;
   background: var(--panel);
   padding: 0 16px;
-  overflow: hidden;
+  /* the strip clips itself (.ex-ticker); the name picker's menu hangs over the panels below */
+  position: relative;
+  z-index: 5;
+}
+
+/* the name slot's picker */
+.dk-pick {
+  position: relative;
+}
+.dk-pick-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.dk-pick-caret {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-pick-btn:hover .dk-pick-caret,
+.dk-pick-btn[aria-expanded="true"] .dk-pick-caret {
+  color: var(--ink);
+}
+.dk-pick-menu {
+  position: absolute;
+  top: 38px;
+  z-index: 1;
+  left: -8px;
+  width: 300px;
+  max-height: 480px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--raised);
+}
+.dk-pick-q {
+  flex: none;
+  margin: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--ground);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.dk-pick-q:focus {
+  border-color: var(--accent);
+}
+.dk-pick-head,
+.dk-pick-it {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+}
+.dk-pick-head {
+  flex: none;
+  height: 24px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-pick-list {
+  overflow-y: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.dk-pick-it {
+  width: 100%;
+  height: 28px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.dk-pick-it.hi {
+  background: #1b212b;
+}
+.dk-pick-it.on > span:first-child {
+  color: var(--accent);
 }
 .dk-name {
   flex: none;
@@ -352,6 +443,14 @@
   padding: 0 12px 0 16px;
   border-top: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
+}
+.dk-lad-mid-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.dk-lad-mid-l {
+  color: var(--muted);
 }
 .dk-lad-mid-px {
   font-size: 20px;

@@ -9,6 +9,7 @@ import { AccountsGrid } from "../../components/AccountsGrid";
 import { AlertsList } from "../../components/AlertsList";
 import { OrdersGrid } from "./OrdersGrid";
 import { useHide } from "../../mask";
+import { int } from "../../format";
 
 type Tab = "inventory" | "orders" | "fills" | "accounts" | "alerts";
 const TABS: Tab[] = ["inventory", "orders", "fills", "accounts", "alerts"];
@@ -58,7 +59,7 @@ export function BottomPanel({ sel }: { sel: Instrument | null }) {
           items={[
             { value: "inventory", label: "Inventory", count: nSym },
             { value: "orders", label: "Open orders", count: nOrders },
-            { value: "fills", label: "Fills", count: nFills, title: "Today's fills" },
+            { value: "fills", label: "Fills", count: nFills == null ? null : int(nFills), title: "Today's fills" },
             { value: "accounts", label: "Accounts", count: nAcc },
             { value: "alerts", label: "Alerts", count: nAlerts || null, title: "Active alerts" },
           ]}

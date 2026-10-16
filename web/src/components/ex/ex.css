@@ -649,13 +649,15 @@
 }
 .ex-marq-l {
   flex: none;
-  padding-right: 2px;
+  padding-right: 8px;
   color: var(--muted);
 }
 .ex-marq-clip {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  /* an item scrolling out fades before the label instead of being cut against it */
+  mask-image: linear-gradient(to right, transparent, #000 20px);
 }
 .ex-marq-in {
   display: inline-flex;
