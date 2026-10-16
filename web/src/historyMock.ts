@@ -4,6 +4,7 @@
 import type { HistBar, HistDay, HistFill, History, Kline } from "./api";
 import type { DayBars } from "./protocol";
 import { useStore } from "./store";
+import { markoutReport, type MkFill } from "./markoutMock";
 
 export const MIN = 60_000;
 const DAY = 86_400_000;
@@ -448,6 +449,22 @@ function fills(symbol: string, from: number, to: number): HistFill[] {
   return out.filter((f) => f.t >= from && f.t < to).sort((x, y) => x.t - y.t).slice(0, 20_000);
 }
 
+/** Today's fills of every traded name (the live tape where it reaches, each name under the account that trades it
+ *  there), read by markoutMock as the server reads its own. */
+function markouts(q: Record<string, string | number>) {
+  const snap = useStore.getState().snap;
+  if (!snap) throw new Error("503 desk not ready");
+  const dayStart = snap.summary.day_start;
+  const acct = new Map<string, string>();
+  for (const f of snap.fills) if (f.venue === "spot") acct.set(f.symbol, f.account);
+  const day: MkFill[] = [];
+  for (const symbol of new Set(snap.symbols.filter((s) => s.fills_day > 0).map((s) => s.symbol)))
+    for (const f of fills(symbol, dayStart, snap.now + 1))
+      day.push({ t: f.t, symbol, venue: f.venue, side: f.side, notional: f.price * f.qty, account: f.venue === "spot" ? (acct.get(symbol) ?? f.account) : f.account });
+  const s = (k: string) => (q[k] == null ? "" : String(q[k]));
+  return markoutReport(day, { account: s("account"), venue: s("venue"), side: s("side"), ref: s("ref"), weight: s("weight"), h: q.h == null ? 10 : Number(q.h) }, snap.now, dayStart);
+}
+
 export function mockApi(path: string, q: Record<string, string | number>): unknown {
   const n = (k: string) => Number(q[k]);
   switch (path) {
@@ -457,6 +474,8 @@ export function mockApi(path: string, q: Record<string, string | number>): unkno
       return klines(String(q.symbol), String(q.venue), String(q.interval), n("from"), n("to"));
     case "/api/fills":
       return fills(String(q.symbol), n("from"), n("to"));
+    case "/api/markouts":
+      return markouts(q);
   }
   throw new Error("404 Not Found");
 }

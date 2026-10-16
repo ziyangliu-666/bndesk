@@ -378,3 +378,60 @@ export interface HedgeLeg {
   funding: number;
   pnl: number | null;
 }
+
+/** `GET /api/markouts`: today's fills seen one way (see DESIGN.md). Lines are indexed like `horizons_s`. */
+export interface MarkoutReport {
+  now: number;
+  day_start: number;
+  horizons_s: number[]; // −10 … 300
+  fills: number;
+  notional: number;
+  edge: number | null;
+  pnl: number; // Σ notional × 60 s markout, USDT
+  all: MarkoutLine; // all / buy / sell ignore the side filter
+  buy: MarkoutLine;
+  sell: MarkoutLine;
+  tox: MarkoutLine; // D(h)
+  dist: MarkoutDist;
+  by_time: MarkoutBucket[]; // 15 minutes
+  by_instrument: MarkoutInst[];
+}
+
+export interface MarkoutLine {
+  n: number[];
+  mean: (number | null)[];
+  se: (number | null)[];
+  adverse: (number | null)[];
+}
+
+export interface MarkoutDist {
+  h: number;
+  n: number;
+  lo: number;
+  width: number;
+  bins: number[]; // weight shares
+  mean: number | null;
+  median: number | null;
+  p10: number | null;
+  p90: number | null;
+}
+
+export interface MarkoutBucket {
+  t: number;
+  fills: number;
+  notional: number;
+  mk10: number | null;
+  mk60: number | null;
+}
+
+export interface MarkoutInst {
+  symbol: string;
+  venue: Venue;
+  fills: number;
+  notional: number;
+  edge: number | null;
+  mean: (number | null)[]; // by path horizon
+  se10: number | null;
+  adverse10: number | null;
+  pnl: number;
+}
