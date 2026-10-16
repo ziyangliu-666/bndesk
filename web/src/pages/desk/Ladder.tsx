@@ -4,7 +4,7 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { useElementSize } from "@mantine/hooks";
 import { selectInstrument, useStore, type Instrument } from "../../store";
-import { bps, price, qty } from "../../format";
+import { bps, price, qtyDecimals, qtyFixed } from "../../format";
 import type { OpenOrder, SymbolRow } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
 
@@ -103,6 +103,8 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
   const bestBid = bids.find((l) => l.qty > 0);
   const bestAsk = asks.find((l) => l.qty > 0);
   const dist = (l: Level | undefined) => (l && fair ? (l.side === "buy" ? (fair - l.price) / fair : (l.price - fair) / fair) * 1e4 : null);
+  // one precision down the quantities (fixed: they line up), the largest order's
+  const qd = qtyDecimals(Math.max(0, ...mine.map((o) => o.qty)));
   const nb = mine.filter((o) => o.side === "buy").length;
   const na = mine.filter((o) => o.side === "sell").length;
 
@@ -125,10 +127,10 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
           {l.qty > 0 ? (
             <>
               <span className="dk-lad-acct">{l.accounts.length > 1 ? `${l.accounts.length} accts` : l.accounts[0]}</span>
-              {maskNode(hide, qty(l.qty))}
+              {maskNode(hide, qtyFixed(l.qty, qd))}
             </>
           ) : l.best ? (
-            <span className="dk-lad-mkt">market {l.side === "buy" ? "bid" : "ask"}</span>
+            <span className="dk-lad-mkt">Market {l.side === "buy" ? "bid" : "ask"}</span>
           ) : null}
         </span>
         <span className="dk-lad-d">{d == null ? "--" : bps(d)}</span>
@@ -182,7 +184,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
       </div>
       <div className="dk-lad-foot">
         <span>
-          Ours <span className="up">{nb} bids</span> · <span className="down">{na} asks</span>
+          Ours <span className="up">{nb} bid{nb === 1 ? "" : "s"}</span> · <span className="down">{na} ask{na === 1 ? "" : "s"}</span>
         </span>
         <span title="Best own bid and ask, distance from fair">
           Best {bps(dist(bestBid), false)} / {bps(dist(bestAsk), false)} bps

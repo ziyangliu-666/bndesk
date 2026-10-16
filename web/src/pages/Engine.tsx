@@ -1,6 +1,6 @@
 // System (was Engine): the engines, then the feeds and the alerts side by side. Each engine is a section: its name and state,
 // a row of label-over-value figures (no tiles), then rejects, latency and venue connections side by side.
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, ICellRendererParams } from "ag-grid-community";
 import { IconAlertOctagon } from "@tabler/icons-react";
@@ -14,12 +14,13 @@ import { fAge, DEFAULT_COL } from "../grid";
 import { AlertsList, useAlertList } from "../components/AlertsList";
 import { TextToggle, useExPref } from "../components/ex";
 import { Money } from "../mask";
+import { RULES } from "./mobile/rules";
 import "./ops/ops.css";
 
+/** A latency in one unit down the page: µs (a decimal under 100 µs). */
 function us(v: number | null): string {
   if (v == null) return "--";
-  if (v >= 1000) return num(v / 1000, 2) + " ms";
-  return num(v, 1) + " µs";
+  return num(v, v >= 100 ? 0 : 1) + " µs";
 }
 
 function Pair({ label, title, children, tone }: { label: string; title?: string; children: ReactNode; tone?: string }) {
@@ -62,10 +63,10 @@ function EngineSection({ e }: { e: EngineT }) {
         <Pair label="Unrealized" title="Unrealized PnL reported by the engine">
           <Money v={e.unrealized} sign />
         </Pair>
-        <Pair label="Fees" title="Fees paid">
-          <Money v={e.fees} />
+        <Pair label="Fees" title="Fees paid today: a cost, signed as one (rebates are credited apart)">
+          <Money v={e.fees == null ? null : -e.fees} sign />
         </Pair>
-        <Pair label="Max loss" title="Loss limit that triggers the engine's kill">
+        <Pair label="Loss limit" title="The day's loss that triggers the engine's kill">
           {e.max_loss == null ? "--" : <Money v={e.max_loss} />}
         </Pair>
       </div>
@@ -158,6 +159,27 @@ const KIND = { public: "Public", user: "User", rest: "REST", engine: "Engine" } 
 
 function Feeds() {
   const feeds = useStore((s) => s.snap?.feeds);
+  // more rows than fit: the grid's foot fades until it is scrolled to its end, so the rows below read as there
+  const box = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const check = () => {
+      const vp = el.querySelector<HTMLElement>(".ag-body-viewport");
+      if (vp) setMore(vp.scrollTop + vp.clientHeight < vp.scrollHeight - 2);
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    el.addEventListener("scroll", check, { capture: true, passive: true });
+    const id = setInterval(check, 1000);
+    check();
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", check, { capture: true });
+      clearInterval(id);
+    };
+  }, []);
   const cols = useMemo<ColDef<Feed>[]>(
     () => [
       { field: "name", headerName: "Feed", headerTooltip: "Connection or poller the monitor runs", width: 240, cellClass: "sym" },
@@ -176,7 +198,7 @@ function Feeds() {
     [],
   );
   return (
-    <div className="ops-panel ops-feeds">
+    <div className={"ops-panel ops-feeds" + (more ? " more" : "")} ref={box}>
       <AgGridReact<Feed>
         theme={gridTheme}
         rowData={feeds ?? []}
@@ -194,6 +216,28 @@ function Feeds() {
 const rowIdFeed = (p: GetRowIdParams<Feed>) => p.data.name;
 
 type AlertView = "active" | "hidden" | "cleared";
+
+/** Every check the desk runs with its state now, under the active alerts: what is clear is part of the answer. */
+function Checks() {
+  const alerts = useStore((s) => s.snap?.alerts);
+  const rank = { crit: 2, warn: 1, info: 0 } as const;
+  const by = new Map<string, keyof typeof rank>();
+  for (const a of alerts ?? []) if (a.active && (!by.has(a.rule) || rank[a.level] > rank[by.get(a.rule)!])) by.set(a.rule, a.level);
+  return (
+    <div className="ops-checks">
+      <div className="ops-checks-h">Checks now</div>
+      {Object.entries(RULES).map(([k, r]) => {
+        const lv = by.get(k);
+        return (
+          <div key={k} className="ops-check" title={r.means}>
+            <span>{r.name}</span>
+            <span className={lv === "crit" ? "crit-text" : lv === "warn" ? "warn-text" : lv ? "" : "muted"}>{lv === "crit" ? "Critical" : lv === "warn" ? "Warning" : lv ? "Info" : "Clear"}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Alerts() {
   const { active, hidden, cleared } = useAlertList();
@@ -215,6 +259,7 @@ function Alerts() {
       </header>
       <div className="ops-sys-scroll">
         <AlertsList bare filter={view} />
+        {view === "active" && <Checks />}
       </div>
     </section>
   );

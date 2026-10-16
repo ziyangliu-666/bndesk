@@ -194,7 +194,7 @@ function Subject({ a }: { a: Alert }) {
           title={
             <>
               {symbol}
-              {venue === "usdm" && <Tag>perp</Tag>}
+              {venue === "usdm" && <Tag>Perp</Tag>}
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol, venue } }}
@@ -361,7 +361,7 @@ function OrdersEv({ rule, subject, accounts }: { rule: "orders_10s" | "orders_1d
   const digits = pctDigits(list.map((a) => a.orders_1d / a.orders_1d_limit));
   return (
     <Section
-      title={tenS ? "Orders 10 s, by account" : "Orders 1 d, by account"}
+      title={tenS ? "Orders 10 s, by account" : "Orders today, by account"}
       info={
         tenS
           ? "New orders in the last 10 s against Binance's limit."
@@ -423,7 +423,7 @@ function InstrumentsEv({ a, snap, dust }: { a: Alert; snap: Snapshot; dust: bool
             title={
               <>
                 {symbol}
-                {venue === "usdm" && <Tag>perp</Tag>}
+                {venue === "usdm" && <Tag>Perp</Tag>}
               </>
             }
             subtitle={

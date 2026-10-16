@@ -26,7 +26,7 @@ export const RULES: Record<string, { name: string; means: string }> = {
     means: "An account's orders in the last 10 s passed 80 % of Binance's limit. At the limit the venue rejects new orders.",
   },
   orders_1d: {
-    name: "Orders 1 d",
+    name: "Orders today",
     means: "An account's orders today passed 80 % of Binance's daily limit. At the limit the venue rejects new orders until the day rolls.",
   },
   rest_ban: {

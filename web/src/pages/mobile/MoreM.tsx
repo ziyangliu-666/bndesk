@@ -1,6 +1,8 @@
 import { useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { bps, int } from "../../format";
+import { bps, countdown, hm, hms, int } from "../../format";
+import { nextEvent } from "../../components/Header";
+import { useFreshness } from "../../components/mobile/StatusPill";
 import { TextToggle, TvAttribution } from "../../components/ex";
 import { feedSummary } from "./shared";
 import { Row, Sec } from "./rest/ui";
@@ -19,7 +21,11 @@ export function MoreM() {
   const hide = useStore((s) => s.hideAmounts);
   const setHide = useStore((s) => s.setHideAmounts);
   const mock = import.meta.env.VITE_MOCK === "1";
-  const now = useNow(5000) + useStore.getState().skew;
+  const now = useNow(1000) + useStore.getState().skew;
+  const session = useStore((s) => s.snap?.summary.session);
+  const dayStart = useStore((s) => s.snap?.summary.day_start);
+  const fresh = useFreshness();
+  const zone = tz === "utc" ? "UTC" : "local time";
 
   // the feeds as the System page classifies them (up, silent, flapping, down)
   const fs = feeds ? feedSummary(feeds, now, alerts) : null;
@@ -45,6 +51,26 @@ export function MoreM() {
           to={{ page: "system" }}
         />
         <Row title="All fills" sub="Newest first, by account" value={<span className="r-fig">{int(fillsDay)}</span>} valueSub="today" to={{ page: "fills" }} />
+      </Sec>
+
+      {/* what the desktop's footer says: the connection, the session and the clock */}
+      <Sec title="Connection">
+        <Row
+          dense
+          title="Data"
+          value={<span className={fresh.state === "live" ? "up" : "warn-text"}>{fresh.state === "live" ? "Live" : fresh.state === "connecting" ? "Connecting" : fresh.state === "reconnecting" ? "Disconnected" : "Stale"}</span>}
+          valueSub={fresh.age != null ? `last update ${Math.max(0, Math.round(fresh.age / 1000))} s ago` : undefined}
+        />
+        {session?.next_event_at != null && (
+          <Row
+            dense
+            title={`Session ${session.name ?? "next"}`}
+            sub={`${nextEvent(session.next_event, session.name)} at ${hm(session.next_event_at, tz)} ${zone}`}
+            value={<span className="r-fig">{countdown(session.next_event_at - now)}</span>}
+            valueSub="left"
+          />
+        )}
+        <Row dense title="Clock" sub={dayStart != null ? `The day starts at ${hm(dayStart, tz)} ${zone}` : undefined} value={<span className="r-fig">{hms(now, tz)}</span>} valueSub={zone} />
       </Sec>
 
       <Sec title="Settings">

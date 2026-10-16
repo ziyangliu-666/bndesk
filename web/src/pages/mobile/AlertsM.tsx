@@ -3,7 +3,7 @@ import { isHidden, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { hm } from "../../format";
 import { LevelIcon } from "../../components/ui";
-import { span, useFreshness } from "../../components/mobile";
+import { showInfo, span, useFreshness } from "../../components/mobile";
 import { useExPref } from "../../components/ex";
 import type { Alert } from "../../protocol";
 import { RULES, alertText, byUrgency } from "./rules";
@@ -53,7 +53,32 @@ export function AlertsM() {
           ))}
         {tab === "hidden" && hidden.length > 0 && <p className="r-note o-note">Hidden on this browser until they clear: off the bell's count and the Desk.</p>}
       </Sec>
+      {tab === "active" && <Watched alerts={alerts} />}
     </>
+  );
+}
+
+/** Every check the desk runs, each with its state now: what is clear is as much the answer as what is not. A
+ *  tap says what the check watches. */
+function Watched({ alerts }: { alerts: Alert[] }) {
+  const by = new Map<string, Alert["level"]>();
+  const rank = { crit: 2, warn: 1, info: 0 } as const;
+  for (const a of alerts) if (a.active && (!by.has(a.rule) || rank[a.level] > rank[by.get(a.rule)!])) by.set(a.rule, a.level);
+  return (
+    <Sec title="Checks" right="now">
+      {Object.entries(RULES).map(([k, r]) => {
+        const lv = by.get(k);
+        return (
+          <Row
+            key={k}
+            dense
+            title={r.name}
+            value={<span className={lv === "crit" ? "crit-text" : lv === "warn" ? "warn-text" : lv ? "" : "muted"}>{lv === "crit" ? "Critical" : lv === "warn" ? "Warning" : lv ? "Info" : "Clear"}</span>}
+            onClick={() => showInfo(r.name, r.means)}
+          />
+        );
+      })}
+    </Sec>
   );
 }
 

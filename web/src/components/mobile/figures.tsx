@@ -23,7 +23,7 @@ export function span(ms: number | null | undefined): string {
 
 /** pnl: signed USD (+1,234.56, K from 10K); usd: unsigned; short: four significant figures (95.0K); pnlShort:
  *  signed short; full: the whole figure, never abbreviated (balances: 45,370.12). */
-export type MoneyKind = "pnl" | "usd" | "short" | "pnlShort" | "full";
+export type MoneyKind = "pnl" | "usd" | "short" | "pnlShort" | "full" | "k";
 
 /**
  * The phone's sign colour for a figure as printed: "up", "down", or "" when it is missing or prints as zero
@@ -302,7 +302,7 @@ function rateText(value: number, limit: number, pct?: boolean, digits = 0): Reac
 
 /**
  * An order-rate meter, one figure row everywhere (label · bar · value, the LimitBar columns): Orders 10 s as
- * "17 / 100", Orders 1 d and Bid use as "54%" (`pct`, `digits` decimals when accounts would otherwise read
+ * "17 / 100", Orders today and Bid use as "54%" (`pct`, `digits` decimals when accounts would otherwise read
  * alike). Amber from 80 %, red at the limit; a dash and an empty track without a limit. `who` names the account
  * in front of the value (the Desk's worst account).
  */

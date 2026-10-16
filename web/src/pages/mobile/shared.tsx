@@ -20,7 +20,7 @@ import { useQty } from "../../mask";
 import { usePageVisible } from "../../hooks";
 import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../protocol";
 import { useStore } from "../../store";
-import { HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
+import { PNL_COLORS, PNL_STROKES } from "../../theme";
 import "./ops.css";
 
 // ---- history: the loader and the day's parts (History, Day, instrument history) ----
@@ -68,13 +68,16 @@ export function useLoad<T>(key: string | null, run: (signal: AbortSignal) => Pro
   return st;
 }
 
-// the parts of a day, in the desk's series colors (the chart's legend uses the same)
+// the parts of a day, in the desk's split palette (theme.ts PNL_COLORS, with its strokes): the chart's legend,
+// chips and the split lists use the same
+const P = PNL_COLORS;
+const S = PNL_STROKES;
 export const PARTS = [
-  { key: "mm", label: "Market making", short: "MM", color: MM_COLOR },
-  { key: "inventory", label: "Inventory PnL", short: "Inv", color: INVPNL_COLOR },
-  { key: "hedge", label: "Hedge", short: "Hedge", color: HEDGE_COLOR },
-  { key: "rebates", label: "Rebates", short: "Reb", color: REBATE_COLOR },
-  { key: "other", label: "Other", short: "Other", color: "#5b6474" },
+  { key: "mm", label: "Market making", short: "MM", color: P.mm, stroke: S.mm },
+  { key: "inventory", label: "Inventory PnL", short: "Inv", color: P.inv, stroke: S.inv },
+  { key: "hedge", label: "Hedge", short: "Hedge", color: P.hedge, stroke: S.hedge },
+  { key: "rebates", label: "Rebates", short: "Rebates", color: P.reb, stroke: S.reb },
+  { key: "other", label: "Other", short: "Other", color: P.other, stroke: S.other },
 ] as const;
 export type PartKey = (typeof PARTS)[number]["key"];
 
@@ -94,8 +97,8 @@ export function InstName({ r }: { r: Pick<SymbolRow, "symbol" | "venue" | "dust"
   return (
     <>
       {r.symbol}
-      {r.venue === "usdm" && <Tag>perp</Tag>}
-      {r.dust && <Tag>dust</Tag>}
+      {r.venue === "usdm" && <Tag>Perp</Tag>}
+      {r.dust && <Tag>Dust</Tag>}
     </>
   );
 }
@@ -157,7 +160,7 @@ export const FillRow = memo(function FillRow({
           {symbol && (
             <>
               {f.symbol.replace(/USDT$/, "")}
-              {f.venue === "usdm" && <Tag>perp</Tag>}
+              {f.venue === "usdm" && <Tag>Perp</Tag>}
             </>
           )}
           <Side side={f.side} />
@@ -203,7 +206,7 @@ export function useFillSheet() {
           cur ? (
             <>
               {cur.symbol}
-              {cur.venue === "usdm" && " perp"} <Side side={cur.side} />
+              {cur.venue === "usdm" && " Perp"} <Side side={cur.side} />
             </>
           ) : null
         }
@@ -296,7 +299,7 @@ function FillFields({ f }: { f: Fill }) {
           title={
             <>
               Open {f.symbol}
-              {f.venue === "usdm" && <Tag>perp</Tag>}
+              {f.venue === "usdm" && <Tag>Perp</Tag>}
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol: f.symbol, venue: f.venue } }}
@@ -334,11 +337,10 @@ export function pctDigits(shares: number[]): number {
 
 // ---- engine figures (Engine, Alert) ----
 
-/** Microseconds as "11.4 µs" or "7.90 ms". */
+/** Microseconds in one unit down the page, as the desktop's System: "11.4 µs", "7,900 µs". */
 export function us(v: number | null): string {
   if (v == null) return "--";
-  if (v >= 1000) return num(v / 1000, 2) + " ms";
-  return num(v, 1) + " µs";
+  return num(v, v >= 100 ? 0 : 1) + " µs";
 }
 
 const SILENT_MS = 45_000;
@@ -450,7 +452,8 @@ export function EngineFacts({ e, spike }: { e: Engine; spike?: boolean }) {
           value: money(e.unrealized),
           v: e.unrealized,
         },
-        { label: "Fees", value: money(e.fees, "usd") },
+        // a cost, signed as one (as the hedge legs' fees)
+        { label: "Fees", value: money(e.fees == null ? null : -e.fees), v: e.fees == null ? null : -e.fees },
         { label: "Orders", value: int(e.orders) },
         { label: "Cancels", value: int(e.cancels) },
         { label: "Fills", value: int(e.fills) },

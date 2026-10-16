@@ -605,3 +605,32 @@
     gap: 16px;
   }
 }
+
+/* System → Alerts: the checks the desk runs, each with its state, under the active alerts */
+.ops-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--rule);
+}
+.ops-checks-h {
+  grid-column: 1 / -1;
+  padding: 4px 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ops-check {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  height: 24px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-2);
+  border-bottom: 1px solid #11151b;
+}
+/* the feeds grid continues past its foot: a fade says so */
+.ops-feeds.more .ag-body-viewport {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}

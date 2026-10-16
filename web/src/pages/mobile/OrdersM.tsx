@@ -249,7 +249,7 @@ function Rates({ accounts }: { accounts: Account[] }) {
         ))}
       </Sec>
       <Sec
-        title="Orders 1 d"
+        title="Orders today"
         info={`${TIP.o1d}${lim1d ? ` The limit is ${int(lim1d)} orders a day.` : ""} Amber from 80 %, red at the limit.`}
         right={lim1d ? `of ${int(lim1d)}` : undefined}
       >

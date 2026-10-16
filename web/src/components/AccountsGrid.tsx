@@ -26,7 +26,7 @@ function AccountCell(p: ICellRendererParams<Row>) {
   return (
     <span className="sym" title={a.email}>
       {a.label}
-      {a.role === "master" && <span className="sym-suffix">master</span>}
+      {a.role === "master" && <span className="sym-suffix">Master</span>}
     </span>
   );
 }
@@ -174,7 +174,7 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
       n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: "USD-M futures wallet balance, USDT", width: 78, valueFormatter: futOnly }),
       n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: "Unrealized PnL of futures positions at mark, USDT", width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--"), cellClass: signedCls(hide) }),
       { colId: "o10", headerName: "Orders 10 s", headerTooltip: "Orders placed in the last 10 s / Binance limit", width: 104, cellRenderer: M10, valueGetter: (p) => (p.data ? p.data.orders_10s / (p.data.orders_10s_limit || 1) : 0) },
-      { colId: "o1d", headerName: "Orders 1 d", headerTooltip: "Orders placed today as a share of the Binance daily limit, %", width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) },
+      { colId: "o1d", headerName: "Orders today", headerTooltip: "Orders placed today as a share of the Binance daily limit, %", width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) },
       { colId: "util", headerName: "Bid use", width: 90, cellRenderer: UtilCell, valueGetter: (p) => p.data?.utilization ?? 0, headerTooltip: "Resting bid notional / (free quote + resting bid notional), %" },
       open,
     ];

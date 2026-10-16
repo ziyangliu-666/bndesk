@@ -183,7 +183,7 @@ function Orders({ id }: { id: string }) {
     <>
       <Sec flush>
         {a.orders_10s_limit > 0 && <Meter label="Orders 10 s" value={a.orders_10s} limit={a.orders_10s_limit} />}
-        {a.orders_1d_limit > 0 && <Meter label="Orders 1 d" sub={`${int(a.orders_1d)} of ${limitK(a.orders_1d_limit)}`} value={a.orders_1d} limit={a.orders_1d_limit} pct />}
+        {a.orders_1d_limit > 0 && <Meter label="Orders today" sub={`${int(a.orders_1d)} of ${limitK(a.orders_1d_limit)}`} value={a.orders_1d} limit={a.orders_1d_limit} pct />}
         {util != null && <Meter label="Bid use" sub="resting bids ÷ USDT" value={util} limit={1} pct digits={0} />}
       </Sec>
       <Sec title="Resting" right={<button type="button" className="r-act" onClick={() => navigate({ page: "orders", account: id })}>Open orders</button>}>
