@@ -1,14 +1,16 @@
 import { useMemo, useState, type PointerEvent } from "react";
 import { useElementSize } from "@mantine/hooks";
-import { IconChevronDown } from "@tabler/icons-react";
 import { useStore } from "../../store";
 import { useThrottled } from "../../hooks";
 import { bps, int } from "../../format";
 import { refLabel } from "../../components/ui";
-import { InfoLabel, ListRow, Money, Section, Tag, tone } from "../../components/mobile";
+import { InfoLabel, Money, Section, tone } from "../../components/mobile";
 import type { SymbolRow } from "../../protocol";
 import { MkTable, type MkRowData } from "./shared";
 import "./history.css";
+import "./rest/ops.css";
+import { useExPref } from "../../components/ex";
+import { Amt, Empty, PageTabs, Row, Sec } from "./rest/ui";
 
 const MK_TIP =
   "Markout at h: side × (mid(t+h) / price − 1); net subtracts the reference's move from τ = 1 s or 0.2 s after the fill. " +
@@ -23,6 +25,7 @@ const TOX_DEF =
 
 /** Markouts: the horizon summary, toxicity behind a disclosure, by UTC hour, then by instrument. */
 export function MarkoutsM() {
+  const [tab, setTab] = useExPref<"markouts" | "hour" | "inst">("m-analysis", "tab", "markouts", ["markouts", "hour", "inst"]);
   const mk = useThrottled(useStore((s) => s.snap?.markouts), 1000);
   const fills = useThrottled(useStore((s) => s.snap?.fills), 1000);
   const symbols = useThrottled(useStore((s) => s.snap?.symbols), 1000);
@@ -51,38 +54,49 @@ export function MarkoutsM() {
   ];
 
   return (
-    <>
-      <Section title="By horizon" info={`${MK_TIP}\n\n${EDGE_TIP}`}>
-        <MkTable rows={rows} horizons={mk.horizons} />
-        <Toxicity tox={mk.toxicity} />
-      </Section>
-
-      <Section
-        title="By UTC hour"
-        info="Markout 10 s after the fill, net 1 s, notional-weighted over each UTC hour's fills today; hours without fills are left out. Tap or drag across the bars for an hour's figures. PnL 60 s is the 60 s markout × notional, USDT: a diagnostic, not PnL."
-        right="10 s, bps"
-      >
-        <HourBars hours={mk.by_hour} />
-      </Section>
-
-      <ByInstrument rows={symbols ?? []} />
-    </>
+    <div className="o-page">
+      <PageTabs
+        items={[
+          { value: "markouts", label: "Markouts" },
+          { value: "hour", label: "By hour" },
+          { value: "inst", label: "By instrument" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === "markouts" ? (
+        <>
+          <Section title="By horizon" info={`${MK_TIP}\n\n${EDGE_TIP}`} right="bps">
+            <MkTable rows={rows} horizons={mk.horizons} />
+          </Section>
+          <Section title="Toxicity" info={TOX_DEF} right="from 5 s before the fill">
+            <ToxTable tox={mk.toxicity} />
+          </Section>
+        </>
+      ) : tab === "hour" ? (
+        <>
+        <Section
+          title="By UTC hour"
+          info="Markout 10 s after the fill, net 1 s, notional-weighted over each UTC hour's fills today; hours without fills are left out. Tap or drag across the bars for an hour's figures. PnL 60 s is the 60 s markout × notional, USDT: a diagnostic, not PnL."
+          right="10 s, bps"
+        >
+          <HourBars hours={mk.by_hour} />
+        </Section>
+        <HourList hours={mk.by_hour} />
+        </>
+      ) : (
+        <ByInstrument rows={symbols ?? []} />
+      )}
+    </div>
   );
 }
 
-function Toxicity({ tox }: { tox: { horizons_s: number[]; bps: (number | null)[]; fills: number[] } }) {
-  const [open, setOpen] = useState(false);
-  // its own horizons (from the fill on), written as By horizon writes them
+function ToxTable({ tox }: { tox: { horizons_s: number[]; bps: (number | null)[]; fills: number[] } }) {
   const at = (h: number) => `${h} s`;
   return (
     <>
-      <button type="button" className="m-disc" aria-expanded={open} onClick={() => setOpen(!open)}>
-        Toxicity
-        <span className="m-disc-right">from 5 s before the fill</span>
-        <IconChevronDown size={18} stroke={1.75} />
-      </button>
-      {open && (
-        <div className="m-disc-body m-mk-wrap">
+      {(
+        <div className="m-mk-wrap">
           <table className="m-mk">
             <thead>
               <tr>
@@ -131,7 +145,7 @@ function HourBars({ hours }: { hours: Hour[] }) {
   const [sel, setSel] = useState<number | null>(null);
   const { ref, width } = useElementSize<HTMLDivElement>();
   if (!xs.length) return <div className="m-empty">No fills today</div>;
-  const H = 132;
+  const H = 160;
   const AX = 18; // hour labels
   const plotH = H - AX;
   let lo = 0;
@@ -233,6 +247,33 @@ function HourBars({ hours }: { hours: Hour[] }) {
   );
 }
 
+/** The hours as rows, newest first: fills, the 10 s and 60 s markouts, PnL 60 s. */
+function HourList({ hours }: { hours: Hour[] }) {
+  const xs = useMemo(() => hours.filter((h) => h.fills > 0).sort((a, b) => b.hour - a.hour), [hours]);
+  if (!xs.length) return null;
+  const hh = (h: number) => String(h).padStart(2, "0");
+  return (
+    <Sec title="Hours" right="10 s · 60 s, bps">
+      {xs.map((h) => (
+        <Row
+          key={h.hour}
+          dense
+          title={`${hh(h.hour)}:00`}
+          sub={`${int(h.fills)} fills`}
+          value={
+            <span className="r-fig">
+              <span className={tone(h.mk10, bps(h.mk10))}>{bps(h.mk10)}</span>
+              <span className="muted"> · </span>
+              <span className={tone(h.mk60, bps(h.mk60))}>{bps(h.mk60)}</span>
+            </span>
+          }
+          valueSub={<>PnL 60 s <Amt v={h.pnl} /></>}
+        />
+      ))}
+    </Sec>
+  );
+}
+
 /** Spot instruments with fills or PnL today, by realized PnL. */
 function ByInstrument({ rows }: { rows: SymbolRow[] }) {
   const spot = useMemo(
@@ -241,38 +282,35 @@ function ByInstrument({ rows }: { rows: SymbolRow[] }) {
   );
   const total = spot.reduce((s, r) => s + r.realized_pnl, 0);
   return (
-    <Section
-      title="By instrument"
+    <Sec
+      flush
+      title="Realized today"
       info="Spot instruments with fills or PnL today, sorted by realized PnL: sells matched FIFO to buys, including the day-start inventory, minus fees, USDT. Float is the inventory left, at mid against its cost. Edge and markouts are volume-weighted over today's fills; markouts net of the reference move from 1 s after the fill, bps."
-      right={
-        <>
-          realized <Money v={total} />
-        </>
-      }
+      right={<Amt v={total} />}
     >
       {spot.map((r) => {
         const ref = !r.reference ? null : r.reference === `usdm:${r.symbol}` || r.reference === r.symbol ? null : refLabel(r.reference);
         return (
-          <ListRow
+          <Row
             key={r.symbol}
             title={
               <>
                 {r.symbol}
-                {ref && <Tag>vs {ref}</Tag>}
+                {ref && <span className="r-tag">vs {ref}</span>}
               </>
             }
-            subtitle={`${int(r.fills_day)} fills · edge ${bps(r.edge_bps)} · 10 s ${bps(r.mk10_bps)} · 60 s ${bps(r.mk60_bps)}`}
-            primary={<Money v={r.realized_pnl} />}
-            secondary={
+            sub={`${int(r.fills_day)} fills · edge ${bps(r.edge_bps)} · 10 s ${bps(r.mk10_bps)} · 60 s ${bps(r.mk60_bps)}`}
+            value={<Amt v={r.realized_pnl} />}
+            valueSub={
               <>
-                float <Money v={r.float_pnl} />
+                float <Amt v={r.float_pnl} />
               </>
             }
             to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
           />
         );
       })}
-      {!spot.length && <div className="m-empty">No spot fills today</div>}
-    </Section>
+      {!spot.length && <Empty>No spot fills today</Empty>}
+    </Sec>
   );
 }

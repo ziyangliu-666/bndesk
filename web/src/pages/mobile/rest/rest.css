@@ -41,6 +41,13 @@
 .r-tabs .ex-tab-n {
   font-size: 12px;
 }
+/* the phone kit's section right under the tabs: the tabs' rule is its rule */
+.r-tabs + .m-section {
+  margin-top: 0;
+}
+.r-tabs + .m-section::before {
+  display: none;
+}
 .r-tabs.sub .ex-tabs {
   height: 40px;
 }
