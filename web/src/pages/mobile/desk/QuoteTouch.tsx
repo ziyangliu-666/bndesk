@@ -92,6 +92,7 @@ export function QuoteTouch({
       const s = start;
       start = null;
       if (scrub) {
+        scrub = false;
         e.preventDefault(); // no click after a reading
         return;
       }
