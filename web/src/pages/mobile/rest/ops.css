@@ -212,6 +212,9 @@
 .o-page .m-row-chev {
   display: none;
 }
+.o-page .m-row {
+  padding-right: var(--m-pad-r);
+}
 /* a row that only leads somewhere says so at its right, in the link colour */
 .o-page button.m-row:not(:has(.m-row-side))::after {
   content: "Open";
