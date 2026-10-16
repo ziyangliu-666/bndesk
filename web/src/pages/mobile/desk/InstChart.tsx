@@ -74,6 +74,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   const ask = ours.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price)[0];
   const fair = row?.fair ?? null;
   const avg = row && row.inv_qty !== 0 ? row.avg_cost : null;
+  const avgWord = venue === "usdm" ? "Entry" : "Avg cost";
 
   const line = iv === "line";
   const series: ExSeries[] = [
@@ -87,7 +88,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   if (bid) lines.push({ series: "k", key: "quotes", price: bid.price, color: rgba(C.up, 0.75), title: "Bid", labelColor: C.up, ...tag });
   if (ask) lines.push({ series: "k", key: "quotes", price: ask.price, color: rgba(C.down, 0.75), title: "Ask", labelColor: C.down, ...tag });
   if (fair != null) lines.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.8), style: "dotted", axisLabel: false });
-  if (avg != null) lines.push({ series: "k", key: "avg", price: avg, color: C.muted, title: "Avg cost", style: "large", labelColor: C.raised, labelTextColor: C.ink });
+  if (avg != null) lines.push({ series: "k", key: "avg", price: avg, color: C.muted, title: avgWord, style: "large", labelColor: C.raised, labelTextColor: C.ink });
 
   // our traded notional in a bar, for the volume pane's legend
   const oursIn = (t: number) => {
@@ -124,7 +125,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
               { key: "quotes", label: "Ask", color: C.down, value: () => (ask ? price(ask.price) : "--"), line: 2 },
             ]
           : []),
-        ...(avg != null ? [{ key: "avg", label: "Avg cost", color: C.muted, value: () => price(avg), line: 3 }] : []),
+        ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted, value: () => price(avg), line: 3 }] : []),
         { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)), box: (t: number) => fillsShort(byBar.get(t)), line: 3 },
         { label: "Ours", pane: 1, color: C.ink2, value: oursIn },
       ]}
@@ -132,7 +133,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
         { key: "fills", label: "Fills", color: C.up },
         { key: "quotes", label: "Quotes", color: C.down },
         { key: "fair", label: "Fair", color: FAIR },
-        ...(avg != null ? [{ key: "avg", label: "Avg cost", color: C.muted }] : []),
+        ...(avg != null ? [{ key: "avg", label: avgWord, color: C.muted }] : []),
         "|",
         { key: "vol", label: "Vol" },
       ]}

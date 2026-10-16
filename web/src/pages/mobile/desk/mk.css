@@ -46,7 +46,7 @@
   align-items: center;
   justify-content: center;
   width: 36px;
-  height: 36px;
+  height: 40px;
   color: var(--muted);
 }
 
@@ -79,12 +79,12 @@
   align-items: center;
 }
 .mk-head {
-  height: 36px;
+  height: 44px;
   font-size: 12px;
   color: var(--muted);
 }
 .mk-head > button {
-  height: 36px;
+  height: 44px;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;

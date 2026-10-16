@@ -10,7 +10,6 @@ import type { Fill, OpenOrder, SymbolRow, Venue } from "../../protocol";
 import { FillRow, MkTable, instPnl, useAccountLabel, useFillSheet, useQty } from "./shared";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
-import "./desk/dk.css";
 import "./desk/in.css";
 
 type H = "1" | "10" | "60" | "300";
@@ -56,7 +55,7 @@ export function InstrumentM({ symbol, venue }: { symbol: string; venue: Venue })
     <>
       <Header r={r} t={t} />
       <OurStats r={r} />
-      <Band symbol={symbol} venue={venue} />
+      {venue === "spot" && <Band symbol={symbol} venue={venue} />}
       <section className="dk-chart-sec in-chart-sec">
         <InstChart symbol={symbol} venue={venue} />
       </section>

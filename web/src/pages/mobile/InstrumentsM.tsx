@@ -9,7 +9,6 @@ import type { SymbolRow, Venue } from "../../protocol";
 import { instPnl } from "./shared";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
-import "./desk/dk.css";
 import "./desk/mk.css";
 
 type Filter = "all" | "held" | "quoted" | "perp";

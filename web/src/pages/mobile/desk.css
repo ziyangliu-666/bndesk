@@ -1,66 +1,238 @@
-/* ---- desk, instruments, instrument (phone) ---- */
+/* ---- phone Desk (hero, chart, parts, live quotes, risk) and what Markets and the instrument page share ---- */
 
-/* alert strip: the alert's text may take two lines */
-.m-desk-alert .m-row-title {
-  white-space: normal;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.3;
-}
-.m-desk-alert .m-row-lead {
-  align-self: flex-start;
-  padding-top: 2px;
-}
-.m-desk-alert .m-desk-more .m-row-title {
-  color: var(--accent);
-}
-
-/* the day chart sits in the padded column under its heading */
-.m-desk-chart {
-  padding: 4px 0 0;
-}
-/* the plot runs to the screen edges, like the rows' rules, rather than sitting as a box in the column */
-.m-desk-chart .lwc-plot {
+/* the most urgent warning: one quiet line over the hero */
+.dk-alert {
   margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  border-bottom: 1px solid var(--rule);
+}
+.dk-alert .m-row {
+  min-height: 48px;
+}
+.dk-alert .m-row-title {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.dk-alert .m-row-lead {
+  color: var(--warn);
 }
 
-
-/* instruments: the summary line with the venue filter sticks under the top bar */
-.m-inst-bar {
-  position: sticky;
-  top: calc(var(--m-bar-h) + var(--safe-t));
-  z-index: 5;
+/* hero: Day PnL big at the left, 1h and equity label-over-value at the right */
+.dk-hero {
+  padding: 4px 0 12px;
+}
+.dk-hero-top {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
-  padding: 4px var(--m-pad-r) 4px var(--m-pad-l);
-  min-height: 52px;
-  background: var(--ground);
-  border-bottom: 1px solid var(--rule);
+  min-height: 40px;
   font-size: 13px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
 }
-.m-inst-bar .m-inst-sum {
+.dk-hero-label .m-info {
+  min-height: 44px;
+}
+.dk-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: -2px 0 -2px -6px;
+  color: var(--muted);
+}
+.dk-eye:active {
+  opacity: 0.6;
+}
+.dk-hero-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.dk-hero-main {
   flex: 1;
   min-width: 0;
+}
+.dk-hero-v {
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.dk-hero-v .m-masked {
+  font-size: 20px;
+}
+.dk-hero-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.m-inst-bar .m-inst-sum b {
+.dk-hero-side {
+  display: flex;
+  gap: 16px;
+  margin: 0 0 1px;
+  text-align: right;
+}
+.dk-hero-side dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-hero-side dd {
+  margin: 2px 0 0;
+  font-size: 14px;
   font-weight: 500;
-  color: var(--ink);
+  white-space: nowrap;
 }
-.m-inst-chips {
-  padding-top: 4px;
+
+/* a chart runs to the screen edges, between two rules */
+.dk-chart-sec {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
 }
-.m-section.m-inst-list {
+.dk-chart-sec + .m-section {
   margin-top: 0;
 }
-.m-section.m-inst-list::before {
+.dk-chart-sec + .m-section::before {
   display: none;
 }
 
+/* the day's parts: label with its line's colour key, value at the right; 48 px rows */
+.dk-part {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  font-size: 14px;
+}
+.dk-part + .dk-part::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--m-pad-l);
+  right: var(--m-pad-r);
+  border-top: 1px solid var(--rule);
+  opacity: 0.6;
+}
+.dk-key {
+  flex: none;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+}
+.dk-part-l {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dk-part-l.warn,
+.dk-part-v.warn {
+  color: var(--warn);
+}
+.dk-part-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-part-v {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* the live quotes block: legend, then the map from edge to edge */
+.dk-quotes .q-legend.dk-qlegend {
+  padding: 0 0 6px;
+}
+.dk-qt {
+  position: relative;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 8px var(--m-pad-l);
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.dk-qt-hl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(126, 166, 246, 0.1);
+  pointer-events: none;
+}
+.dk-qt-read {
+  position: absolute;
+  z-index: 3;
+  margin: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  width: 200px;
+  padding: 8px 10px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+}
+.dk-qt-read-h {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.dk-qt-read-h b {
+  font-weight: 500;
+}
+.dk-qt-read dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 2px;
+  margin: 0;
+}
+.dk-qt-read dt {
+  color: var(--muted);
+}
+.dk-qt-read dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.dk-qt-read dd.up {
+  color: var(--up);
+}
+.dk-qt-read dd.down {
+  color: var(--down);
+}
+
+/* Markets → Quotes: the controls over the full map */
+.dk-qf-ctl {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+.dk-qf-l {
+  width: 44px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-qf-sum {
+  padding: 4px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dk-qf-sum .warn {
+  color: var(--warn);
+}
+
+/* risk: bars are neutral while far from a limit; amber and red only near and past it */
+.dk-risk .m-lim.ok .m-lim-fill {
+  background: var(--muted);
+}

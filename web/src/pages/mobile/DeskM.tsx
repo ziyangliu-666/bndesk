@@ -14,7 +14,6 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
-import "./desk/dk.css";
 
 /** How often the Desk takes the store's figures: twice a second is live to the eye, and a slow phone keeps up. */
 const PAGE_MS = 500;

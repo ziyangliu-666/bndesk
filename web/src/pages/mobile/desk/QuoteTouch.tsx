@@ -60,7 +60,7 @@ export function QuoteTouch({
       timer = setTimeout(() => {
         if (!start || moved || !live.current.rows.length) return;
         scrub = true;
-        navigator.vibrate?.(8);
+        if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(8);
         setRead({ i: rowAt(start.y), x: xIn(start.x) });
       }, PRESS_MS);
     };

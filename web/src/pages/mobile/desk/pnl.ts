@@ -86,11 +86,18 @@ export function todayBars(dayStart: number, bars: DayBars | undefined, series: r
       b.low = Math.min(b.low, p.pnl_day);
     }
   }
-  // the notional of the minutes after the last bar, from the tape
+  // the notional of the minutes the bars have not closed, from the tape (the last bar's minute may be partial:
+  // the tape's sum when it is the larger)
+  const tape = new Map<number, number>();
   for (const f of fills ?? []) {
-    if (f.ts < lastBar + MIN) break; // newest first
-    const b = out.get(Math.floor(f.ts / step) * step);
-    if (b) b.vol += f.notional;
+    if (f.ts < lastBar) break; // newest first
+    const m = Math.floor(f.ts / MIN) * MIN;
+    tape.set(m, (tape.get(m) ?? 0) + f.notional);
+  }
+  const lastVol = bars && bars.t.length && bars.t[bars.t.length - 1] === lastBar ? (bars.volume[bars.volume.length - 1] ?? 0) : 0;
+  for (const [m, v] of tape) {
+    const b = out.get(Math.floor(m / step) * step);
+    if (b) b.vol += m === lastBar ? Math.max(0, v - lastVol) : v;
   }
   const list = [...out.values()].sort((a, b) => a.time - b.time);
   // a bar opens where the last one closed; the parts carry forward over minutes without them
