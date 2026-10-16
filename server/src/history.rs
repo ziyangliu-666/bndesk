@@ -375,12 +375,14 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
     .collect()
 }
 
-fn fills(c: &Connection, symbol: Option<String>, from: i64, to: i64) -> rusqlite::Result<Vec<P::HistoryFill>> {
+fn fills(c: &Connection, symbol: Option<String>, venue: Option<&'static str>, from: i64, to: i64) -> rusqlite::Result<Vec<P::HistoryFill>> {
     let sym = if symbol.is_some() { " AND symbol = ?" } else { "" };
+    let ven = if venue.is_some() { " AND venue = ?" } else { "" };
     let sql = format!(
-        "SELECT ts, side, price, qty, account, venue, maker FROM fills WHERE ts >= ? AND ts < ?{sym} ORDER BY ts LIMIT {MAX_FILLS}");
+        "SELECT ts, side, price, qty, account, venue, maker FROM fills WHERE ts >= ? AND ts < ?{sym}{ven} ORDER BY ts LIMIT {MAX_FILLS}");
     let mut args: Vec<rusqlite::types::Value> = vec![from.into(), to.into()];
     args.extend(symbol.map(Into::into));
+    args.extend(venue.map(|v| v.to_string().into()));
     let mut st = c.prepare(&sql)?;
     st.query_map(params_from_iter(args), |r| {
         Ok(P::HistoryFill {
@@ -575,8 +577,14 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
 
 async fn fills_handler(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Response, ApiError> {
     let sym = symbol(&q)?;
+    let venue = match q.get("venue").map(String::as_str) {
+        None => None,
+        Some("spot") => Some("spot"),
+        Some("usdm") => Some("usdm"),
+        Some(v) => return Err(bad(format!("bad venue {v:?}"))),
+    };
     let (from, to) = range(&q, DAY)?;
-    let rows = blocking(&api, move |c| fills(c, sym, from, to)).await?;
+    let rows = blocking(&api, move |c| fills(c, sym, venue, from, to)).await?;
     Ok(json(&rows))
 }
 

@@ -330,6 +330,8 @@ impl Hub {
         // only once that is sent, and this tick's fills / points / bars are not in that snapshot
         if self.shared.tx.receiver_count() == 0 {
             self.last = Default::default();
+            // a client that connects later asks for its own fresh snapshot: a pending reset has nobody to reach
+            self.full = false;
             return;
         }
         if self.full {
@@ -787,6 +789,18 @@ mod tests {
         // and the next tick diffs against what was sent, so it sends nothing new
         hub.tick(&Patch::of(&s), &[], &[], &[], &P::DayBars::default(), || unreachable!());
         assert!(drain(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn a_reset_with_nobody_listening_sends_no_snapshot_later() {
+        // the day rolls while no client is connected; the first one to connect gets its own snapshot, so the
+        // next tick must not broadcast a second one
+        let mut hub = Hub::new();
+        hub.reset();
+        hub.tick(&Patch::of(&P::Snapshot::default()), &[], &[], &[], &P::DayBars::default(), || unreachable!());
+        let mut rx = hub.shared.tx.subscribe();
+        hub.tick(&Patch::of(&P::Snapshot::default()), &[], &[], &[], &P::DayBars::default(), || unreachable!());
+        assert!(drain(&mut rx).iter().all(|x| !x.starts_with("{\"type\":\"snapshot\"")));
     }
 
     #[test]

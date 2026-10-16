@@ -230,7 +230,7 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   and per-minute fill sums are kept in memory (read once at start, then only what was written since,
   thinned like the store), so a request does not read the db: on a small machine it does not stay in
   the page cache, and a month of rows took 30 s from disk.
-- `GET /api/fills?symbol&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` optional.
+- `GET /api/fills?symbol&venue&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` and `venue` (`spot` | `usdm`) optional.
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
   (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 5000 (the latest).
   `venue` spot (default) or usdm; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
