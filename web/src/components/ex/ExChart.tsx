@@ -42,11 +42,13 @@ import { num, price as fmtPrice } from "../../format";
 import { MASK } from "../../mask";
 import { closeChart, openChart, useStore } from "../../store";
 import type { TzMode } from "../../format";
+import type { Stroke } from "../../theme";
 import { C, CROSSHAIR, DOWN, GRID, PLOT_BG, SANS, UP, rgba, signColor } from "./palette";
 import { barLabel, boxLabel, tickLabel } from "./time";
-import { ChipRow, TextToggle, type Chip, type Option } from "./controls";
+import { ChipRow, SeriesKey, TextToggle, useScrollFade, type Chip, type Option } from "./controls";
 import { useExHidden, useExPref } from "./prefs";
 import { ChartFullscreen, goFullscreen } from "./fullscreen";
+import { AxisGuard, FillRings, type Ring } from "./rings";
 import "./ex.css";
 
 // ================================ public types ================================
@@ -96,7 +98,8 @@ export interface ExSeries {
   hiddenByDefault?: boolean;
   /** Line width (line, area, baseline). Default 1.5 (2 for baseline). */
   width?: number;
-  lineStyle?: "solid" | "dashed" | "dotted";
+  /** Stroke (theme.ts Stroke): solid, dashed, dotted, large (long dashes), sparse (spaced dots). */
+  lineStyle?: Stroke;
   /** Baseline: the base value. Default 0. */
   base?: number;
   /** Axis tag with the last value (and its dotted price line). Default: the first series of each pane, unless
@@ -119,7 +122,11 @@ export interface ExMarker {
   /** For `atPrice*` positions. */
   price?: number;
   color: string;
-  shape?: "circle" | "square" | "arrowUp" | "arrowDown";
+  /** "ring": a hollow ring at `price` (our fills), drawn by a primitive (rings.ts); the rest are Lightweight
+   *  Charts' own markers. */
+  shape?: "circle" | "square" | "arrowUp" | "arrowDown" | "ring";
+  /** Rings: −1 left of the bar's centre, +1 right (a buy and a sell in one bar never overlap). */
+  offset?: -1 | 0 | 1;
   position?: "aboveBar" | "belowBar" | "inBar" | "atPriceTop" | "atPriceMiddle" | "atPriceBottom";
   size?: number;
   text?: string;
@@ -233,6 +240,8 @@ export interface ExChartProps {
   onToggle?: (key: string) => void;
   /** The hovered bar's time (ms), null when the crosshair leaves. */
   onCrosshair?: (t: number | null) => void;
+  /** A click (a tap) on a bar: its time, ms. */
+  onBarClick?: (t: number) => void;
   /** The chart's API once created (null on unmount), for anything this wrapper does not cover. */
   chartRef?: (c: IChartApi | null) => void;
   className?: string;
@@ -245,7 +254,7 @@ export interface ExChartProps {
 // ================================ helpers ================================
 
 const sec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
-const STYLE = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted, large: LineStyle.LargeDashed } as const;
+const STYLE = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted, large: LineStyle.LargeDashed, sparse: LineStyle.SparseDotted } as const;
 const isOhlc = (p: ExPoint | ExOhlc): p is ExOhlc => (p as ExOhlc).open !== undefined;
 const coarse = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 
@@ -340,7 +349,8 @@ function seriesOptions(s: ExSeries, lastValue: boolean, visible: boolean): Recor
       break;
     case "baseline": {
       // masked: one neutral colour above and below the base, so the line does not tell a gain from a loss
-      const [u, d] = masked ? [C.ink2, C.ink2] : [up, down];
+      // (muted, not ink: an ink area would read as the Trading line)
+      const [u, d] = masked ? [C.muted, C.muted] : [up, down];
       o = {
         baseValue: { type: "price", price: s.base ?? 0 },
         lineWidth: width,
@@ -404,6 +414,8 @@ interface Live {
   data: readonly (ExPoint | ExOhlc)[] | null;
   byTime: Map<number, ExPoint | ExOhlc>;
   sig: string;
+  /** Its last value has an axis tag. */
+  lv: boolean;
 }
 
 /** Hover state outside React's render path: only the legend and the box re-render on a crosshair move. */
@@ -445,6 +457,7 @@ export function ExChart(p: ExChartProps) {
   const chart = useRef<IChartApi | null>(null);
   const live = useRef(new Map<string, Live>());
   const markersApi = useRef(new Map<string, ISeriesMarkersPluginApi<Time>>());
+  const ringsApi = useRef(new Map<string, FillRings>());
   const lines = useRef<[ISeriesApi<SeriesType>, IPriceLine][]>([]);
   const hov = useMemo(hoverStore, []);
   const [paneTops, setPaneTops] = useState<number[]>([0]);
@@ -469,6 +482,8 @@ export function ExChart(p: ExChartProps) {
   const hidden = p.hidden ?? own.hidden;
   const toggle = p.onToggle ?? own.toggle;
   const off = useCallback((k: string | undefined) => k != null && hidden.includes(k), [hidden]);
+  // a series the user may not hide is always drawn (a key stored hidden before it became fixed stays shown)
+  const offS = (s: ExSeries) => s.toggle !== false && off(s.key);
 
   const step = useMemo(() => stepOf(p.series[0]?.data ?? []), [p.series]);
   const stepRef = useRef(step);
@@ -511,10 +526,16 @@ export function ExChart(p: ExChartProps) {
     el.addEventListener("pointerdown", onUser, { passive: true });
     el.addEventListener("wheel", onUser, { passive: true });
     c.subscribeCrosshairMove(onMove);
+    const onClick = (e: MouseEventParams<Time>) => {
+      if (e.time != null) cbs.current.onBarClick?.((e.time as number) * 1000);
+    };
+    c.subscribeClick(onClick);
     const ts = c.timeScale();
     const onRange = () => {
       const r = ts.getVisibleLogicalRange();
-      setAway(ts.scrollPosition() < -2);
+      // with a page's own view (a chosen day) `>>` goes back to that view once the user has moved it; else to
+      // the latest bar once it is out of sight
+      setAway(cbs.current.view ? moved.current : ts.scrollPosition() < -2);
       if (r) setDense(ts.width() / Math.max(1, r.to - r.from) < 5);
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
@@ -538,6 +559,7 @@ export function ExChart(p: ExChartProps) {
       el.removeEventListener("pointerdown", onUser);
       el.removeEventListener("wheel", onUser);
       c.unsubscribeCrosshairMove(onMove);
+      c.unsubscribeClick(onClick);
       ts.unsubscribeVisibleLogicalRangeChange(onRange);
       ts.unsubscribeSizeChange(measure);
       c.remove();
@@ -545,6 +567,7 @@ export function ExChart(p: ExChartProps) {
       needFit.current = true; // a chart made again (a remount) fits its data again
       liveMap.clear();
       mk.clear();
+      ringsApi.current.clear();
       lines.current = [];
       cbs.current.chartRef?.(null);
     };
@@ -567,6 +590,27 @@ export function ExChart(p: ExChartProps) {
     offRef.current = p.rightOffset;
     chart.current?.timeScale().applyOptions({ rightOffset: p.rightOffset ?? (touch ? 3 : 5) });
   }, [p.rightOffset, touch]);
+
+  // the prices with an axis tag in a pane: the last values shown, the price lines with an axis label
+  const tagPrices = (pane: number): number[] => {
+    const out: number[] = [];
+    for (const l of live.current.values()) {
+      if ((l.def.pane ?? 0) !== pane || !l.lv || !l.data?.length || (l.def.scale && l.def.scale !== "right")) continue;
+      if (l.def.toggle !== false && hiddenRef.current.includes(l.def.key)) continue;
+      const last = l.data[l.data.length - 1]!;
+      const v = isOhlc(last) ? last.close : last.value;
+      if (v != null && Number.isFinite(v)) out.push(v);
+    }
+    for (const [api, pl] of lines.current) {
+      const l = [...live.current.values()].find((x) => x.api === api);
+      if (!l || (l.def.pane ?? 0) !== pane) continue;
+      const o = pl.options();
+      if (o.axisLabelVisible) out.push(o.price);
+    }
+    return out;
+  };
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
 
   // ---- series: structure, options, data ----
   const structure = p.series.map((s) => `${s.key}:${s.kind}:${s.pane ?? 0}:${s.scale ?? ""}`).join("|");
@@ -629,6 +673,7 @@ export function ExChart(p: ExChartProps) {
       for (const l of map.values()) c.removeSeries(l.api);
       map.clear();
       markersApi.current.clear();
+      ringsApi.current.clear();
       lines.current = [];
       while (c.panes().length > 1) c.removePane(c.panes().length - 1);
       const firstInPane = new Set<number>();
@@ -636,11 +681,19 @@ export function ExChart(p: ExChartProps) {
         const pane = s.pane ?? 0;
         const lv = s.lastValue ?? (s.kind !== "histogram" && !firstInPane.has(pane));
         firstInPane.add(pane);
-        const api = c.addSeries(DEF[s.kind] as never, seriesOptions(s, lv, !off(s.key)) as never, pane) as ISeriesApi<SeriesType>;
+        const api = c.addSeries(DEF[s.kind] as never, seriesOptions(s, lv, !offS(s)) as never, pane) as ISeriesApi<SeriesType>;
         if (s.margins) api.priceScale().applyOptions({ scaleMargins: s.margins });
         else if (pane > 0 && !s.scale) api.priceScale().applyOptions({ scaleMargins: { top: 0.25, bottom: 0 } });
         if (s.scale && s.scale !== "right") api.priceScale().applyOptions({ visible: false });
-        map.set(s.key, { def: s, api, data: null, byTime: new Map(), sig: "" });
+        map.set(s.key, { def: s, api, data: null, byTime: new Map(), sig: "", lv });
+      }
+      // per pane: the axis cleared around its tags (rings.ts AxisGuard)
+      const guarded = new Set<number>();
+      for (const s of p.series) {
+        const pane = s.pane ?? 0;
+        if (guarded.has(pane) || (s.scale && s.scale !== "right")) continue;
+        guarded.add(pane);
+        map.get(s.key)!.api.attachPrimitive(new AxisGuard(() => tagPrices(pane)));
       }
       if (view) needFit.current = false;
       requestAnimationFrame(() => {
@@ -651,7 +704,7 @@ export function ExChart(p: ExChartProps) {
     const panes = c.panes();
     panes.forEach((pn, i) => {
       const inPane = p.series.filter((s) => (s.pane ?? 0) === i);
-      const allOff = i > 0 && inPane.length > 0 && inPane.every((s) => off(s.key));
+      const allOff = i > 0 && inPane.length > 0 && inPane.every((s) => offS(s));
       pn.setStretchFactor(allOff ? 0.001 : (p.paneStretch?.[i] ?? (i === 0 ? 1 : 0.25)));
     });
 
@@ -662,9 +715,9 @@ export function ExChart(p: ExChartProps) {
       const pane = s.pane ?? 0;
       const lv = s.lastValue ?? (s.kind !== "histogram" && !firstInPane.has(pane));
       firstInPane.add(pane);
-      const sig = JSON.stringify([s.color, s.colors, s.width, s.lineStyle, s.base, lv, off(s.key), s.options, s.margins, formatSig(s)]);
+      const sig = JSON.stringify([s.color, s.colors, s.width, s.lineStyle, s.base, lv, offS(s), s.options, s.margins, formatSig(s)]);
       if (sig !== l.sig) {
-        const o = seriesOptions(s, lv, !off(s.key));
+        const o = seriesOptions(s, lv, !offS(s));
         // candles keep the precision their data set (below)
         if (s.kind === "candles" && l.data?.length) o.priceFormat = { type: "custom", formatter: defaultFormat(s), minMove: minMoveFor((l.data[l.data.length - 1] as ExOhlc).close) };
         l.api.applyOptions(o as never);
@@ -672,6 +725,7 @@ export function ExChart(p: ExChartProps) {
         l.sig = sig;
       }
       l.def = s;
+      l.lv = lv;
     }
 
     // interval switched and the data is still the old one: clear at once, wait for the new
@@ -739,10 +793,18 @@ export function ExChart(p: ExChartProps) {
   useLayoutEffect(() => {
     const map = live.current;
     const by = new Map<string, SeriesMarker<Time>[]>();
+    const rings = new Map<string, Ring[]>();
     if (!dense && !awaiting && !p.loading)
       for (const m of p.markers ?? []) {
         // a marker needs its bar in the series (a fill before the first bar, or in a bar not drawn yet, waits)
         if (off(m.key) || off(m.series) || !map.get(m.series)?.byTime.has(m.time)) continue;
+        if (m.shape === "ring") {
+          if (m.price == null) continue;
+          const list = rings.get(m.series) ?? [];
+          list.push({ time: sec(m.time), price: m.price, color: m.color, side: m.offset ?? 0 });
+          rings.set(m.series, list);
+          continue;
+        }
         const list = by.get(m.series) ?? [];
         list.push({
           time: sec(m.time),
@@ -761,6 +823,17 @@ export function ExChart(p: ExChartProps) {
       if (!api && !list.length) continue;
       if (!api) markersApi.current.set(k, (api = createSeriesMarkers(l.api, [], { autoScale: false })));
       api.setMarkers(list);
+    }
+    for (const [k, l] of map) {
+      const list = rings.get(k) ?? [];
+      let prim = ringsApi.current.get(k);
+      if (!prim && !list.length) continue;
+      if (!prim) {
+        prim = new FillRings();
+        l.api.attachPrimitive(prim);
+        ringsApi.current.set(k, prim);
+      }
+      prim.set(list);
     }
     // `drawn`: a marker whose bar came after it is placed once the bar is in
   }, [p.markers, dense, awaiting, p.loading, off, structure, drawn]);
@@ -822,7 +895,7 @@ export function ExChart(p: ExChartProps) {
   const folded = useMemo(() => {
     const out = new Set<number>();
     const panes = new Set(p.series.map((s) => s.pane ?? 0));
-    for (const i of panes) if (i > 0 && p.series.filter((s) => (s.pane ?? 0) === i).every((s) => off(s.key))) out.add(i);
+    for (const i of panes) if (i > 0 && p.series.filter((s) => (s.pane ?? 0) === i).every((s) => offS(s))) out.add(i);
     return out;
   }, [p.series, off]);
 
@@ -836,7 +909,7 @@ export function ExChart(p: ExChartProps) {
       if (p.boxRows) return p.boxRows(t);
       const rows: ExBoxRow[] = [["Time", boxLabel(t, tz, step)]];
       for (const s of p.series) {
-        if (s.box === false || off(s.key)) continue;
+        if (s.box === false || offS(s)) continue;
         const pt = lookup(s.key, t);
         const fmt = defaultFormat(s);
         if (s.kind === "candles") {
@@ -868,7 +941,9 @@ export function ExChart(p: ExChartProps) {
   // ---- chips ----
   const chipItems: (Chip | "|")[] | null =
     p.chips === true
-      ? p.series.filter((s) => s.toggle !== false).map((s) => ({ key: s.key, label: s.label, color: s.kind === "candles" ? undefined : s.color }))
+      ? p.series
+          .filter((s) => s.toggle !== false)
+          .map((s) => ({ key: s.key, label: s.label, color: s.kind === "candles" ? undefined : s.color, stroke: s.lineStyle, bar: s.kind === "histogram" }))
       : p.chips || null;
 
   const anyData = p.series.some((s) => s.data.length);
@@ -880,13 +955,18 @@ export function ExChart(p: ExChartProps) {
     setFs(true);
   };
 
+  // the interval row scrolls sideways when it does not fit (a phone, fullscreen upright): it fades at the edge it
+  // continues past
+  const [tbScroll, tbFade, measureTb] = useScrollFade<HTMLDivElement>();
+
   const plotStyle: CSSProperties = p.fill || p.inFullscreen ? { flex: 1, minHeight: 0 } : { height: p.height ?? 300 };
 
   return (
     <div className={"ex-chart" + (touch ? " touch" : "") + (p.fill || p.inFullscreen ? " fill" : "") + (p.className ? " " + p.className : "")} style={p.style}>
+      {p.inFullscreen && p.title != null && <div className="ex-fs-titlerow">{p.title}</div>}
       {hasToolbar && (
         <div className="ex-tb">
-          <div className="ex-tb-scroll">
+          <div className={"ex-tb-scroll" + tbFade} ref={tbScroll} onScroll={measureTb}>
             {p.inFullscreen && p.title != null && <span className="ex-fs-title">{p.title}</span>}
             {p.toolbarLeft}
             {!!p.intervals?.length && (
@@ -945,9 +1025,20 @@ export function ExChart(p: ExChartProps) {
             type="button"
             className="ex-live"
             style={{ right: axisW + 8, bottom: axisH + 8 }}
-            onClick={() => chart.current?.timeScale().scrollToRealTime()}
-            title="Back to the latest bar"
-            aria-label="Back to the latest bar"
+            onClick={() => {
+              // at once, not animated: an animation after a long pan could end short of the edge and leave `>>` up
+              const ts = chart.current?.timeScale();
+              if (!ts) return;
+              if (cbs.current.view) {
+                fitView();
+                setAway(false);
+                return;
+              }
+              ts.scrollToPosition(cbs.current.rightOffset ?? (touch ? 3 : 5), false);
+              setAway(ts.scrollPosition() < -2);
+            }}
+            title={p.view ? "Back to the chosen range" : "Back to the latest bar"}
+            aria-label={p.view ? "Back to the chosen range" : "Back to the latest bar"}
           >
             »
           </button>
@@ -976,6 +1067,8 @@ interface LegendEntry {
   key?: string;
   label: string;
   color?: string;
+  /** A line series: its key (colour and stroke) before the label, with a mouse (the phone's chips carry it). */
+  stroke?: Stroke;
   value: (t: number) => ExValue;
   title?: string;
 }
@@ -1066,6 +1159,7 @@ function buildLegend(
       key,
       label: s.label,
       color: s.kind === "baseline" || s.kind === "histogram" ? undefined : s.color,
+      stroke: s.kind === "line" && !touch ? (s.lineStyle ?? "solid") : undefined,
       value: (t) => {
         const p = lookup(s.key, t);
         const v = p && !isOhlc(p) ? p.value : null;
@@ -1131,6 +1225,8 @@ const LegendLayer = memo(function LegendLayer({
                       {i === 0 ? "⌄" : ""}
                     </span>
                   )}
+                  {/* the items wrap under the first one, not under the chevron */}
+                  <span className="ex-lg-items">
                   {shown.map((it, j) => {
                     const r = it.value(t);
                     const [txt, c0] = Array.isArray(r) ? r : [r, undefined];
@@ -1143,6 +1239,7 @@ const LegendLayer = memo(function LegendLayer({
                         onClick={it.key ? () => toggle(it.key!) : undefined}
                         title={it.title ?? (it.key ? "Click to hide or show" : undefined)}
                       >
+                        {it.stroke && it.color && <SeriesKey color={it.color} stroke={it.stroke} on={!isOff} />}
                         {it.label && <span className="ex-lg-l">{it.label}</span>}
                         <span className="ex-lg-v" style={{ color: col ?? it.color ?? C.ink }}>
                           {txt}
@@ -1150,6 +1247,7 @@ const LegendLayer = memo(function LegendLayer({
                       </span>
                     );
                   })}
+                  </span>
                 </div>
               );
             })}

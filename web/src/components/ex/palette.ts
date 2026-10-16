@@ -2,18 +2,7 @@
 import { C, SANS } from "../../theme";
 
 export { C, SANS };
-export {
-  ACCOUNT_SERIES,
-  FUT_COLOR,
-  HEDGE_COLOR,
-  INV_COLOR,
-  INVPNL_COLOR,
-  MM_COLOR,
-  REBATE_COLOR,
-  S1,
-  S2,
-  S3,
-} from "../../theme";
+export { ACCOUNT_SERIES, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES, S1, S2, S3 } from "../../theme";
 
 export const UP = C.up;
 export const DOWN = C.down;

@@ -115,20 +115,21 @@ const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol
       tabIndex={copy ? -1 : undefined}
       className="ex-marq-it"
       onClick={onInstrument ? () => onInstrument(r.symbol, r.venue) : undefined}
-      title={`${r.symbol}${r.venue === "usdm" ? " perp" : ""}: Trading PnL today, USDT`}
+      title={r.venue === "usdm" ? `${r.symbol} perp: its hedge leg today, USDT` : `${r.symbol}: Trading PnL today, USDT`}
     >
       <span className="ex-ink">
         {r.symbol}
-        {r.venue === "usdm" ? " perp" : ""}
+        {r.venue === "usdm" ? " Perp" : ""}
       </span>{" "}
+      {r.venue === "usdm" && <span>hedge </span>}
       <span className={"fig " + (hide ? "masked" : r.pnl > 0.005 ? "up" : r.pnl < -0.005 ? "down" : "")}>{maskText(hide, pnl(r.pnl))}</span>
     </button>
   ));
   // two copies scroll by half their width, so the loop has no seam
   return (
     <div className="ex-marq">
-      <span className="ex-marq-l" title="Each instrument's Trading PnL today, USDT">
-        Trading PnL
+      <span className="ex-marq-l" title="Today, USDT: each spot market's Trading PnL (market making + inventory PnL), and each perp's hedge leg">
+        PnL today
       </span>
       <div className="ex-marq-clip">
         <div className="ex-marq-in" style={{ animationDuration: `${Math.max(30, items.length * 5)}s` }}>

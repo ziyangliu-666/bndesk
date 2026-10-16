@@ -19,7 +19,7 @@ export {
   type ExView,
 } from "./ExChart";
 export { ChartFullscreen, goFullscreen, useLandscapeFullscreen } from "./fullscreen";
-export { Tabs, TextToggle, ChipRow, TickerStrip, TvAttribution, type Option, type Chip, type TickerItem, type Tone } from "./controls";
+export { Tabs, TextToggle, ChipRow, SeriesKey, TickerStrip, TvAttribution, type Option, type Chip, type TickerItem, type Tone } from "./controls";
 export { StatusFooter } from "./StatusFooter";
 export { useKlines, barStart, aggregate, INTERVAL_MS, type Candle, type KInterval, type KlinesState, type KlineSource } from "./klines";
 export { fillsByBar, fillMarkers, fillsText, fillsShort, type BarFills, type FillLike } from "./fills";

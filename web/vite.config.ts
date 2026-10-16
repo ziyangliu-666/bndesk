@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
+import { LONG_PRESS_MS } from "./src/gesture";
 
 // Backend for the dev proxy; override with DESK_API=http://host:port.
 const api = process.env.DESK_API ?? "http://127.0.0.1:8710";
@@ -89,9 +90,10 @@ function precompress(): Plugin {
 }
 
 /** Lightweight Charts starts its touch tracking (the crosshair under a resting finger) after a fixed 240 ms; a thumb
- *  that rests that long before a scroll got caught. Here it is 380 ms, close to the quote map's 320 ms. Fails the
- *  build if the library's code no longer has the pattern (check the new version's long-tap delay). */
-const LONG_TAP_MS = 380;
+ *  that rests that long before a scroll got caught. Here it is LONG_PRESS_MS (src/gesture.ts), the quote maps' long
+ *  press too. Fails the build if the library's code no longer has the pattern (check the new version's long-tap
+ *  delay). */
+const LONG_TAP_MS = LONG_PRESS_MS;
 function longTap(): Plugin {
   return {
     name: "lwc-long-tap",
@@ -123,8 +125,28 @@ function edgeLabels(): Plugin {
   };
 }
 
+/** Lightweight Charts draws every price-axis tick label, also one that a price tag (a last value, a price line's
+ *  label) then half covers (`+2̶0̶.00`). Here the tick loop asks `globalThis.__lwcSkipTick(canvas, y)` first, which
+ *  ExChart's AxisGuard (components/ex/rings.ts) answers from the tags it saw on that axis. Fails the build if the
+ *  loop is not found (check the new version's price axis tick marks). */
+function axisTags(): Plugin {
+  return {
+    name: "lwc-axis-tags",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/lightweight-charts[\\/]dist[\\/][^?]*\.m?js(\?.*)?$/.test(id)) return null;
+      const re = /for\s*\(let\s+(\w+)\s*=\s*([\w$.]+)\.length;\s*\1--;\s*\)\s*\{\s*const\s+(\w+)\s*=\s*\2\[\1\];\s*(\w+)\.fillText\(\3\.([\w$]+),\s*([\w$]+),\s*\3\.([\w$]+)\s*\+\s*([\w$]+)\[\1\]\);?\s*\}/;
+      if (!re.test(code)) this.error("lwc-axis-tags: the price axis' tick label loop was not found in " + id);
+      return {
+        code: code.replace(re, "for(let $1=$2.length;$1--;){const $3=$2[$1];if(globalThis.__lwcSkipTick&&globalThis.__lwcSkipTick($4.canvas,$3.$7))continue;$4.fillText($3.$5,$6,$3.$7+$8[$1]);}"),
+        map: null,
+      };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [longTap(), edgeLabels(), react(), preloadDesk(), precompress()],
+  plugins: [longTap(), edgeLabels(), axisTags(), react(), preloadDesk(), precompress()],
   // pre-bundled deps skip the transform above: the dev server serves this one as it is, through it
   optimizeDeps: { exclude: ["lightweight-charts"] },
   // shown on the phone's More page

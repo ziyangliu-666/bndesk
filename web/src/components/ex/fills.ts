@@ -56,15 +56,16 @@ export function fillsByBar(fills: readonly FillLike[], interval: KInterval | num
 }
 
 /**
- * Markers for ExChart: per bar per side at most one small circle at our VWAP (`atPriceMiddle`), buys in the up
- * colour, sells in the down colour, no text. ExChart hides all markers while bars are under 5 px apart.
- * `series` is the key of the candle (or line) series they sit on; `key` the chip/legend key that hides them.
+ * Markers for ExChart: per bar per side at most one small hollow ring at our VWAP, buys in the up colour a
+ * little left of the bar's centre, sells in the down colour a little right (they never overlap), no text.
+ * ExChart hides all markers while bars are under 5 px apart. `series` is the key of the candle (or line)
+ * series they sit on; `key` the chip/legend key that hides them.
  */
 export function fillMarkers(byBar: Map<number, BarFills>, series: string, key = "fills"): ExMarker[] {
   const out: ExMarker[] = [];
   for (const [t, f] of byBar) {
-    if (f.buyVwap != null) out.push({ series, key, time: t, price: f.buyVwap, color: UP, shape: "circle", size: 0.6 });
-    if (f.sellVwap != null) out.push({ series, key, time: t, price: f.sellVwap, color: DOWN, shape: "circle", size: 0.6 });
+    if (f.buyVwap != null) out.push({ series, key, time: t, price: f.buyVwap, color: UP, shape: "ring", offset: -1 });
+    if (f.sellVwap != null) out.push({ series, key, time: t, price: f.sellVwap, color: DOWN, shape: "ring", offset: 1 });
   }
   return out;
 }

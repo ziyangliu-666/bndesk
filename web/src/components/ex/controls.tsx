@@ -1,5 +1,6 @@
 // Small presentational controls in bndesk's palette: Tabs, TextToggle, ChipRow, TickerStrip, TvAttribution.
-import type { CSSProperties, ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import type { Stroke } from "../../theme";
 import "./ex.css";
 
 export interface Option<V extends string = string> {
@@ -95,15 +96,72 @@ export function TextToggle<V extends string>({
 export interface Chip {
   key: string;
   label: ReactNode;
-  /** A short swatch in the series colour before the label. */
+  /** The key before the label: a short line sample in the series colour (and its stroke). */
   color?: string;
+  /** The series' stroke, drawn in the key (theme.ts Stroke). Default solid. */
+  stroke?: Stroke;
+  /** A bar series (volume): the key is a small bar rather than a line. */
+  bar?: boolean;
+  /** Markers drawn as rings (our fills): the key is a ring. */
+  ring?: boolean;
   title?: string;
 }
 
+const DASH: Record<Stroke, string | undefined> = { solid: undefined, dashed: "3 2.5", large: "6 3", dotted: "1.5 1.5", sparse: "1.5 3.5" };
+
+/** The line sample of a chip or a legend key: the series' colour and stroke; hollow (an outline in muted) when
+ *  the series is off. */
+export function SeriesKey({ color, stroke = "solid", bar, ring, on = true }: { color: string; stroke?: Stroke; bar?: boolean; ring?: boolean; on?: boolean }) {
+  if (ring)
+    return (
+      <svg className="ex-key" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <circle cx="5" cy="5" r="3.5" fill="none" stroke={on ? color : "var(--muted)"} strokeWidth="1.5" />
+      </svg>
+    );
+  if (bar)
+    return (
+      <svg className="ex-key" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <rect x="1.5" y="2.5" width="7" height="7" fill={on ? color : "none"} stroke={on ? color : "var(--muted)"} strokeWidth="1" />
+      </svg>
+    );
+  return (
+    <svg className="ex-key" width="16" height="10" viewBox="0 0 16 10" aria-hidden="true">
+      {on ? (
+        <line x1="0" y1="5" x2="16" y2="5" stroke={color} strokeWidth="2" strokeDasharray={DASH[stroke]} />
+      ) : (
+        <rect x="0.5" y="3" width="15" height="4" rx="1" fill="none" stroke="var(--muted)" strokeWidth="1" />
+      )}
+    </svg>
+  );
+}
+
+/** A sideways scroller's fade classes (" fade-l", " fade-r"): it fades at the edge it continues past. */
+export function useScrollFade<T extends HTMLElement>(): [RefObject<T | null>, string, () => void] {
+  const ref = useRef<T>(null);
+  const [fade, setFade] = useState("");
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const l = el.scrollLeft > 1;
+    const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setFade((l ? " fade-l" : "") + (r ? " fade-r" : ""));
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+  return [ref, fade, measure];
+}
+
 /**
- * The chip row under a chart: each chip shows or hides a series or overlay. Flat segmented look on the panel
- * (the desk's `lwc-chips`): on = ink on a raised plate, off = muted. "|" draws a divider. Scrolls sideways
- * when it overflows (phone). Pair with `useExHidden(id)` to share state with an ExChart of the same id.
+ * The chip row under a chart: each item shows or hides a series or overlay. No plate and no frame: a key (the
+ * series' line sample) and the label, ink when on, muted with a hollow key when off. "|" draws a divider.
+ * Scrolls sideways when it overflows (phone; 44 px tall targets there). Pair with `useExHidden(id)` to share
+ * state with an ExChart of the same id.
  */
 export function ChipRow({
   items,
@@ -118,25 +176,19 @@ export function ChipRow({
   className?: string;
   style?: CSSProperties;
 }) {
+  const [ref, fade, measure] = useScrollFade<HTMLDivElement>();
   return (
-    <div className={"ex-chips" + (className ? " " + className : "")} style={style} role="group" aria-label="Series">
-      {items.map((it, i) =>
-        it === "|" ? (
-          <span key={"d" + i} className="ex-chip-div" />
-        ) : (
-          <button
-            key={it.key}
-            type="button"
-            aria-pressed={isOn(it.key)}
-            className={"ex-chip" + (isOn(it.key) ? " on" : "")}
-            title={it.title}
-            onClick={() => onToggle(it.key)}
-          >
-            {it.color && <span className="ex-chip-sw" style={{ background: it.color }} />}
+    <div ref={ref} onScroll={measure} className={"ex-chips" + fade + (className ? " " + className : "")} style={style} role="group" aria-label="Series">
+      {items.map((it, i) => {
+        if (it === "|") return <span key={"d" + i} className="ex-chip-div" />;
+        const on = isOn(it.key);
+        return (
+          <button key={it.key} type="button" aria-pressed={on} className={"ex-chip" + (on ? " on" : "")} title={it.title} onClick={() => onToggle(it.key)}>
+            {it.color && <SeriesKey color={it.color} stroke={it.stroke} bar={it.bar} ring={it.ring} on={on} />}
             {it.label}
           </button>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }

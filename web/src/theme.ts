@@ -22,10 +22,11 @@ export const S1 = SERIES[0];
 export const S2 = SERIES[1];
 export const S3 = SERIES[2];
 
-// One line per account (at most six), in this order: the dataviz reference palette's dark steps, validated
-// with scripts/validate_palette.js --mode dark --surface "#07090c" (adjacent pairs: worst CVD ΔE 8.4,
-// normal-vision 19.3, all >= 3:1). With four or more lines the chart labels each line at its end.
-export const ACCOUNT_SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"] as const;
+// One line per account (at most six), in this order. No green, red or amber (those mean gain, loss and warn), and
+// no blue (the market-making line): mauves, violets, a grey teal. Picked for the widest worst-case separation
+// (OKLab ΔE×100, normal / protanopia / deuteranopia, Machado 2009): 13.4 over the first four, 12.1 over all six.
+// Lines this close carry their name: with three or more the chart labels each line (legend) and they keep it.
+export const ACCOUNT_SERIES = ["#9980ee", "#e9cada", "#7fa3a6", "#846876", "#8654bc", "#c4a9fe"] as const;
 
 export const SANS = `"IBM Plex Sans", system-ui, sans-serif`;
 
@@ -60,27 +61,35 @@ export const theme = createTheme({
   primaryColor: "accent",
   colors: { dark: slate, accent },
   defaultRadius: 3,
-  fontSizes: { xs: "11px", sm: "12px", md: "13px", lg: "15px", xl: "18px" },
+  fontSizes: { xs: "12px", sm: "12px", md: "14px", lg: "14px", xl: "20px" },
   headings: { fontFamily: SANS },
   cursorType: "pointer",
 });
 
-// The real-money split: market making and the inventory PnL, the same colours on every chart.
-export const MM_COLOR = S3;
-export const INVPNL_COLOR = "#a47ef0";
-export const HEDGE_COLOR = "#9aa3b2";
-export const REBATE_COLOR = "#4fb8c9";
-export const INV_COLOR = "#c98500";
-
-// The P&L split as lines on one chart (desktop Desk and History): hues that stay apart from each other and from
-// the Day PnL's up / down: Trading white, market making amber, inventory PnL violet, the hedge blue (dashed),
-// rebates aqua, other grey (dotted).
+// The P&L split, one palette for every chart and size (desktop and phone): Day PnL is the area coloured by its
+// sign (up / down); Trading (market making + inventory PnL) is the ink line; its parts and the rest each have a
+// hue and a stroke of their own, so colour is never the only cue. No amber (warn), no green or red (gain / loss).
+// Worst pair among the five parts, OKLab ΔE×100 under normal vision, protanopia and deuteranopia: 14.1
+// (fix3.md has every pair). The same hue keeps its meaning on the neighbouring views: the inventory violet is the
+// spot inventory on Exposure and History, the hedge teal is the futures notional.
 export const PNL_COLORS = {
   trading: C.ink,
-  mm: "#c98500",
-  inv: INVPNL_COLOR,
-  hedge: S1,
-  reb: REBATE_COLOR,
-  other: C.muted,
+  mm: "#426ec2",
+  inv: "#a8a6fb",
+  hedge: "#5f97a0",
+  reb: "#c9d2de",
+  other: "#636363",
 } as const;
-export const FUT_COLOR = "#d55181";
+export type Stroke = "solid" | "dashed" | "dotted" | "large" | "sparse";
+export const PNL_STROKES: Record<keyof typeof PNL_COLORS, Stroke> = {
+  trading: "solid",
+  mm: "solid",
+  inv: "large",
+  hedge: "dashed",
+  reb: "sparse",
+  other: "dotted",
+};
+/** Spot inventory (value or quantity): the inventory hue. */
+export const INV_COLOR = PNL_COLORS.inv;
+/** Futures notional: the hedge hue. */
+export const FUT_COLOR = PNL_COLORS.hedge;

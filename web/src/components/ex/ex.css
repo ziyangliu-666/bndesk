@@ -29,8 +29,31 @@
   height: 44px;
   padding: 0 4px 0 2px;
 }
-/* the chart's name in the fullscreen copy's toolbar (no header row of its own) */
+.ex-tb-scroll.fade-r {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.ex-tb-scroll.fade-l {
+  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}
+.ex-tb-scroll.fade-l.fade-r {
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+/* the chart's name in fullscreen: a row of its own upright, in the toolbar when the phone is held sideways */
+.ex-fs-titlerow {
+  flex: none;
+  height: 36px;
+  line-height: 36px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--rule);
+}
 .ex-fs-title {
+  display: none;
   flex: none;
   padding: 0 10px 0 8px;
   font-size: 14px;
@@ -78,10 +101,10 @@
   color: var(--ink);
 }
 .ex-caret {
-  font-size: 10px;
+  font-size: 12px;
 }
 .ex-chart.touch .ex-more-btn {
-  font-size: 13px;
+  font-size: 14px;
   padding: 8px 7px;
 }
 .ex-more-menu {
@@ -110,7 +133,7 @@
 }
 .ex-chart.touch .ex-more-menu button {
   height: 40px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .ex-more-menu button:hover {
   color: var(--ink);
@@ -165,28 +188,39 @@
 .ex-chart.touch .ex-legend {
   font-size: 12px;
   line-height: 18px;
-  left: 4px;
+  left: 6px;
 }
 .ex-lg-line {
+  display: flex;
+  align-items: baseline;
+  width: max-content;
+  max-width: 100%;
+  pointer-events: auto;
+}
+.ex-lg-items {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   column-gap: 10px;
-  width: max-content;
-  max-width: 100%;
-  padding: 0 4px 0 2px;
-  border-radius: 2px;
-  background: rgba(7, 9, 12, 0.82);
-  pointer-events: auto;
+  min-width: 0;
 }
-.ex-chart.touch .ex-lg-line {
+.ex-chart.touch .ex-lg-items {
   column-gap: 8px;
 }
+/* the scrim sits behind each item's text only, not across the plot (content-box: not over the touch padding
+   that makes the item a 44 px target) */
 .ex-lg-it {
   display: inline-flex;
   gap: 4px;
   align-items: baseline;
   white-space: nowrap;
+  border-radius: 2px;
+  background: rgba(7, 9, 12, 0.82);
+  background-clip: content-box;
+}
+.ex-lg-it .ex-key {
+  align-self: center;
+  width: 12px;
 }
 .ex-lg-it.tog {
   cursor: pointer;
@@ -210,9 +244,9 @@
   margin-block: -14px;
 }
 .ex-chart.touch .ex-chev {
-  width: 28px;
-  margin-left: -8px;
-  margin-right: -6px;
+  width: 32px;
+  margin-left: -6px;
+  margin-right: -8px;
 }
 .ex-chev {
   width: 12px;
@@ -336,7 +370,7 @@
   gap: 2px;
 }
 .ex-chart.touch .ex-tt button {
-  font-size: 13px;
+  font-size: 14px;
   min-height: 44px;
   min-width: 40px;
   padding: 0 8px;
@@ -419,29 +453,37 @@
   gap: 12px;
 }
 
-/* ---------- chip row: flat, segmented ---------- */
+/* ---------- chip row: a key and a label, no plate ---------- */
 .ex-chips {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: 16px;
+  padding: 4px 8px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 .ex-chips::-webkit-scrollbar {
   display: none;
 }
+.ex-chips.fade-r {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.ex-chips.fade-l {
+  mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+}
+.ex-chips.fade-l.fade-r {
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
 .ex-chip {
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px;
+  height: 24px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
-  background: #10141a;
+  background: none;
   font: inherit;
   font-size: 12px;
   color: var(--muted);
@@ -453,41 +495,26 @@
   color: var(--ink-2);
 }
 .ex-chip.on {
-  background: #232a35;
   color: var(--ink);
+}
+.ex-key {
+  flex: none;
+  display: block;
 }
 .ex-chart.touch .ex-chips,
 .touch .ex-chips {
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 20px;
+  padding: 0 12px;
 }
 .ex-chart.touch .ex-chip,
 .touch .ex-chip {
-  position: relative;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-/* a 44 px tall target around the 36 px chip */
-.ex-chart.touch .ex-chip::after,
-.touch .ex-chip::after {
-  content: "";
-  position: absolute;
-  inset: -5px -4px;
-}
-.ex-chip-sw {
-  width: 10px;
-  height: 2px;
-  border-radius: 1px;
-}
-.ex-chip:not(.on) .ex-chip-sw {
-  opacity: 0.35;
+  height: 44px;
+  font-size: 14px;
 }
 .ex-chip-div {
   flex: none;
   width: 1px;
-  height: 16px;
-  margin: 0 4px;
+  height: 14px;
   background: var(--rule);
 }
 
@@ -649,15 +676,18 @@
 }
 .ex-marq-l {
   flex: none;
-  padding-right: 8px;
+  padding-right: 10px;
+  margin-right: 2px;
+  border-right: 1px solid var(--rule);
   color: var(--muted);
 }
 .ex-marq-clip {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  /* an item scrolling out fades before the label instead of being cut against it */
-  mask-image: linear-gradient(to right, transparent, #000 20px);
+  /* an item scrolling out is gone before it reaches the label (a clear strip, then a fade): a cut word never
+     reads as part of the label */
+  mask-image: linear-gradient(to right, transparent 16px, #000 56px);
 }
 .ex-marq-in {
   display: inline-flex;
@@ -738,24 +768,24 @@
 
 /* a phone held sideways in fullscreen: the plot gets the height; a slimmer toolbar and chip row */
 @media (orientation: landscape) and (max-height: 500px) {
+  .ex-fs .ex-fs-titlerow {
+    display: none;
+  }
+  .ex-fs .ex-fs-title {
+    display: inline;
+  }
   .ex-fs .ex-chart.touch .ex-tb {
-    height: 36px;
+    height: 40px;
   }
   .ex-fs .ex-chart.touch .ex-tt button,
   .ex-fs .ex-chart.touch .ex-more-btn {
-    min-height: 36px;
+    min-height: 40px;
   }
   .ex-fs .ex-chart.touch .ex-icon {
-    width: 40px;
-    height: 36px;
-  }
-  .ex-fs .ex-chart.touch .ex-chips {
-    padding: 2px 8px;
+    width: 44px;
+    height: 40px;
   }
   .ex-fs .ex-chart.touch .ex-chip {
-    height: 30px;
-  }
-  .ex-fs .ex-chart.touch .ex-chip::after {
-    inset: -2px -4px;
+    height: 40px;
   }
 }
