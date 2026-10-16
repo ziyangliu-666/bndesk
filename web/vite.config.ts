@@ -105,8 +105,24 @@ function longTap(): Plugin {
   };
 }
 
+/** Lightweight Charts moves the time axis' first and last labels inside the axis only with fixLeftEdge /
+ *  fixRightEdge; otherwise they are cut at the edges (`11:0`, `ep 16`). Here they are always moved inside. Fails
+ *  the build if the pattern is gone (check the new version's TimeScale marks). */
+function edgeLabels(): Plugin {
+  return {
+    name: "lwc-edge-labels",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
+      const re = /needAlignCoordinate\s*=\s*\(?\s*[\w$.]+\s*&&\s*([\w$.]+)\.index\s*<=\s*([\w$.]+)\s*\)?\s*\|\|\s*\(?\s*[\w$.]+\s*&&\s*\1\.index\s*>=\s*([\w$.]+)\s*\)?/;
+      if (!re.test(code)) this.error("lwc-edge-labels: the time-mark alignment was not found in " + id);
+      return { code: code.replace(re, "needAlignCoordinate=($1.index<=$2||$1.index>=$3)"), map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [longTap(), react(), preloadDesk(), precompress()],
+  plugins: [longTap(), edgeLabels(), react(), preloadDesk(), precompress()],
   // pre-bundled deps skip the transform above: the dev server serves this one as it is, through it
   optimizeDeps: { exclude: ["lightweight-charts"] },
   // shown on the phone's More page
