@@ -385,12 +385,15 @@ export interface MarkoutReport {
   day_start: number;
   horizons_s: number[]; // −10 … 300
   fills: number;
+  path_fills: number; // of `fills`, those with a price path (the curve is drawn from these only)
   notional: number;
   edge: number | null;
   pnl: number; // Σ notional × 60 s markout, USDT
   all: MarkoutLine; // all / buy / sell ignore the side filter
   buy: MarkoutLine;
   sell: MarkoutLine;
+  /** All, buys, sells over every fill: those without a path count at 1, 10, 60, 300 s from their own markouts. */
+  every: [MarkoutLine, MarkoutLine, MarkoutLine];
   tox: MarkoutLine; // D(h)
   dist: MarkoutDist;
   by_time: MarkoutBucket[]; // 15 minutes

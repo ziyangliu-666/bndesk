@@ -70,7 +70,7 @@ export function Dist({ d, of, touch = false, height }: { d: MarkoutDist | null; 
         </svg>
       )}
       <div className="ex-legend" style={{ top: 6 }}>
-        <div className="ex-lg-line">
+        <div className="ex-lg-line an-lg-items">
           {hover != null && d ? (
             <>
               <span className="ex-lg-it">

@@ -382,10 +382,14 @@ interface HistoryFill { t: number; side: "buy" | "sell"; price: number; qty: num
 interface MarkoutReport {
   now: number; day_start: number;
   horizons_s: number[];                     // the path horizons, −10 … 300
-  fills: number; notional: number;          // the filtered fills
+  fills: number;                            // the filtered fills
+  path_fills: number;                       // of them, those with a price path (kept since paths were added)
+  notional: number;
   edge: number | null;                      // weighted edge at the fill, bps
   pnl: number;                              // Σ notional × 60 s markout, USDT
-  all: MarkoutLine; buy: MarkoutLine; sell: MarkoutLine;   // by horizon, `side` ignored
+  all: MarkoutLine; buy: MarkoutLine; sell: MarkoutLine;   // by horizon, `side` ignored; fills with a path only
+  every: MarkoutLine[];                     // [all, buy, sell] over every fill; one without a path counts at
+                                            // the 1 s to 300 s horizons from its own markouts
   tox: MarkoutLine;                         // D(h), reference move against the fill since −5 s
   dist: MarkoutDist;                        // per-fill markouts at `h`
   by_time: MarkoutBucket[];                 // 15-minute buckets

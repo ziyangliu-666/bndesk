@@ -411,3 +411,12 @@ line.an-diag {
   width: auto;
   flex-wrap: wrap;
 }
+/* the analysis legends put their items straight in the line (ExChart's own legends wrap them in .ex-lg-items) */
+.ex-lg-line.an-lg-items {
+  flex-wrap: wrap;
+  column-gap: 10px;
+}
+.m-an-cover {
+  font-size: 12px;
+  padding: 0 0 4px;
+}

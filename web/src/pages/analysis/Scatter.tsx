@@ -140,7 +140,7 @@ export function Scatter({
         </svg>
       )}
       <div className="ex-legend" style={{ top: 6 }}>
-        <div className="ex-lg-line">
+        <div className="ex-lg-line an-lg-items">
           {cur ? (
             <>
               <span className="ex-lg-it">

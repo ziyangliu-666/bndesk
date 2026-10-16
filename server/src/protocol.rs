@@ -588,12 +588,17 @@ pub struct MarkoutReport {
     pub day_start: i64,
     pub horizons_s: Vec<f64>,
     pub fills: i64,
+    /// Of `fills`, those with a price path (the curve is drawn from these only).
+    pub path_fills: i64,
     pub notional: f64,
     pub edge: Option<f64>,
     pub pnl: f64,
     pub all: MarkoutLine,
     pub buy: MarkoutLine,
     pub sell: MarkoutLine,
+    /// All, buys, sells over every fill: those without a path count at 1, 10, 60 and 300 s from their own
+    /// markouts (the figures above the curve read these).
+    pub every: [MarkoutLine; 3],
     pub tox: MarkoutLine,
     pub dist: MarkoutDist,
     pub by_time: Vec<MarkoutBucket>,

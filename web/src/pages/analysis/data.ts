@@ -85,6 +85,13 @@ export function useMarkouts(v: View): { r: MarkoutReport | null; error: string |
 /** The line for the chosen side. */
 export const sideLine = (r: MarkoutReport, side: SideF): MarkoutLine => (side === "buy" ? r.buy : side === "sell" ? r.sell : r.all);
 
+/** The side's line over every fill, for the figures (the curve's `sideLine` covers only fills with a path). */
+export const everyLine = (r: MarkoutReport, side: SideF): MarkoutLine => r.every[side === "buy" ? 1 : side === "sell" ? 2 : 0];
+
+/** "From 120 of 5,646 fills" when the price path covers only part of the fills (they are kept since a deploy). */
+export const pathCover = (r: MarkoutReport | null): string | null =>
+  r && r.path_fills < r.fills ? `From ${r.path_fills.toLocaleString("en-US")} of ${r.fills.toLocaleString("en-US")} fills` : null;
+
 /** Index of a horizon (s) in the report's path, -1 when absent. */
 export const hIdx = (r: MarkoutReport | null, h: number) => (r ? r.horizons_s.indexOf(h) : -1);
 

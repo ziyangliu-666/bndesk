@@ -10,7 +10,7 @@ import { useExHidden } from "../../components/ex";
 import { Chips, Segmented, Sheet } from "../../components/mobile";
 import { maskText, money, useHide } from "../../mask";
 import type { MarkoutReport } from "../../protocol";
-import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, hLabel, sideLine, useMarkouts, useView, type SideF, type VenueF, type Weight } from "../analysis/data";
+import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, everyLine, hLabel, pathCover, useMarkouts, useView, type SideF, type VenueF, type Weight } from "../analysis/data";
 import { PathChart, type PathLineDef } from "../analysis/PathChart";
 import { Dist } from "../analysis/Dist";
 import { DayChart } from "../analysis/DayChart";
@@ -71,7 +71,10 @@ export function MarkoutsM() {
       <Stats cols={3} items={kpis(r, v.side, hide)} className="m-an-kpi" />
       <Sec title="Price path around our fills" info={MK_DEF + ".\n\nTap a horizon to see its distribution; drag sideways to read the others."}>
         {r ? (
-          <PathChart horizons={r.horizons_s} lines={lines} hidden={hidden} onToggle={toggle} selected={v.h} onSelect={c.setH} touch height={280} />
+          <>
+            {pathCover(r) && <div className="muted m-an-cover">{pathCover(r)}</div>}
+            <PathChart horizons={r.horizons_s} lines={lines} hidden={hidden} onToggle={toggle} selected={v.h} onSelect={c.setH} touch height={280} />
+          </>
         ) : (
           <Empty>Loading</Empty>
         )}
@@ -120,7 +123,7 @@ export function MarkoutsM() {
 }
 
 function kpis(r: MarkoutReport | null, side: SideF, hide: boolean): Stat[] {
-  const l = r ? sideLine(r, side) : null;
+  const l = r ? everyLine(r, side) : null;
   const mk = (h: number): Stat => {
     const x = l ? l.mean[hIdx(r, h)] : null;
     return { label: `${h} s`, value: bps(x), tone: signClass(x) as Stat["tone"] };

@@ -2,7 +2,7 @@
 //! keeps (`FillRec::pm` / `pr`). Computed per request on the desk's thread: a pass over the day's fills.
 use std::collections::HashMap;
 
-use crate::fills::{FillRec, PATH_N, PATH_S};
+use crate::fills::{FillRec, PATH_N, PATH_OF_H, PATH_S};
 use crate::protocol::{self as P, Side, Venue};
 
 pub const BUCKET_MS: i64 = 900_000;
@@ -115,13 +115,26 @@ fn line(m: &[Mom; PATH_N]) -> P::MarkoutLine {
     }
 }
 
-/// The fill's markout at path horizon j under the reference, bps.
-fn value(f: &FillRec, j: usize, r: Reference) -> Option<f64> {
+/// The fill's markout at path horizon j under the reference, bps, from its price path only.
+fn path_value(f: &FillRec, j: usize, r: Reference) -> Option<f64> {
     let (raw, net, fast, _) = f.path_at(j)?;
     Some(match r {
         Reference::Net => net,
         Reference::Fast => fast,
         Reference::Raw => raw,
+    })
+}
+
+/// As `path_value`, and at 1, 10, 60 and 300 s from the fill's own markouts when it has no path (a fill from
+/// before paths were kept): the figures, the distribution there and the instruments then cover every fill.
+fn value(f: &FillRec, j: usize, r: Reference) -> Option<f64> {
+    path_value(f, j, r).or_else(|| {
+        let k = PATH_OF_H.iter().position(|&x| x == j)?;
+        match r {
+            Reference::Net => f.mk.0[k],
+            Reference::Fast => f.mk_fast.0[k],
+            Reference::Raw => f.mk_raw.0[k],
+        }
     })
 }
 
@@ -183,10 +196,12 @@ struct Inst {
 
 /// The report for one view of today's fills; `now` and `day_start` in ms.
 pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::MarkoutReport {
-    let mut sides = [[Mom::default(); PATH_N]; 3]; // all, buy, sell
+    let mut sides = [[Mom::default(); PATH_N]; 3]; // all, buy, sell: fills with a path
+    let mut every = [[Mom::default(); PATH_N]; 3]; // the same with every fill at its own horizons
     let mut tox = [Mom::default(); PATH_N];
     let mut edge = Mom::default();
     let (mut n, mut notional, mut pnl) = (0i64, 0.0, 0.0);
+    let mut path_fills = 0i64;
     let mut at_h: Vec<(f64, f64)> = vec![];
     let nb = ((now - day_start).max(0) / BUCKET_MS + 1) as usize;
     let mut buckets: Vec<(i64, f64, Mom, Mom)> = vec![(0, 0.0, Mom::default(), Mom::default()); nb.min(200)];
@@ -197,11 +212,22 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
         }
         let w = if q.by_fill { 1.0 } else { f.notional() };
         let vals: [Option<f64>; PATH_N] = std::array::from_fn(|j| value(f, j, q.reference));
+        // the curve is drawn from the fills that have a path only, so every horizon averages the same fills
+        let on_path: [Option<f64>; PATH_N] = std::array::from_fn(|j| path_value(f, j, q.reference));
+        if on_path.iter().any(Option::is_some) && q.side.is_none_or(|s| s == f.side) {
+            path_fills += 1;
+        }
         let si = if f.side == Side::Buy { 1 } else { 2 };
-        for (j, v) in vals.iter().enumerate() {
+        for (j, v) in on_path.iter().enumerate() {
             if let Some(v) = v {
                 sides[0][j].add(*v, w);
                 sides[si][j].add(*v, w);
+            }
+        }
+        for (j, v) in vals.iter().enumerate() {
+            if let Some(v) = v {
+                every[0][j].add(*v, w);
+                every[si][j].add(*v, w);
             }
         }
         if q.side.is_some_and(|s| s != f.side) {
@@ -266,12 +292,14 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
         day_start,
         horizons_s: PATH_S.to_vec(),
         fills: n,
+        path_fills,
         notional,
         edge: edge.mean(),
         pnl,
         all: line(&sides[0]),
         buy: line(&sides[1]),
         sell: line(&sides[2]),
+        every: [line(&every[0]), line(&every[1]), line(&every[2])],
         tox: line(&tox),
         dist: dist(at_h, q.h),
         by_time: buckets
@@ -403,6 +431,25 @@ mod tests {
         assert_eq!(r.by_instrument[0].symbol, "XUSDT");
         assert_eq!(r.dist.n, 2);
         assert_relative_eq!(r.dist.bins.iter().sum::<f64>(), 1.0, max_relative = 1e-9);
+    }
+
+    #[test]
+    fn a_fill_without_a_path_counts_at_its_own_horizons_but_not_in_the_curve() {
+        let mut old = crate::fills::FillRec::new("o", 100_000, "acct", "ZUSDT", Venue::Spot, Side::Buy, 10.0, 2.0);
+        old.mk = P::Marks([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]);
+        old.mk_raw = P::Marks([Some(5.0), Some(6.0), Some(7.0), Some(8.0)]);
+        let fills = vec![old];
+        let r = report(&fills, &q(&[]).unwrap(), 1_000_000, 0);
+        assert_eq!((r.fills, r.path_fills), (1, 0));
+        assert!(r.all.n.iter().all(|n| *n == 0)); // no path: the curve has nothing of it
+        assert_eq!((r.every[0].mean[11], r.every[1].n[11], r.every[2].n[11]), (Some(2.0), 1, 0));
+        let i = &r.by_instrument[0];
+        assert_eq!((i.mean[8], i.mean[11], i.mean[14], i.mean[16]), (Some(1.0), Some(2.0), Some(3.0), Some(4.0)));
+        assert_eq!(i.mean[10], None); // 5 s is on the path only
+        assert_relative_eq!(r.pnl, 3.0 * 20.0 / 1e4, max_relative = 1e-9);
+        assert_eq!(r.dist.n, 1);
+        let raw = report(&fills, &q(&[("ref", "raw")]).unwrap(), 1_000_000, 0);
+        assert_eq!(raw.by_instrument[0].mean[11], Some(6.0));
     }
 
     #[test]

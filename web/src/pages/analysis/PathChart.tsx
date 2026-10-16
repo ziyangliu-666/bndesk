@@ -158,7 +158,7 @@ export function PathChart({
         </svg>
       )}
       <div className="ex-legend an-path-lg" style={{ top: 6 }}>
-        <div className="ex-lg-line">
+        <div className="ex-lg-line an-lg-items">
           <span className="ex-lg-it">
             <span className="ex-lg-v an-lg-h">{cur == null ? "--" : (cur === iFill ? "At the fill" : "At " + hLabel(horizons[cur]!))}</span>
           </span>

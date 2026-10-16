@@ -9,7 +9,7 @@ import { C, S1 } from "../theme";
 import { TextToggle, TickerStrip, useExHidden, type TickerItem } from "../components/ex";
 import { maskText, money, useHide } from "../mask";
 import type { MarkoutInst, MarkoutReport } from "../protocol";
-import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, hLabel, sideLine, useMarkouts, useView, type SideF, type VenueF, type Weight } from "./analysis/data";
+import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, everyLine, hLabel, pathCover, useMarkouts, useView, type SideF, type VenueF, type Weight } from "./analysis/data";
 import { PathChart, type PathLineDef } from "./analysis/PathChart";
 import { Dist } from "./analysis/Dist";
 import { DayChart } from "./analysis/DayChart";
@@ -75,7 +75,7 @@ export function Markouts() {
               <span className="dotted" title={MK_DEF}>
                 Price path around our fills
               </span>
-              <span className="an-sub-r muted">Click a horizon for its distribution</span>
+              <span className="an-sub-r muted">{pathCover(r) ?? "Click a horizon for its distribution"}</span>
             </div>
             <Path r={r} side={v.side} h={v.h} onH={c.setH} />
           </div>
@@ -141,7 +141,7 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Kpis({ r, side, hide }: { r: MarkoutReport | null; side: SideF; hide: boolean }) {
-  const l = r ? sideLine(r, side) : null;
+  const l = r ? everyLine(r, side) : null;
   const at = (h: number) => (l ? l.mean[hIdx(r, h)] : null);
   const mk = (h: number): TickerItem => {
     const x = at(h);
