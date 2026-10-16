@@ -92,7 +92,7 @@ export function ordersBy(orders: readonly OpenOrder[], account: string | null = 
  * The map's rows: spot instruments with resting orders or inventory worth 5 USDT or more, sorted by today's
  * fills (they only grow, so rows keep their place while orders churn), by inventory value, or by name.
  */
-export function quoteRows(symbols: readonly SymbolRow[], orders: readonly OpenOrder[], sort: MapSort, account: string | null = null): QRow[] {
+export function quoteRows(symbols: readonly SymbolRow[], orders: readonly OpenOrder[], sort: MapSort, account: string | null = null, hide = false): QRow[] {
   const by = ordersBy(orders, account);
   const rows = symbols
     .filter((s) => s.venue === "spot" && (by.has(key(s.symbol, "spot")) || Math.abs(s.inv_value) >= 5))
@@ -100,7 +100,8 @@ export function quoteRows(symbols: readonly SymbolRow[], orders: readonly OpenOr
   const name = (r: QRow) => r.sym.symbol;
   const busy = (a: QRow, b: QRow) => b.sym.fills_day - a.sym.fills_day || name(a).localeCompare(name(b));
   if (sort === "name") rows.sort((a, b) => name(a).localeCompare(name(b)));
-  else if (sort === "inventory") rows.sort((a, b) => Math.abs(b.sym.inv_value) - Math.abs(a.sym.inv_value));
+  // by inventory while amounts are hidden would give the hidden sizes away: the names' order instead
+  else if (sort === "inventory") rows.sort(hide ? (a, b) => name(a).localeCompare(name(b)) : (a, b) => Math.abs(b.sym.inv_value) - Math.abs(a.sym.inv_value));
   else if (sort === "wide") {
     // widest first; one-sided and unquoted rows after the two-sided ones
     const w = new Map(rows.map((r) => [r, widthOf(r) ?? -1]));

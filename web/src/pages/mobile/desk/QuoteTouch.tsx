@@ -7,13 +7,16 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { QuoteLegend, QuoteRows, SORTS, mapCounts, quoteRows, rowsFor, sidesOf, type MapSort, type QRow } from "../../../components/quotes";
 import { useBusiest } from "../../../selectors";
-import { selectInstrument } from "../../../store";
+import { selectInstrument, useStore } from "../../../store";
+import { LONG_PRESS_MS } from "../../../gesture";
 import { useExPref } from "../../../components/ex";
 import { bps, int, price } from "../../../format";
 import { Chips, Segmented, useLive, useMoney } from "../../../components/mobile";
 
 const AXIS_H = 18;
-const PRESS_MS = 320;
+const PRESS_MS = LONG_PRESS_MS;
+/** The reading's height, about (the side it goes on is chosen with it). */
+const READ_H = 132;
 const SLOP = 9;
 
 const keyOf = (r: QRow) => `${r.sym.venue}:${r.sym.symbol}`;
@@ -25,6 +28,7 @@ export function QuoteTouch({
   label,
   inv = false,
   axis = true,
+  stickyAxis = false,
   empty,
 }: {
   rows: readonly QRow[];
@@ -33,6 +37,8 @@ export function QuoteTouch({
   label: number;
   inv?: boolean;
   axis?: boolean;
+  /** The ticks stay under the top bar (a long map). */
+  stickyAxis?: boolean;
   empty?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -145,10 +151,21 @@ export function QuoteTouch({
   const row = i >= 0 ? rows[i] : undefined;
   const top = (axis ? AXIS_H : 0) + Math.max(0, i) * rowH;
   const w = box.current?.clientWidth ?? 0;
-  const below = i < 2;
+  // above the row when it fits under the sticky top bar, else below it (whichever side has the room, in the
+  // viewport: after a scroll the row may sit just under the bar)
+  const below = (() => {
+    const el = box.current;
+    if (!el || i < 0) return i < 2;
+    const rowTop = el.getBoundingClientRect().top + top;
+    const bar = document.querySelector(".m-bar")?.getBoundingClientRect().bottom ?? 0;
+    const floor = document.querySelector(".m-nav")?.getBoundingClientRect().top ?? window.innerHeight;
+    const roomAbove = rowTop - bar - 4;
+    const roomBelow = floor - (rowTop + rowH) - 4;
+    return roomAbove < READ_H && roomBelow > roomAbove;
+  })();
   return (
     <div ref={box} className="dk-qt" onContextMenu={(e) => e.preventDefault()}>
-      <QuoteRows rows={rows} range={range} rowH={rowH} label={label} inv={inv} axis={axis} empty={empty} selected={row ? row.sym.symbol.replace(/USDT$/, "") : undefined} />
+      <QuoteRows rows={rows} range={range} rowH={rowH} label={label} inv={inv} axis={axis} stickyAxis={stickyAxis} empty={empty} selected={row ? row.sym.symbol.replace(/USDT$/, "") : undefined} />
       {row && (
         <>
           <div className="dk-qt-hl" style={{ top, height: rowH }} aria-hidden />
@@ -183,14 +200,14 @@ function Reading({ row, style }: { row: QRow; style: CSSProperties }) {
         <span className="m-fig">{price(s.mid)}</span>
       </div>
       <dl>
-        <dt>Our Bid vs fair</dt>
+        <dt>Our bid vs fair</dt>
         <dd className={s.bid_dist_bps == null ? "muted" : "up"}>{nb ? signed(s.bid_dist_bps, "bid") : "No bid"}</dd>
-        <dt>Our Ask vs fair</dt>
+        <dt>Our ask vs fair</dt>
         <dd className={s.ask_dist_bps == null ? "muted" : "down"}>{na ? signed(s.ask_dist_bps, "ask") : "No ask"}</dd>
         <dt>Market spread</dt>
         <dd>{s.spread_bps == null ? "--" : bps(s.spread_bps, false) + " bps"}</dd>
         <dt>Orders</dt>
-        <dd>{sides === "none" ? "None" : `${nb} Bid${nb === 1 ? "" : "s"} · ${na} Ask${na === 1 ? "" : "s"}`}</dd>
+        <dd>{sides === "none" ? "None" : `${nb} bid${nb === 1 ? "" : "s"} · ${na} ask${na === 1 ? "" : "s"}`}</dd>
         <dt>Inventory</dt>
         <dd>{money(s.inv_value, "usd")}</dd>
       </dl>
@@ -217,7 +234,8 @@ export function QuotesFull({ ms }: { ms: number }) {
   const [sort, setSort] = useExPref<MapSort>("qmap", "sort", "activity", SORTS);
   const symbols = useLive((s) => s.snap?.symbols, ms);
   const orders = useLive((s) => s.snap?.orders, ms);
-  const rows = useMemo(() => quoteRows(symbols ?? [], orders ?? [], sort), [symbols, orders, sort]);
+  const hide = useStore((s) => s.hideAmounts);
+  const rows = useMemo(() => quoteRows(symbols ?? [], orders ?? [], sort, null, hide), [symbols, orders, sort, hide]);
   const n = useMemo(() => mapCounts(rows), [rows]);
   return (
     <>
@@ -252,7 +270,7 @@ export function QuotesFull({ ms }: { ms: number }) {
         {n.wide > 0 && <> · {int(n.wide)} wide</>}
         {n.through > 0 && <span className="warn"> · {int(n.through)} through fair</span>}
       </div>
-      <QuoteTouch rows={rows} range={range} rowH={34} label={54} inv />
+      <QuoteTouch rows={rows} range={range} rowH={34} label={54} inv stickyAxis />
     </>
   );
 }

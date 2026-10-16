@@ -34,7 +34,7 @@ const coarse = () => typeof window !== "undefined" && window.matchMedia("(pointe
 const tick = (v: number, r: number) => (v === 0 ? "fair" : (v > 0 ? "+" : MINUS) + Math.abs(v) + (v === r ? " bps" : ""));
 
 const TD = "padding:1px 4px";
-const TH = "padding:0 4px 2px;font-weight:400;font-size:10.5px";
+const TH = "padding:0 4px 2px;font-weight:400;font-size:12px";
 const R = ";text-align:right";
 
 /** The tip's title suffix: a missing side, or our width. */
@@ -112,8 +112,8 @@ export function QuoteMap({
   const hide = useHide();
   const rows = useMemo(
     () =>
-      quoteRows(symbols ?? [], orders ?? [], sort, account),
-    [symbols, orders, sort, account],
+      quoteRows(symbols ?? [], orders ?? [], sort, account, hide),
+    [symbols, orders, sort, account, hide],
   );
   const chart = useRef<EChartsType | null>(null);
   const top = useRef(0); // first visible row, kept across updates
@@ -219,7 +219,7 @@ export function QuoteMap({
         borderWidth: 1,
         padding: [6, 6],
         extraCssText: "width:300px;box-shadow:none;border-radius:4px",
-        textStyle: { color: C.ink, fontSize: 11.5, fontFamily: SANS },
+        textStyle: { color: C.ink, fontSize: 12, fontFamily: SANS },
         transitionDuration: 0,
         confine: true,
         formatter: (ps: any) => {

@@ -136,8 +136,15 @@
 }
 .q-ctrls.compact .ex-tt button {
   padding: 8px 5px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .q-ctrls.compact .q-grp {
   flex: none;
+}
+/* the phone's full map: its ticks stay under the top bar while the rows scroll by */
+.qrows-axis {
+  position: sticky;
+  top: calc(var(--m-bar-h, 48px) + var(--safe-t, 0px));
+  z-index: 2;
+  background: var(--ground);
 }

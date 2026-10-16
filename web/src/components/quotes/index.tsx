@@ -25,19 +25,19 @@ export const QuoteMapEC = lazyPage<Parameters<typeof import("../QuoteMap").Quote
 
 type OnSelect = (symbol: string, venue: Venue) => void;
 
-/** The map's legend on top of the map: Market Bid–Ask ▬ · Our Bid ● · Our Ask ● · Size = order size ·● ·
+/** The map's legend on top of the map: Market bid–ask ▬ · Our bid ● · Our ask ● · Size = order size ·● ·
  *  Through fair ◎ · Beyond range ▸. `short` (the phone) leaves out Beyond range and wraps to two lines. */
 export function QuoteLegend({ short = false, className }: { short?: boolean; className?: string }) {
   return (
     <div className={"q-legend" + (short ? " short" : "") + (className ? " " + className : "")}>
       <span>
-        <i className="q-lg-band" /> Market Bid–Ask
+        <i className="q-lg-band" /> Market bid–ask
       </span>
       <span>
-        <i className="q-lg-dot up" /> Our Bid
+        <i className="q-lg-dot up" /> Our bid
       </span>
       <span>
-        <i className="q-lg-dot down" /> Our Ask
+        <i className="q-lg-dot down" /> Our ask
       </span>
       <span title="A dot's area is the order's size (notional)">
         <i className="q-lg-dot sm" />
@@ -180,7 +180,8 @@ export function QuoteMapFull({
 function PhoneMap({ st, onSelect, selected }: { st: QuoteMapState; onSelect?: OnSelect; selected?: string | null }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const orders = useStore((s) => s.snap?.orders);
-  const rows = useMemo(() => quoteRows(symbols ?? [], orders ?? [], st.sort, st.account), [symbols, orders, st.sort, st.account]);
+  const hide = useStore((s) => s.hideAmounts);
+  const rows = useMemo(() => quoteRows(symbols ?? [], orders ?? [], st.sort, st.account, hide), [symbols, orders, st.sort, st.account, hide]);
   return (
     <QuoteRows
       rows={rows}

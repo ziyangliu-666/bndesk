@@ -29,6 +29,8 @@ export interface QuoteRowsProps {
   empty?: string;
   /** Each row's status at the right of the plot: No ask, No bid, Not quoted, Wide (default on). */
   status?: boolean;
+  /** The ticks stay under the page's top bar while a long map scrolls by (the phone's full map). */
+  stickyAxis?: boolean;
   className?: string;
 }
 
@@ -44,16 +46,18 @@ const tick = (v: number, r: number) => (v === 0 ? "fair" : (v > 0 ? "+" : MINUS)
  * The quote map drawn on a canvas, `rows.length × rowH` (+ 18 px of ticks) tall, as wide as its parent. Cheap
  * enough for the phone: the mini map on the Desk, the full map in Markets, the band on an instrument page.
  */
-export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axis = true, selected, onRow, empty, status = true, className }: QuoteRowsProps) {
+export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axis = true, selected, onRow, empty, status = true, stickyAxis = false, className }: QuoteRowsProps) {
   const box = useRef<HTMLDivElement>(null);
   const cv = useRef<HTMLCanvasElement>(null);
+  const ax = useRef<HTMLCanvasElement>(null);
+  const split = axis && stickyAxis;
   const [w, setW] = useState(0);
   const top = axis ? AXIS_H : 0;
   const h = top + Math.max(1, rows.length) * rowH;
   // Hide amounts: the inventory column reads ••• with no bars
   const hide = useHide();
-  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status });
-  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status };
+  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status, part: "all" as Part });
+  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status, part: "all" };
 
   useEffect(() => {
     const el = box.current;
@@ -70,7 +74,14 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
     if (raf.current) return;
     raf.current = requestAnimationFrame(() => {
       raf.current = 0;
-      if (cv.current) draw(cv.current, live.current);
+      const p = live.current;
+      if (!split) {
+        if (cv.current) draw(cv.current, p);
+        return;
+      }
+      // the ticks on their own sticky canvas, the rows under them
+      if (ax.current) draw(ax.current, { ...p, h: AXIS_H, part: "axis" });
+      if (cv.current) draw(cv.current, { ...p, top: 0, h: p.h - AXIS_H, part: "rows" });
     });
   });
   useEffect(
@@ -90,6 +101,15 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
       }
     : undefined;
 
+  if (split)
+    return (
+      <div ref={box} className={"qrows" + (className ? " " + className : "")} style={{ height: h }}>
+        <div className="qrows-axis" style={{ height: AXIS_H }}>
+          <canvas ref={ax} style={{ width: w, height: AXIS_H, display: "block" }} />
+        </div>
+        <canvas ref={cv} style={{ width: w, height: h - AXIS_H, display: "block", cursor: onRow ? "pointer" : undefined }} onClick={onClick} />
+      </div>
+    );
   return (
     <div ref={box} className={"qrows" + (className ? " " + className : "")} style={{ height: h }}>
       <canvas ref={cv} style={{ width: w, height: h, cursor: onRow ? "pointer" : undefined }} onClick={onClick} />
@@ -97,9 +117,12 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
   );
 }
 
+/** What a canvas holds: everything, the ticks only (the sticky axis), or the rows only (under it). */
+type Part = "all" | "axis" | "rows";
+
 function draw(
   cv: HTMLCanvasElement,
-  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string; hide: boolean; status: boolean },
+  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string; hide: boolean; status: boolean; part: Part },
 ) {
   const { rows, range, rowH, label, inv, top, w, h } = p;
   if (!w) return;
@@ -133,7 +156,8 @@ function draw(
     }
   }
   if (top) {
-    // the labels' extents: the ends and fair always, a half tick only with 8 px clear on both sides of it
+    // the labels' extents: the ends and fair always, the half ticks only with 8 px clear on both sides of both
+    // (one dropped and not the other reads as a lopsided scale)
     const lab = ticks.map((v) => {
       const t = tick(v, range);
       const tw = g.measureText(t).width;
@@ -141,21 +165,24 @@ function draw(
       const a = v === -range ? x : v === range ? x - tw : x - tw / 2;
       return { v, t, x, a, b: a + tw, align: (v === -range ? "left" : v === range ? "right" : "center") as CanvasTextAlign };
     });
+    const crowded = lab.some((l, i) => {
+      if (Math.abs(l.v) !== half || l.v === 0 || half === range) return false;
+      const prev = lab[i - 1];
+      const next = lab[i + 1];
+      return (prev && l.a < prev.b + 8) || (next && l.b > next.a - 8);
+    });
     g.fillStyle = C.muted;
-    lab.forEach((l, i) => {
-      if (Math.abs(l.v) === half && l.v !== 0 && half !== range) {
-        const prev = lab[i - 1];
-        const next = lab[i + 1];
-        if ((prev && l.a < prev.b + 8) || (next && l.b > next.a - 8)) return;
-      }
+    lab.forEach((l) => {
+      if (crowded && Math.abs(l.v) === half && l.v !== 0 && half !== range) return;
       g.textAlign = l.align;
       g.fillText(l.t, l.x, top / 2);
     });
   }
   if (inv && top) {
     g.textAlign = "right";
-    g.fillText("Inventory", w - PAD / 2, top / 2);
+    g.fillText(w < 520 ? "USDT" : "Inventory (USDT)", w - PAD / 2, top / 2);
   }
+  if (p.part === "axis") return;
 
   if (!rows.length) {
     g.fillStyle = C.muted;
@@ -259,7 +286,8 @@ function draw(
       const b = ixOf(v);
       g.fillStyle = INV_FILL;
       if (!p.hide && Math.abs(v) >= 1) g.fillRect(Math.min(a, b), yc - Math.min(4.5, rowH * 0.22), Math.max(1, Math.abs(b - a)), Math.min(9, rowH * 0.45));
-      if (Math.abs(v) >= 1) {
+      // hidden: every row reads the same (a blank one would tell it holds nothing)
+      if (Math.abs(v) >= 1 || p.hide) {
         g.font = `400 11px ${SANS}`;
         g.textAlign = "right";
         g.fillStyle = p.hide ? C.muted : C.ink2;

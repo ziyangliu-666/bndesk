@@ -22,7 +22,11 @@ const short = (s: string) => s.replace(/USDT$/, "");
  *  It steps down only when the quotes sit well inside the next smaller range, so a live wobble does not flip it. */
 function useFitRange(orders: OpenOrder[]): number {
   const cur = useRef<number>(RANGES[1]);
-  const d = orders.map((o) => Math.abs(o.dist_bps ?? 0)).sort((a, b) => a - b);
+  // what the map draws: spot orders with a known distance (an unknown one is not 0 bps)
+  const d = orders
+    .filter((o) => o.venue === "spot" && o.dist_bps != null)
+    .map((o) => Math.abs(o.dist_bps!))
+    .sort((a, b) => a - b);
   if (!d.length) return cur.current;
   const p95 = d[Math.min(d.length - 1, Math.floor(d.length * 0.95))]! * 1.05;
   const want: number = RANGES.find((r) => r >= p95) ?? 100;
@@ -67,20 +71,20 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               <span className="ops-limit-name" title={a.email}>
                 {a.label}
               </span>
-              <span className="muted fig" title="Free spot quote balance">
-                Free {m(a.quote_free)} USDT
+              <span className="muted fig" title="Free spot quote balance, USDT">
+                Free {m(a.quote_free)}
               </span>
             </div>
             <div className="ops-limit-pairs fig">
               <div title={`Orders placed in the last 10 s, of Binance's ${int(l10)}`}>
                 <span className="ops-l">Orders 10 s</span>
                 <span className={limitTone(r10)}>
-                  {a.orders_10s}/{l10}
+                  {int(a.orders_10s)} / {int(l10)}
                 </span>
                 <LimitBar value={a.orders_10s} limit={l10} />
               </div>
               <div title={a.orders_1d_limit ? `${int(a.orders_1d)} of ${int(a.orders_1d_limit)} orders today` : "No daily limit known"}>
-                <span className="ops-l">Orders 1 d</span>
+                <span className="ops-l">Orders today</span>
                 <span className={limitTone(r1d)}>{a.orders_1d_limit ? pct(r1d) : "--"}</span>
                 <LimitBar value={a.orders_1d} limit={a.orders_1d_limit} />
               </div>
@@ -91,12 +95,12 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               </div>
               <div title={`${nb} resting bids, USDT`}>
                 <span className="ops-l">Bids {nb}</span>
-                <span className={"ops-v-side up" + (hide ? " masked" : "")}>{m(bid)}</span>
+                <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(bid)}</span>
                 <LimitBar value={bid} limit={scale} empty={hide} neutral />
               </div>
               <div title={`${na} resting asks, USDT`}>
                 <span className="ops-l">Asks {na}</span>
-                <span className={"ops-v-side down" + (hide ? " masked" : "")}>{m(ask)}</span>
+                <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(ask)}</span>
                 <LimitBar value={ask} limit={scale} empty={hide} neutral />
               </div>
             </div>
@@ -225,8 +229,9 @@ export function Orders() {
   const trading = tradingAccounts(accounts);
   const acct = saved.account != null && trading.some((a) => a.id === saved.account) ? saved.account : null;
   const shown = acct == null ? orders : orders.filter((o) => o.account === acct);
-  const through = shown.filter((o) => o.dist_bps != null && o.dist_bps < 0).length;
   const counts = useMapCounts(acct);
+  // the map's own count (spot): the perps' hedge orders are not on it
+  const through = counts.through;
 
   // the range fits the quotes until a range is picked here (Fit goes back): the smallest of ±10 ±25 ±50 ±100
   // that holds 95 % of the orders, so dots within ±8 get ±10, not an empty ±25
