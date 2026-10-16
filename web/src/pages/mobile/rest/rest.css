@@ -1,0 +1,391 @@
+/* The phone grammar shared by History, Assets, Alerts, More, Analysis, Orders, System and Fills (rest/ui.tsx).
+   Black ground, regions split by 1 px rules, no cards. Type 12 / 14 / 20, hero 30. */
+
+.r-fig {
+  font-variant-numeric: tabular-nums;
+}
+.r-masked {
+  color: var(--muted);
+}
+.r-dotted {
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.r-bleed {
+  margin-left: calc(-1 * var(--m-pad-l));
+  margin-right: calc(-1 * var(--m-pad-r));
+}
+
+/* ---- page tabs: 44 px, the accent underline under the active one ---- */
+.r-tabs {
+  margin: -4px calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-bottom: 1px solid var(--rule);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.r-tabs::-webkit-scrollbar {
+  display: none;
+}
+.r-tabs .ex-tabs {
+  height: 44px;
+  gap: 24px;
+}
+.r-tabs .ex-tab {
+  font-size: 15px;
+  min-width: 44px;
+  justify-content: center;
+}
+.r-tabs .ex-tab-n {
+  font-size: 12px;
+}
+.r-tabs.sub .ex-tabs {
+  height: 40px;
+}
+.r-tabs.sub .ex-tab {
+  font-size: 14px;
+}
+
+/* ---- a control row under the tabs: text toggles left and right (7D 30D … | Daily Cumulative) ---- */
+.r-ctl {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 0 calc(-1 * var(--m-pad-r) + 4px) 0 calc(-1 * var(--m-pad-l) + 6px);
+}
+.r-ctl .ex-tt button {
+  font-size: 14px;
+  padding: 10px 10px;
+  min-width: 40px;
+}
+.r-ctl > :last-child:not(:first-child) {
+  margin-left: auto;
+}
+
+/* ---- section ---- */
+.r-sec {
+  position: relative;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-top: 1px solid var(--rule);
+}
+.r-sec:first-child,
+.r-tabs + .r-sec,
+.r-tabs + .r-ctl + .r-sec,
+.r-sec.flush {
+  border-top: 0;
+}
+.r-sec + .r-sec {
+  margin-top: 8px;
+}
+.r-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+.r-head-t {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  text-align: left;
+}
+button.r-head-t {
+  min-height: 44px;
+}
+.r-head-r {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.r-head-r a,
+.r-head-r button.r-link {
+  color: var(--accent);
+}
+
+/* ---- rows: 56 px, the whole row is the target, rules inset to the page's left line ---- */
+.r-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% + var(--m-pad-l) + var(--m-pad-r));
+  min-height: 56px;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 8px var(--m-pad-r) 8px var(--m-pad-l);
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.r-row.dense {
+  min-height: 48px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.r-row + .r-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--m-pad-l);
+  right: 0;
+  border-top: 1px solid var(--rule);
+}
+button.r-row {
+  cursor: pointer;
+}
+button.r-row:active {
+  background: var(--raised);
+}
+.r-row-lead {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.r-row-l {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.r-row-r {
+  flex: none;
+  max-width: 62%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+.r-row-t {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.r-row-v {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.r-row-s {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.r-row-s.two {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.r-row.warn .r-row-t {
+  color: var(--warn);
+}
+.r-row.crit .r-row-t {
+  color: var(--crit);
+}
+.r-tag {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--raised);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  color: var(--ink-2);
+}
+.r-tag.warn {
+  color: var(--warn);
+}
+.r-tag.crit {
+  color: var(--crit);
+}
+
+/* ---- label over value ---- */
+.r-stats {
+  display: grid;
+  gap: 10px 12px;
+  padding: 6px 0 12px;
+}
+.r-stats.c2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.r-stats.c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.r-stats.c4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.r-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.r-stat-l {
+  align-self: flex-start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  text-align: left;
+}
+button.r-stat-l {
+  /* a 44 px target around a 16 px label */
+  position: relative;
+}
+button.r-stat-l::after {
+  content: "";
+  position: absolute;
+  inset: -14px -6px;
+}
+.r-stat-v {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.r-stat-v.up {
+  color: var(--up);
+}
+.r-stat-v.down {
+  color: var(--down);
+}
+.r-stat-v.warn {
+  color: var(--warn);
+}
+.r-stat-v.crit {
+  color: var(--crit);
+}
+
+/* ---- the big figure ---- */
+.r-big {
+  padding: 10px 0 12px;
+}
+.r-big-l {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.r-big-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.r-big-v {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 38px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.r-big-v.r-masked,
+.r-big-v .r-masked {
+  font-size: 22px;
+}
+.r-big-s {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.r-eye {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -12px -10px -12px -6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.r-eye:active {
+  color: var(--ink);
+}
+
+.r-empty {
+  padding: 20px 0 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.r-note {
+  padding: 0 0 10px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+
+/* ---- a chart block: the chart bleeds to the edges, its rules are the section's ---- */
+.r-chart {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+}
+.r-chart .ex-chart {
+  background: var(--ground);
+}
+
+/* ---- a text action at the right of a line (Hide / Show) ---- */
+.r-act {
+  min-width: 44px;
+  min-height: 44px;
+  margin: -12px -8px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.r-act:active {
+  color: var(--ink);
+}

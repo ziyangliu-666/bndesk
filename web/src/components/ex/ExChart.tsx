@@ -457,6 +457,7 @@ export function ExChart(p: ExChartProps) {
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
     const measure = () => {
+      if (chart.current !== c) return; // a frame queued before the chart was removed
       const top = el.getBoundingClientRect().top;
       setPaneTops(c.panes().map((pn) => (pn.getHTMLElement()?.getBoundingClientRect().top ?? top) - top));
       setAxisW(c.priceScale("right", 0).width() || 64);

@@ -365,3 +365,59 @@
 .m-disc .m-disc-right + svg {
   margin-left: 0;
 }
+
+/* ---- History (exchange grammar): the range's total at the left, four facts at the right ---- */
+.h-sum {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 2px 0 8px;
+}
+.h-sum-l {
+  flex: 1;
+  min-width: 0;
+}
+.h-sum-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.h-sum-v {
+  display: block;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 38px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.h-sum-v.r-masked {
+  font-size: 22px;
+}
+.h-sum-r.r-stats {
+  flex: none;
+  gap: 4px 16px;
+  padding: 0;
+  text-align: right;
+}
+.h-sum-r .r-stat {
+  align-items: flex-end;
+}
+.h-sum-r .r-stat-v {
+  font-size: 13px;
+  line-height: 18px;
+}
+.h-sw {
+  flex: none;
+  align-self: center;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+}
+.h-se {
+  font-size: 12px;
+  color: var(--muted);
+}
+.r-chart .ex-chart.touch .ex-tt button {
+  min-height: 44px;
+}
