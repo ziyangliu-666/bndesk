@@ -1,8 +1,7 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { lazyPage } from "../lazyPage";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, GridApi, ICellRendererParams } from "ag-grid-community";
-import { SegmentedControl, TextInput } from "@mantine/core";
+import { TextInput } from "@mantine/core";
 import { IconSearch, IconX } from "@tabler/icons-react";
 import { useStore } from "../store";
 import type { Account, OpenOrder } from "../protocol";
@@ -10,12 +9,7 @@ import { gridTheme } from "../gridTheme";
 import { pct, usd } from "../format";
 import { fAge, fBps, fPrice, fUsd, DEFAULT_COL } from "../grid";
 import { Meter, Panel } from "../components/ui";
-import type { MapSort } from "../components/QuoteMap";
-
-// ECharts is only needed here; the chart loads as its own chunk when the page opens
-export const QuoteMap = lazyPage<Parameters<typeof import("../components/QuoteMap").QuoteMap>[0]>(() =>
-  import("../components/QuoteMap").then((m) => ({ default: m.QuoteMap })),
-);
+import { QuoteMapFull, useQuoteMapState } from "../components/quotes";
 const short = (s: string) => s.replace(/USDT$/, "");
 
 /** One cell per account: bid and ask notional as bars on a shared scale, then bid use and the
@@ -168,14 +162,14 @@ const rowIdOpenOrder = (p: GetRowIdParams<OpenOrder>) => p.data.id;
 export function Orders() {
   const orders = useStore((s) => s.snap?.orders) ?? [];
   const accounts = useStore((s) => s.snap?.accounts) ?? [];
-  const [acct, setAcct] = useState("all");
-  const [range, setRange] = useState(25);
+  const st = useQuoteMapState();
   const [q, setQ] = useState("");
-  const pick = (name: string) => setQ((cur) => (cur.trim().toUpperCase() === name ? "" : name));
-  const [sort, setSort] = useState<MapSort>("activity");
+  const pick = (symbol: string) => setQ((cur) => (cur.trim().toUpperCase() === short(symbol) ? "" : short(symbol)));
   const trading = accounts.filter((a) => a.role !== "master" && (a.open_orders > 0 || a.inventory_value > 1));
-  const shown = acct === "all" ? orders : orders.filter((o) => o.account === acct);
+  const acct = st.account != null && trading.some((a) => a.id === st.account) ? st.account : null;
+  const shown = acct == null ? orders : orders.filter((o) => o.account === acct);
   const through = shown.filter((o) => o.dist_bps != null && o.dist_bps < 0).length;
+  const sel = q.trim().toUpperCase();
 
   return (
     <div className="page orders">
@@ -185,72 +179,15 @@ export function Orders() {
         title="Quotes against fair"
         right={
           <>
-            <span className="muted fig">
-              {shown.length} orders
-            </span>
+            <span className="muted fig">{shown.length} orders</span>
             {through ? <span className="warn-text fig">{through} through fair</span> : null}
-            <SegmentedControl
-              size="xs"
-              value={acct}
-              onChange={setAcct}
-              data={[{ value: "all", label: "all" }, ...trading.map((a) => ({ value: a.id, label: a.id }))]}
-              className="mini-seg"
-              aria-label="Account"
-            />
-            <SegmentedControl
-              size="xs"
-              value={sort}
-              onChange={(v) => setSort(v as MapSort)}
-              data={[
-                { value: "activity", label: "busiest" },
-                { value: "inventory", label: "inventory" },
-                { value: "name", label: "a–z" },
-              ]}
-              className="mini-seg"
-              aria-label="Sort"
-            />
-            <SegmentedControl
-              size="xs"
-              value={String(range)}
-              onChange={(v) => setRange(Number(v))}
-              data={["10", "25", "50"].map((v) => ({ value: v, label: `±${v}` }))}
-              className="mini-seg"
-              aria-label="Range in bps"
-            />
           </>
         }
         bodyClass="qmap-body"
       >
-        <Suspense fallback={null}>
-          <QuoteMap
-            range={range}
-            onRange={setRange}
-            sort={sort}
-            account={acct === "all" ? null : acct}
-            selected={q.trim().toUpperCase()}
-            onSelect={pick}
-          />
-        </Suspense>
-        <div className="qmap-legend">
-          <span>
-            <i className="lg-band" /> Market bid–ask
-          </span>
-          <span>
-            <i className="lg-dot up" /> Our bid
-          </span>
-          <span>
-            <i className="lg-dot down" /> Our ask
-          </span>
-          <span>
-            <i className="lg-dot ring" /> Through fair
-          </span>
-          <span>
-            <i className="lg-tri" /> Beyond range
-          </span>
-        </div>
+        <QuoteMapFull st={{ ...st, account: acct }} onSelect={pick} selected={sel ? sel + "USDT" : null} />
       </Panel>
       <OrderList orders={shown} q={q} setQ={setQ} />
     </div>
   );
 }
-

@@ -1,0 +1,118 @@
+/* ---- quote maps (components/quotes) ---- */
+.qrows {
+  position: relative;
+  width: 100%;
+}
+.qrows canvas {
+  display: block;
+}
+
+.q-full {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.q-full.phone {
+  height: auto;
+}
+.q-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  padding: 6px 0;
+}
+.q-full.phone .q-head {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.q-ec {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.q-ec > .qmap {
+  inset: 0;
+}
+
+.q-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.q-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.q-legend i {
+  display: inline-block;
+  flex: none;
+}
+.q-lg-band {
+  width: 18px;
+  height: 6px;
+  background: rgba(195, 202, 213, 0.14);
+  border-left: 1px solid rgba(195, 202, 213, 0.6);
+  border-right: 1px solid rgba(195, 202, 213, 0.6);
+}
+.q-lg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.q-lg-dot.up {
+  background: var(--up);
+}
+.q-lg-dot.down {
+  background: var(--down);
+}
+.q-lg-dot.ring {
+  background: var(--up);
+  box-shadow: 0 0 0 1.5px var(--warn);
+}
+.q-lg-tri {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid var(--up);
+  opacity: 0.55;
+}
+
+.q-ctrls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-left: auto;
+}
+.q-ctrls.compact {
+  margin-left: 0;
+  gap: 0 16px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.q-grp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.q-grp-l {
+  font-size: 12px;
+  color: var(--muted);
+}
+.q-ctrls.compact .ex-tt button {
+  padding: 8px 5px;
+  font-size: 13px;
+}
+.q-ctrls.compact .q-grp {
+  flex: none;
+}

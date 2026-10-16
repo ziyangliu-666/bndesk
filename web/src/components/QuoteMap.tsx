@@ -1,45 +1,18 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { OpenOrder, SymbolRow } from "../protocol";
+import type { Venue } from "../protocol";
 import { useStore } from "../store";
 import { C, SANS } from "../theme";
 import { bps, MINUS, price, usd } from "../format";
 import { EChart, phoneDpr, type EChartsType } from "./EChart";
+import { BAND, BAND_EDGE, INV_FILL, LADDER, clamp, dotSize, off, quoteRows, short, type MapSort, type QRow } from "./quotes/model";
+
+export type { MapSort };
 
 /** One row per instrument, x in bps from fair. The market's bid-ask is a thin bar, own bids and asks
  *  are dots with area ~ notional, orders through fair carry an amber ring, orders beyond the x range
  *  sit on the edge as triangles. Inventory value is a narrow bar column on the right. */
 
-interface Row {
-  sym: SymbolRow;
-  orders: OpenOrder[];
-}
-
-export type MapSort = "activity" | "name" | "inventory";
-
-function rowsOf(symbols: SymbolRow[], orders: OpenOrder[], sort: MapSort): Row[] {
-  const by = new Map<string, OpenOrder[]>();
-  for (const o of orders) {
-    const k = `${o.venue}:${o.symbol}`;
-    (by.get(k) ?? by.set(k, []).get(k)!).push(o);
-  }
-  const rows = symbols
-    .filter((s) => s.venue === "spot" && (by.has(`spot:${s.symbol}`) || Math.abs(s.inv_value) >= 5))
-    .map((s) => ({ sym: s, orders: by.get(`spot:${s.symbol}`) ?? [] }));
-  const name = (r: Row) => r.sym.symbol;
-  if (sort === "name") rows.sort((a, b) => name(a).localeCompare(name(b)));
-  else if (sort === "inventory") rows.sort((a, b) => Math.abs(b.sym.inv_value) - Math.abs(a.sym.inv_value));
-  else
-    rows.sort(
-      (a, b) =>
-        // today's fills only grow, so rows keep their place while orders churn
-        b.sym.fills_day - a.sym.fills_day || name(a).localeCompare(name(b)),
-    );
-  return rows;
-}
-
-const short = (s: string) => s.replace(/USDT$/, "");
-const off = (px: number, fair: number) => ((px - fair) / fair) * 1e4;
-const clamp = (v: number, r: number) => Math.max(-r, Math.min(r, v));
+type Row = QRow;
 
 const ROW_H = 17; // target row pitch when the list scrolls
 const ROW_MAX = 34; // tallest row when the list fits
@@ -52,17 +25,10 @@ const INV_LABEL = 50; // inventory figures right of the bars
 const SLIDER = 10;
 const GAP = 16;
 
-// bps ranges ctrl + wheel steps through; the preset buttons are three of them
-const LADDER = [2, 4, 6, 10, 16, 25, 35, 50, 75, 100, 150, 200];
-/** The bps ranges, for a chip row where there is no ctrl + wheel (touch). */
-export const QMAP_RANGES: readonly number[] = LADDER;
 
 /** A touch screen drags the rows: there is no wheel and the slider is too thin for a finger. */
 const coarse = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 
-const BAND = "rgba(195,202,213,0.14)";
-const BAND_EDGE = "rgba(195,202,213,0.6)";
-const INV_FILL = "rgba(138,148,165,0.45)";
 
 const tick = (v: number, r: number) => (v === 0 ? "fair" : (v > 0 ? "+" : MINUS) + Math.abs(v) + (v === r ? " bps" : ""));
 
@@ -124,8 +90,9 @@ export function QuoteMap({
   onRange: (r: number) => void;
   sort: MapSort;
   account: string | null;
-  selected: string;
-  onSelect: (name: string) => void;
+  /** The instrument drawn in the accent colour (full symbol, `BTCUSDT`). */
+  selected?: string | null;
+  onSelect: (symbol: string, venue: Venue) => void;
   /** Every row at a fixed pitch with the box as tall as the rows (the page scrolls, no zoom or slider), no
    *  tooltip (a tap calls onSelect), canvas at 2× at most. Off: the desktop map. Fixed per mount. */
   phone?: boolean;
@@ -134,11 +101,7 @@ export function QuoteMap({
   const orders = useStore((s) => s.snap?.orders);
   const rows = useMemo(
     () =>
-      rowsOf(
-        symbols ?? [],
-        (orders ?? []).filter((o) => account == null || o.account === account),
-        sort,
-      ),
+      quoteRows(symbols ?? [], orders ?? [], sort, account),
     [symbols, orders, sort, account],
   );
   const chart = useRef<EChartsType | null>(null);
@@ -202,7 +165,7 @@ export function QuoteMap({
           symbol: out ? "triangle" : "circle",
           symbolRotate: out ? (b > 0 ? -90 : 90) : 0,
           // a ring needs room inside it for the side colour
-          symbolSize: out ? 8 : Math.max(through ? 8 : 5, Math.min(11, Math.sqrt(o.notional / 60) * 5.6)),
+          symbolSize: out ? 8 : dotSize(o.notional, through),
           itemStyle: {
             opacity: out ? 0.55 : 0.9,
             borderColor: through ? C.warn : "transparent",
@@ -280,7 +243,7 @@ export function QuoteMap({
           axisLabel: {
             customValues: ticks,
             color: C.muted,
-            fontSize: 10.5,
+            fontSize: 11,
             fontFamily: SANS,
             margin: 6,
             alignMinLabel: "left",
@@ -305,7 +268,7 @@ export function QuoteMap({
           nameGap: 6,
           nameTextStyle: {
             color: C.muted,
-            fontSize: 10.5,
+            fontSize: 11,
             fontFamily: SANS,
             align: "right",
             verticalAlign: "bottom",
@@ -324,24 +287,24 @@ export function QuoteMap({
             margin: 8,
             align: "left",
             padding: [0, 0, 0, -LEFT + 10],
-            formatter: (v: string, i: number) => `{${label(v === selected, !!rows[i]?.orders.length)}|${v}}`,
+            formatter: (v: string, i: number) => `{${label(rows[i]?.sym.symbol === selected, !!rows[i]?.orders.length)}|${v}}`,
             rich: {
               on: {
                 color: C.ink,
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 500,
                 fontFamily: SANS,
               },
               off: {
                 color: C.muted,
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 500,
                 fontFamily: SANS,
               },
               sel: {
                 color: C.accent,
-                fontSize: 11,
-                fontWeight: 600,
+                fontSize: 12,
+                fontWeight: 500,
                 fontFamily: SANS,
               },
             },
@@ -500,7 +463,7 @@ export function QuoteMap({
       const v = c.convertFromPixel({ yAxisIndex: 0 }, e.offsetY) as unknown as number;
       const i = Math.round(v);
       const r = live.current.rows[i];
-      if (r && i >= top.current && i < top.current + live.current.span) live.current.onSelect(short(r.sym.symbol));
+      if (r && i >= top.current && i < top.current + live.current.span) live.current.onSelect(r.sym.symbol, r.sym.venue);
     });
     // ctrl + wheel (and trackpad pinch) widens or narrows the bps range
     const el = c.getDom();

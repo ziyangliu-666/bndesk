@@ -25,7 +25,9 @@ import {
   volumePoints,
   type ExSeries,
   type KInterval,
+  useTicker24h,
 } from "./index";
+import { QuoteBand, QuoteMapFull, QuoteMapMini } from "../quotes";
 import { C, FUT_COLOR, INV_COLOR, S2, rgba } from "./palette";
 
 const INST_IVS = [
@@ -63,6 +65,7 @@ export function Playground() {
           />
         </div>
         <DeskPnlBlock phone={phone} />
+        <QuotesDemo phone={phone} />
         <ControlsDemo />
       </div>
       {!phone && <StatusFooter />}
@@ -259,6 +262,41 @@ function DeskPnlBlock({ phone }: { phone: boolean }) {
         ];
       }}
     />
+  );
+}
+
+// ---------------- quote maps + 24h ticker ----------------
+
+function QuotesDemo({ phone }: { phone: boolean }) {
+  const t = useTicker24h("ETHUSDT", "spot");
+  const pad = { padding: "8px 12px", background: "var(--panel)", borderTop: "1px solid var(--rule)" };
+  const tone = t ? (t.change > 0 ? "up" : t.change < 0 ? "down" : undefined) : undefined;
+  return (
+    <>
+      <section style={pad}>
+        <TickerStrip
+          size={phone ? "md" : "sm"}
+          lead={{ title: "ETHUSDT 24h (useTicker24h)", value: price(t?.last), tone }}
+          items={[
+            { label: "24h Chg", value: t ? `${pnl(t.change)} ${t.changePct >= 0 ? "+" : "−"}${Math.abs(t.changePct).toFixed(2)}%` : "--", tone },
+            { label: "24h High", value: price(t?.high) },
+            { label: "24h Low", value: price(t?.low) },
+            { label: "24h Vol(USDT)", value: compact(t?.quoteVolume) },
+          ]}
+        />
+      </section>
+      <section style={pad}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>QuoteBand ETHUSDT</div>
+        <QuoteBand symbol="ETHUSDT" venue="spot" />
+      </section>
+      <section style={pad}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>QuoteMapMini, 8 busiest</div>
+        <QuoteMapMini n={8} onSelect={(s) => console.log("select", s)} />
+      </section>
+      <section style={{ ...pad, height: phone ? undefined : 420 }}>
+        <QuoteMapFull phone={phone} onSelect={(s) => console.log("select", s)} />
+      </section>
+    </>
   );
 }
 
