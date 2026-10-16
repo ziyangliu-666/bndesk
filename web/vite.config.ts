@@ -116,7 +116,8 @@ function edgeLabels(): Plugin {
       if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
       const re = /needAlignCoordinate\s*=\s*\(?\s*[\w$.]+\s*&&\s*([\w$.]+)\.index\s*<=\s*([\w$.]+)\s*\)?\s*\|\|\s*\(?\s*[\w$.]+\s*&&\s*\1\.index\s*>=\s*([\w$.]+)\s*\)?/;
       if (!re.test(code)) this.error("lwc-edge-labels: the time-mark alignment was not found in " + id);
-      return { code: code.replace(re, "needAlignCoordinate=($1.index<=$2||$1.index>=$3)"), map: null };
+      // aligning moves a label only when it would cross an edge: the inner ones stay where they are
+      return { code: code.replace(re, "needAlignCoordinate=!0"), map: null };
     },
   };
 }
