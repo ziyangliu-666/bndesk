@@ -1,126 +1,209 @@
-import { useMemo, useState } from "react";
-import { serverNow } from "../../store";
-import { useNow } from "../../hooks";
-import { bps, int } from "../../format";
-import { Chips, Money, Section, Segmented, span, tone, useHold, useLive, useMoney } from "../../components/mobile";
-import type { SymbolRow } from "../../protocol";
-import { InstrumentRow, instPnl } from "./shared";
+import { memo, useMemo, useState } from "react";
+import { UnstyledButton } from "@mantine/core";
+import { IconSearch, IconX } from "@tabler/icons-react";
+import { selectInstrument, useMarketsView } from "../../store";
+import { int, price } from "../../format";
+import { Money, Segmented, tone, useHold, useLive, useMoney } from "../../components/mobile";
+import { Tabs, useTicker24h, useTickers24h, tickerKey, type Ticker24h } from "../../components/ex";
+import type { SymbolRow, Venue } from "../../protocol";
+import { instPnl } from "./shared";
+import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
+import "./desk/dk.css";
+import "./desk/mk.css";
 
-type Sort = "pnl" | "inv" | "mk10" | "fills" | "last";
-type Venue = "all" | "spot" | "usdm";
+type Filter = "all" | "held" | "quoted" | "perp";
+type Key = "fills" | "name" | "chg" | "pnl" | "inv";
+type Sort = { key: Key; desc: boolean };
 
-const SORTS: { value: Sort; label: string }[] = [
-  { value: "pnl", label: "PnL" },
-  { value: "inv", label: "Inventory" },
-  { value: "mk10", label: "Markout 10 s" },
-  { value: "fills", label: "Fills" },
-  { value: "last", label: "Last fill" },
-];
+const held = (r: SymbolRow) => !r.dust && Math.abs(r.inv_value) >= 5;
+const quoted = (r: SymbolRow) => r.open_bids + r.open_asks > 0;
+const FILTERS: Record<Filter, (r: SymbolRow) => boolean> = {
+  all: () => true,
+  held,
+  quoted,
+  perp: (r) => r.venue === "usdm",
+};
+const NO_ROWS: { symbol: string; venue: Venue }[] = [];
 
-// nulls last, whatever the direction
-const by =
-  (f: (r: SymbolRow) => number | null, desc: boolean) =>
-  (a: SymbolRow, b: SymbolRow): number => {
-    const x = f(a);
-    const y = f(b);
-    if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
-    return desc ? y - x : x - y;
-  };
+/** "−1.25%" / "+0.40%" / "--". */
+const pctText = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "--" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2) + "%");
 
-const order = (pnlOf: (r: SymbolRow) => number): Record<Sort, (a: SymbolRow, b: SymbolRow) => number> => ({
-  pnl: by((r) => Math.abs(pnlOf(r)), true), // biggest either way, as Movers
-  inv: by((r) => Math.abs(r.inv_value), true),
-  mk10: by((r) => r.mk10_bps, false), // worst first
-  fills: by((r) => r.fills_day, true),
-  last: by((r) => r.last_fill, true),
-});
-
-/** Every tracked instrument, sorted by one key; the sort's figure moves to the row's right. */
+/** Markets: every tracked instrument (List), or the live quote map of the quoted ones (Quotes). */
 export function InstrumentsM() {
+  const [view, setView] = useMarketsView();
+  return (
+    <>
+      <div className="mk-view">
+        <Tabs
+          items={[
+            { value: "list", label: "List" },
+            { value: "quotes", label: "Quotes" },
+          ]}
+          value={view}
+          onChange={setView}
+        />
+      </div>
+      {view === "list" ? <MarketList /> : <section className="mk-quotes"><QuotesFull ms={250} /></section>}
+    </>
+  );
+}
+
+function MarketList() {
   // the order holds still under a resting finger
-  const [held, hold] = useHold();
-  const rows = useLive((s) => s.snap?.symbols, 250, held);
-  const legs = useLive((s) => s.snap?.exposure.hedge_day?.legs, 1000, held);
+  const [hold_, hold] = useHold();
+  const rows = useLive((s) => s.snap?.symbols, 250, hold_);
+  const legs = useLive((s) => s.snap?.exposure.hedge_day?.legs, 1000, hold_);
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
   // a perp's PnL is its hedge leg's today
   const pnlOf = useMemo(() => {
     const leg = new Map((legs ?? []).map((l) => [l.symbol, l.pnl]));
     return (r: SymbolRow) => (r.venue === "usdm" ? (leg.get(r.symbol) ?? r.upnl ?? 0) : instPnl(r));
   }, [legs]);
-  const [sort, setSort] = useState<Sort>("pnl");
-  const [venue, setVenue] = useState<Venue>("all");
-  const money = useMoney();
-  const now = useNow(sort === "last" ? 1000 : 60_000);
-  const list = useMemo(
-    () => (rows ?? []).filter((r) => venue === "all" || r.venue === venue).sort(order(pnlOf)[sort]),
-    [rows, venue, sort, pnlOf],
+  const all = rows ?? [];
+  const counts = useMemo(() => {
+    const c: Record<Filter, number> = { all: 0, held: 0, quoted: 0, perp: 0 };
+    for (const r of all) for (const f of Object.keys(FILTERS) as Filter[]) if (FILTERS[f](r)) c[f]++;
+    return c;
+  }, [all]);
+  const needle = q.trim().toUpperCase();
+  const shown = useMemo(
+    () => all.filter((r) => FILTERS[filter](r) && (!needle || r.symbol.includes(needle))),
+    [all, filter, needle],
   );
-  const total = list.reduce((s, r) => s + pnlOf(r), 0);
-  const nPerp = (rows ?? []).filter((r) => r.venue === "usdm").length;
-  void now;
+  // the 24 h change is read for the whole list only while it orders the list (each row reads its own)
+  const tick = useTickers24h(sort.key === "chg" ? shown : NO_ROWS);
+  const list = useMemo(() => {
+    const val = (r: SymbolRow): number | string | null => {
+      switch (sort.key) {
+        case "name":
+          return r.symbol;
+        case "fills":
+          return r.fills_day;
+        case "chg":
+          return tick.get(tickerKey(r.symbol, r.venue))?.changePct ?? null;
+        case "pnl":
+          return pnlOf(r);
+        case "inv":
+          return Math.abs(r.inv_value);
+      }
+    };
+    const dir = sort.desc ? -1 : 1;
+    return shown.slice().sort((a, b) => {
+      const x = val(a);
+      const y = val(b);
+      if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1; // unknown last, either way
+      if (typeof x === "string") return dir * x.localeCompare(y as string);
+      return dir * (x - (y as number));
+    });
+  }, [shown, sort, tick, pnlOf]);
 
-  const ago = (t: number | null) => (t == null ? "no fills" : `last ${span(serverNow() - t)}`);
-  const inv = (r: SymbolRow) =>
-    r.venue === "usdm" ? `position ${money(r.inv_value, "pnlShort")}` : `inventory ${money(r.inv_value, "short")}`;
-  // no markout (perps, or no matured fill yet): left out, not "10 s — bps"
-  const mk = (r: SymbolRow) => (r.mk10_bps == null ? "" : `10 s ${bps(r.mk10_bps)} bps`);
-  const fl = (r: SymbolRow) => `${int(r.fills_day)} fills`;
-  const join = (...xs: string[]) => xs.filter(Boolean).join(" · ");
-  // the sorted figure on the right under the PnL; the rest in the subtitle
-  const parts = (r: SymbolRow): [string, string] => {
-    switch (sort) {
-      case "pnl":
-        return [join(inv(r), mk(r)), fl(r)];
-      case "inv":
-        return [join(mk(r), fl(r)), inv(r)];
-      case "mk10":
-        return [join(inv(r), fl(r)), mk(r) || "no markout"];
-      case "fills":
-        return [join(inv(r), mk(r)), fl(r)];
-      case "last":
-        return [join(inv(r), fl(r)), ago(r.last_fill)];
-    }
-  };
+  // each header cell steps through its figures: Name / Fills, Mid / 24h (both ways), Day PnL (both ways) / Inv
+  const tapLeft = () => setSort(sort.key === "fills" ? { key: "name", desc: false } : { key: "fills", desc: true });
+  const tapMid = () => setSort(sort.key === "chg" ? { key: "chg", desc: !sort.desc } : { key: "chg", desc: true });
+  const tapRight = () =>
+    setSort(
+      sort.key === "pnl" ? (sort.desc ? { key: "pnl", desc: false } : { key: "inv", desc: true }) : { key: "pnl", desc: true },
+    );
+  const arrow = sort.desc ? "↓" : "↑";
+  const word = (k: Key, text: string) => (
+    <span className={sort.key === k ? "on" : ""}>
+      {text}
+      {sort.key === k && <i>{arrow}</i>}
+    </span>
+  );
 
   return (
     <>
-      <Section card={false} className="m-inst-chips">
-        <Chips value={sort} onChange={setSort} data={SORTS} label="Sort by" />
-      </Section>
-      <div className="m-inst-bar">
-        <span className="m-inst-sum">
-          <b>{list.length}</b> instruments · PnL <Money v={total} />
-        </span>
-        {nPerp > 0 && (
+      <label className="mk-search">
+        <IconSearch size={16} stroke={1.75} aria-hidden />
+        <input
+          type="search"
+          inputMode="search"
+          autoCapitalize="characters"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="Search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Search instruments"
+        />
+        {q && (
+          <UnstyledButton className="mk-clear" onClick={() => setQ("")} aria-label="Clear the search">
+            <IconX size={16} stroke={1.75} />
+          </UnstyledButton>
+        )}
+      </label>
+      <div className="mk-sticky">
+        <div className="mk-filters">
           <Segmented
-            value={venue}
-            onChange={setVenue}
+            label="Show"
+            value={filter}
+            onChange={setFilter}
             data={[
-              { value: "all", label: "All" },
-              { value: "spot", label: "Spot" },
-              { value: "usdm", label: "Perp" },
+              { value: "all", label: "All", count: counts.all },
+              { value: "held", label: "Held", count: counts.held },
+              { value: "quoted", label: "Quoted", count: counts.quoted },
+              { value: "perp", label: "Perp", count: counts.perp },
             ]}
-            label="Venue"
           />
+        </div>
+        <div className="mk-head" role="group" aria-label="Sort">
+          <UnstyledButton className="mk-h-l" onClick={tapLeft}>
+            {word("name", "Name")} / {word("fills", "Fills")}
+          </UnstyledButton>
+          <UnstyledButton className="mk-h-m" onClick={tapMid}>
+            Mid / {word("chg", "24h")}
+          </UnstyledButton>
+          <UnstyledButton className="mk-h-r" onClick={tapRight}>
+            {word("pnl", "Day PnL")} / {word("inv", "Inv")}
+          </UnstyledButton>
+        </div>
+      </div>
+      <div className="mk-list">
+      <div className="m-hold" {...hold}>
+        {list.map((r) => (
+          <MarketRow key={r.venue + r.symbol} r={r} pnl={pnlOf(r)} />
+        ))}
+        {list.length === 0 && (
+          <div className="m-empty">{needle ? `No instrument matches “${q.trim()}”.` : "No instruments here."}</div>
         )}
       </div>
-      <div className="m-hold" {...hold}>
-      <Section className="m-inst-list">
-        {list.map((r) => {
-          const [sub, side] = parts(r);
-          return (
-            <InstrumentRow
-              key={r.venue + r.symbol}
-              r={r}
-              pnl={pnlOf(r)}
-              sub={sub}
-              side={<span className={sort === "mk10" ? tone(r.mk10_bps, bps(r.mk10_bps)) : ""}>{side}</span>}
-            />
-          );
-        })}
-        {list.length === 0 && <div className="m-empty">No instruments on this venue.</div>}
-      </Section>
       </div>
     </>
   );
 }
+
+/** One instrument, 56 px: name and venue · mid and its 24 h change · day PnL and the inventory. */
+const MarketRow = memo(function MarketRow({ r, pnl }: { r: SymbolRow; pnl: number }) {
+  const money = useMoney();
+  const t: Ticker24h | null = useTicker24h(r.symbol, r.venue);
+  const perp = r.venue === "usdm";
+  const chg = t?.changePct ?? null;
+  const inv = Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short");
+  return (
+    <UnstyledButton className="mk-row" onClick={() => selectInstrument({ symbol: r.symbol, venue: r.venue })}>
+      <span className="mk-c-l">
+        <span className="mk-sym">
+          {r.symbol.replace(/USDT$/, "")}
+          <span className="mk-quote">/USDT</span>
+        </span>
+        <span className="mk-sub">
+          {perp ? "Perp" : "Spot"} · {int(r.fills_day)} fills
+        </span>
+      </span>
+      <span className="mk-c-m">
+        <span className="mk-px m-fig">{r.mid == null ? "--" : price(r.mid)}</span>
+        <span className={"mk-sub m-fig " + tone(chg, pctText(chg))}>{pctText(chg)}</span>
+      </span>
+      <span className="mk-c-r">
+        <span className="mk-pnl">
+          <Money v={pnl} />
+        </span>
+        <span className="mk-sub m-fig">{inv}</span>
+      </span>
+    </UnstyledButton>
+  );
+});
