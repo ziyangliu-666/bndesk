@@ -420,14 +420,46 @@
   color: var(--ink-2);
 }
 
+/* grid headers: the column resize marks show on the hovered header only, as on the Desk */
+.page .ag-header-cell-resize::after {
+  opacity: 0;
+}
+.page .ag-header-cell:hover .ag-header-cell-resize::after {
+  opacity: 1;
+}
+
 /* ---------- System ---------- */
 .ops-system {
-  grid-template-rows: auto minmax(0, 1fr);
+  /* the engines take what they need (up to 60 % of the height, then scroll), the feeds and alerts the rest */
+  grid-template-rows: minmax(0, auto) minmax(220px, 1fr);
 }
-.ops-sys-body {
-  background: var(--panel);
+.ops-sys-engines {
+  max-height: 60vh;
+}
+.ops-sys-engines > .ops-head,
+.ops-sys-lower .ops-head {
+  border-bottom: 1px solid var(--rule);
+}
+.ops-sys-scroll {
+  flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-width: thin;
+}
+.ops-sys-engines .ops-engine:last-child {
+  border-bottom: 0;
+}
+.ops-sys-lower {
+  min-height: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.6fr);
+}
+.ops-sys-lower .ops-feeds {
+  flex: 1;
+  min-height: 0;
+  height: auto;
 }
 .ops-engine {
   padding: 14px 16px 18px;
