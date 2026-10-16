@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 // Backend for the dev proxy; override with DESK_API=http://host:port.
 const api = process.env.DESK_API ?? "http://127.0.0.1:8710";
@@ -59,8 +61,35 @@ function preloadDesk(): Plugin {
   };
 }
 
+/** `.br` and `.gz` next to each text file of the build, best compression: the server sends them as they are
+ *  (ServeFile's precompressed files) instead of gzipping each response. */
+function precompress(): Plugin {
+  let out = "dist";
+  return {
+    name: "precompress",
+    apply: "build",
+    configResolved(c) {
+      out = c.build.outDir.startsWith("/") ? c.build.outDir : join(c.root, c.build.outDir);
+    },
+    closeBundle() {
+      const walk = (dir: string) => {
+        for (const n of readdirSync(dir)) {
+          const p = join(dir, n);
+          if (statSync(p).isDirectory()) walk(p);
+          else if (/\.(js|css|html|svg|json|webmanifest|txt)$/.test(n) && statSync(p).size >= 1024) {
+            const b = readFileSync(p);
+            writeFileSync(p + ".br", brotliCompressSync(b, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: b.length } }));
+            writeFileSync(p + ".gz", gzipSync(b, { level: 9 }));
+          }
+        }
+      };
+      walk(out);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), preloadDesk()],
+  plugins: [react(), preloadDesk(), precompress()],
   // shown on the phone's More page
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

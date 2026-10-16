@@ -51,6 +51,8 @@ pub const DEFLATE_MIN: usize = 1024;
 /// zlib-rs level 3: a 135 KB patch deflates to 21% in ~0.8 ms, a 3.4 MB snapshot to 25% in ~19 ms
 /// (level 6 saves another 1 point for 1.2x / 2x the time).
 const DEFLATE_LEVEL: u32 = 3;
+/// `Cache-Control` of web/dist/assets/*: hashed names. index.html is `no-cache` (it names the build's assets).
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 /// `DESK_WEB_DIST`, else `web/dist` of the repository.
 pub fn web_dist() -> PathBuf {
@@ -555,7 +557,12 @@ async fn spa(State(st): State<AppState>, req: Request) -> Response {
         && f.starts_with(&root)
         && tokio::fs::metadata(&f).await.is_ok_and(|m| m.is_file())
     {
-        return serve_file(f, req).await;
+        let mut r = serve_file(f, req).await;
+        // a build's assets are named by their content hash: a name never changes content
+        if rel.starts_with("assets/") && r.status().is_success() {
+            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
+        }
+        return r;
     }
     let index = dist.join("index.html");
     if tokio::fs::metadata(&index).await.is_ok_and(|m| m.is_file()) {
@@ -813,6 +820,7 @@ mod tests {
                 std::fs::write(dir.path().join("index.html"), "<html>").unwrap();
                 std::fs::create_dir(dir.path().join("assets")).unwrap();
                 std::fs::write(dir.path().join("assets/a.js"), "js").unwrap();
+                std::fs::write(dir.path().join("assets/a.js.br"), b"br-bytes").unwrap();
                 let mut hub = Hub::new();
                 let n = std::rc::Rc::new(std::cell::Cell::new(1));
                 tokio::task::spawn_local(answer(hub.take_requests().unwrap(), Fake(n.clone())));
@@ -824,7 +832,13 @@ mod tests {
                 assert_eq!(get("/api/snapshot").await.unwrap().text().await.unwrap(), "{\"full\":1}");
                 let r = get("/assets/a.js").await.unwrap();
                 assert_eq!(r.headers()["x-frame-options"], "DENY");
+                assert_eq!(r.headers()["cache-control"], IMMUTABLE);
                 assert_eq!(r.text().await.unwrap(), "js");
+                // the build's brotli file, as it is
+                let c = reqwest::Client::builder().no_gzip().build().unwrap();
+                let r = c.get(format!("{base}/assets/a.js")).header("accept-encoding", "br").send().await.unwrap();
+                assert_eq!((r.headers()["content-encoding"].to_str().unwrap(), r.headers()["cache-control"].to_str().unwrap()), ("br", IMMUTABLE));
+                assert_eq!(r.bytes().await.unwrap().as_ref(), b"br-bytes");
                 let r = get("/some/route").await.unwrap();
                 assert_eq!(r.headers()["cache-control"], "no-cache");
                 assert_eq!(r.text().await.unwrap(), "<html>");
