@@ -21,6 +21,8 @@ export function SortTable<R>({
   rowKey,
   initial,
   onRow,
+  hover,
+  onHover,
   empty,
   className,
 }: {
@@ -29,6 +31,9 @@ export function SortTable<R>({
   rowKey: (r: R) => string;
   initial?: { key: string; desc: boolean };
   onRow?: (r: R) => void;
+  /** The row lit from elsewhere (a chart), by key; `onHover` reports the row under the pointer. */
+  hover?: string | null;
+  onHover?: (key: string | null) => void;
   empty: string;
   className?: string;
 }) {
@@ -76,7 +81,13 @@ export function SortTable<R>({
           </tr>
         ) : (
           sorted.map((r) => (
-            <tr key={rowKey(r)} className={onRow ? "click" : undefined} onClick={onRow ? () => onRow(r) : undefined}>
+            <tr
+              key={rowKey(r)}
+              className={(onRow ? "click" : "") + (hover === rowKey(r) ? " lit" : "")}
+              onClick={onRow ? () => onRow(r) : undefined}
+              onMouseEnter={onHover ? () => onHover(rowKey(r)) : undefined}
+              onMouseLeave={onHover ? () => onHover(null) : undefined}
+            >
               {cols.map((c) => (
                 <td key={c.key} className={(c.left ? "l " : "") + (c.cls?.(r) ?? "")}>
                   {c.cell(r)}
