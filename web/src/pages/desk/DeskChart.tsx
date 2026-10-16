@@ -87,6 +87,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const money = (f: (v: number) => string) => maskFormat(hide, f);
   const fPnl = money(pnl);
   const fBig = money((v) => compact(v));
+  // exposure is signed (long +, short −), on the axis, the tags and the legend
+  const fSigned = money((v) => compact(v, 2, true));
   const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
     stable.get(
       k + iv,
@@ -196,9 +198,9 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     stretch = [1, 0.6];
   } else {
     list = [
-      { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fBig, data: pts("net", (r) => r.inv + r.fut) },
-      { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fBig, data: pts("spot", (r) => r.inv), lastValue: false },
-      { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fBig, data: pts("fut", (r) => r.fut), lastValue: false },
+      { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fSigned, data: pts("net", (r) => r.inv + r.fut) },
+      { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
+      { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fSigned, data: pts("fut", (r) => r.fut), lastValue: false },
     ];
     const x = exposure;
     if (x?.gap != null)
