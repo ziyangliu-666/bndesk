@@ -4,7 +4,7 @@ import { useStore } from "../../store";
 import { useThrottled } from "../../hooks";
 import { bps, int } from "../../format";
 import { refLabel } from "../../components/ui";
-import { InfoLabel, Money, Section, tone } from "../../components/mobile";
+import { Money, Section, tone } from "../../components/mobile";
 import type { SymbolRow } from "../../protocol";
 import { MkTable, type MkRowData } from "./shared";
 import "./history.css";
@@ -22,6 +22,111 @@ const TOX_DEF =
   "Toxicity: how far the reference moved against the fill from 5 s before it to h after it, −side × (ref(t+h) / ref(t−5 s) − 1), " +
   "weighted by notional over today's fills with a reference. Positive = the reference moved against us. A rise between 0 and 0.2 s is a " +
   "price jump that picked off the quote before any hedge could trade.";
+
+const ROWS_TIP =
+  "Net 1 s: all fills, net of the reference move from 1 s after the fill. Buys, Sells: one side only, net 1 s. " +
+  "Net 0.2 s: net from 0.2 s after the fill. Raw: against the instrument's own mid only.";
+
+/** The horizon curve under the table: Edge at the fill, then each horizon, one line per row (Binance-style
+ *  legend on top). Plain SVG, 160 px. */
+function MkCurve({
+  horizons,
+  lines,
+}: {
+  horizons: number[];
+  lines: { label: string; color: string; edge: number | null; v: (number | null)[] }[];
+}) {
+  const { ref, width } = useElementSize<HTMLDivElement>();
+  const xs = ["Edge", ...horizons.map((h) => `${h} s`)];
+  const pts = lines.map((l) => [l.edge, ...l.v]);
+  const all = pts.flat().filter((v): v is number => v != null && Number.isFinite(v));
+  if (!all.length) return null;
+  const H = 150;
+  const AX = 18;
+  const R = 40; // right axis
+  const plotH = H - AX - 8;
+  let lo = Math.min(0, ...all);
+  let hi = Math.max(0, ...all);
+  const pad = (hi - lo || 1) * 0.12;
+  lo -= lo < 0 ? pad : 0;
+  hi += pad;
+  const w = Math.max(1, width - R);
+  const x = (i: number) => 10 + (i / (xs.length - 1)) * (w - 20);
+  const y = (v: number) => 4 + ((hi - v) / (hi - lo)) * plotH;
+  const ticks = [hi - pad, 0, ...(lo < 0 ? [lo + (lo < 0 ? pad : 0)] : [])];
+  return (
+    <div className="mk-curve">
+      <div className="mk-curve-lg">
+        {lines.map((l, i) => (
+          <span key={l.label}>
+            <i style={{ background: l.color }} />
+            {l.label}
+            <b className={tone(pts[i]![pts[i]!.length - 1], bps(pts[i]![pts[i]!.length - 1]))}>{bps(pts[i]![pts[i]!.length - 1])}</b>
+          </span>
+        ))}
+        <span className="muted">at {horizons[horizons.length - 1]} s</span>
+      </div>
+      <div ref={ref} className="mk-curve-plot" style={{ height: H }} role="img" aria-label="Markout by horizon">
+        {width > 0 && (
+          <svg width={width} height={H}>
+            {ticks.map((t, i) => (
+              <g key={i}>
+                <line x1={0} x2={w} y1={y(t) + 0.5} y2={y(t) + 0.5} stroke={t === 0 ? "#3b4453" : "#161b22"} />
+                <text x={width - 2} y={y(t) + 4} textAnchor="end">
+                  {bps(t)}
+                </text>
+              </g>
+            ))}
+            {xs.map((t, i) => (
+              <text key={t} x={x(i)} y={H - 4} textAnchor={i === 0 ? "start" : i === xs.length - 1 ? "end" : "middle"}>
+                {t}
+              </text>
+            ))}
+            {lines.map((l, li) => {
+              const p = pts[li]!.map((v, i) => (v == null ? null : [x(i), y(v)] as const)).filter((q): q is readonly [number, number] => q != null);
+              return (
+                <g key={l.label}>
+                  <polyline points={p.map((q) => q.join(",")).join(" ")} fill="none" stroke={l.color} strokeWidth={1.5} />
+                  {p.map((q, i) => (
+                    <circle key={i} cx={q[0]} cy={q[1]} r={2.5} fill={l.color} />
+                  ))}
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The spot instruments the market moved against most 10 s after our fills (20 fills or more), worst first. */
+function PickedOff({ rows }: { rows: SymbolRow[] }) {
+  const worst = useMemo(
+    () =>
+      rows
+        .filter((r) => r.venue === "spot" && r.fills_day >= 20 && r.mk10_bps != null && r.mk10_bps < 0)
+        .sort((a, b) => a.mk10_bps! - b.mk10_bps!)
+        .slice(0, 4),
+    [rows],
+  );
+  return (
+    <Sec title="Worst 10 s markouts" right="today, bps">
+      {worst.map((r) => (
+        <Row
+          key={r.symbol}
+          dense
+          title={r.symbol}
+          sub={`${int(r.fills_day)} fills · edge ${bps(r.edge_bps)}`}
+          value={<span className={"r-fig " + tone(r.mk10_bps, bps(r.mk10_bps))}>{bps(r.mk10_bps)}</span>}
+          valueSub={`60 s ${bps(r.mk60_bps)}`}
+          to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
+        />
+      ))}
+      {!worst.length && <Empty>No instrument has a negative 10 s markout today</Empty>}
+    </Sec>
+  );
+}
 
 /** Markouts: the horizon summary, toxicity behind a disclosure, by UTC hour, then by instrument. */
 export function MarkoutsM() {
@@ -45,12 +150,13 @@ export function MarkoutsM() {
   }, [fills]);
 
   if (!mk) return null;
+  // the rows are defined once, in the section's definition (a dotted label on every row reads as clutter)
   const rows: MkRowData[] = [
-    { label: "Net 1 s", info: "All fills, net of the reference move from 1 s after the fill.", edge: edge.all, v: mk.all },
-    { label: "Buys", info: "Buys only, net 1 s.", edge: edge.buy, v: mk.buys },
-    { label: "Sells", info: "Sells only, net 1 s.", edge: edge.sell, v: mk.sells },
-    { label: "Net 0.2 s", info: "All fills, net of the reference move from 0.2 s after the fill.", v: mk.fast },
-    { label: "Raw", info: "All fills, against the instrument's own mid only.", v: mk.raw },
+    { label: "Net 1 s", edge: edge.all, v: mk.all },
+    { label: "Buys", edge: edge.buy, v: mk.buys },
+    { label: "Sells", edge: edge.sell, v: mk.sells },
+    { label: "Net 0.2 s", v: mk.fast },
+    { label: "Raw", v: mk.raw },
   ];
 
   return (
@@ -66,12 +172,21 @@ export function MarkoutsM() {
       />
       {tab === "markouts" ? (
         <>
-          <Section title="By horizon" info={`${MK_TIP}\n\n${EDGE_TIP}`} right="bps">
+          <Section title="By horizon" info={`${MK_TIP}\n\n${ROWS_TIP}\n\n${EDGE_TIP}`} right="bps">
             <MkTable rows={rows} horizons={mk.horizons} />
+            <MkCurve
+              horizons={mk.horizons}
+              lines={[
+                { label: "Net 1 s", color: "var(--ink)", edge: edge.all, v: mk.all },
+                { label: "Buys", color: "var(--up)", edge: edge.buy, v: mk.buys },
+                { label: "Sells", color: "var(--down)", edge: edge.sell, v: mk.sells },
+              ]}
+            />
           </Section>
           <Section title="Toxicity" info={TOX_DEF} right="from 5 s before the fill">
             <ToxTable tox={mk.toxicity} />
           </Section>
+          <PickedOff rows={symbols ?? []} />
         </>
       ) : tab === "hour" ? (
         <>
@@ -110,9 +225,7 @@ function ToxTable({ tox }: { tox: { horizons_s: number[]; bps: (number | null)[]
             </thead>
             <tbody>
               <tr>
-                <th scope="row">
-                  <InfoLabel label="Against us" info={TOX_DEF} />
-                </th>
+                <th scope="row">Against us</th>
                 {tox.bps.map((v, i) => (
                   <td key={i} className={tone(v == null ? v : -v, bps(v))}>
                     {bps(v)}
@@ -120,9 +233,7 @@ function ToxTable({ tox }: { tox: { horizons_s: number[]; bps: (number | null)[]
                 ))}
               </tr>
               <tr className="sub">
-                <th scope="row">
-                  <InfoLabel label="Fills" info="Fills with a reference price at h." />
-                </th>
+                <th scope="row">Fills</th>
                 {tox.fills.map((v, i) => (
                   <td key={i}>{int(v)}</td>
                 ))}

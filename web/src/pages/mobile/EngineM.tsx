@@ -48,21 +48,17 @@ function VenueBlock({ v, feeds, now, alerts }: { v: Engine["venues"][number]; fe
       items={[
         {
           label: v.name,
-          info:
-            "The engine's connections to this venue (market data, user data and order entry), and the monitor's feeds of the " +
-            "same market, classified as in Feeds.",
           value: bad.length ? bad.join(", ") : states.length ? "all up" : "--",
           tone: worst,
           span: 3,
         },
-        { label: "Reconnects", info: "Connection re-establishments since the engine started.", value: int(v.reconnects) },
+        { label: "Reconnects", value: int(v.reconnects) },
         {
           label: "Cooldowns",
-          info: "Rate-limit cooldowns the engine entered.",
           value: int(v.cooldowns),
           tone: v.cooldowns ? "warn" : undefined,
         },
-        { label: "REST errors", info: "REST requests that returned an error.", value: int(v.rest_errors) },
+        { label: "REST errors", value: int(v.rest_errors) },
       ]}
     />
   );

@@ -3,7 +3,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   InfoLabel,
-  defineProps,
   KV,
   LimitBar,
   ListRow,
@@ -146,7 +145,9 @@ export const FillRow = memo(function FillRow({
   const tz = useStore((s) => s.tz);
   const label = useAccountLabel(f.account);
   const money = useMoney();
+  const q = useQty();
   const v = fillFig(f, fig);
+  const usdt = money(f.notional, "short");
   return (
     <ListRow
       dense
@@ -164,10 +165,16 @@ export const FillRow = memo(function FillRow({
         </>
       }
       subtitle={account ? `${hms(f.ts, tz)} · ${label}` : hms(f.ts, tz)}
-      primary={money(f.notional, "short")}
+      // as an exchange's trade list: amount @ price, then the notional and the edge (or a markout)
+      primary={
+        <span className="m-fig">
+          {q(f.qty)} <span className="m-at">@</span> {price(f.price)}
+        </span>
+      }
       secondary={
         <>
-          {FILL_FIG_LABEL[fig]} <Bps v={v} />
+          {usdt}
+          {usdt !== "--" && <span className="m-unit">USDT</span>} · {FILL_FIG_LABEL[fig]} <Bps v={v} />
         </>
       }
       onClick={() => onOpen(f)}
@@ -434,34 +441,30 @@ export function EngineFacts({ e, spike }: { e: Engine; spike?: boolean }) {
       items={[
         {
           label: "Realized",
-          info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started, USDT.`,
+          info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started; Unrealized: its open position at its own marks. USDT.`,
           value: money(e.realized),
           v: e.realized,
         },
         {
           label: "Unrealized",
-          info: `${ENGINE_BOOKS} Unrealized: its open position at its own marks, USDT.`,
           value: money(e.unrealized),
           v: e.unrealized,
         },
-        { label: "Fees", info: "Fees paid, USDT.", value: money(e.fees, "usd") },
-        { label: "Orders", info: "Orders sent by the engine (counter from its metrics).", value: int(e.orders) },
-        { label: "Cancels", info: "Cancels sent by the engine.", value: int(e.cancels) },
-        { label: "Fills", info: "Fills received by the engine.", value: int(e.fills) },
+        { label: "Fees", value: money(e.fees, "usd") },
+        { label: "Orders", value: int(e.orders) },
+        { label: "Cancels", value: int(e.cancels) },
+        { label: "Fills", value: int(e.fills) },
         {
           label: "Risk rejects",
-          info: "Orders the engine's own risk checks refused, since it started.",
           value: int(e.risk_rejects),
         },
         {
           label: "Venue rejects",
-          info: "Orders the exchange rejected, since the engine started. Amber while an alert says they spiked.",
           value: int(e.venue_rejects),
           tone: spike ? "warn" : undefined,
         },
         {
           label: "Last metrics",
-          info: "When the monitor last read the engine's figures (it reads them about once a second). Over 5 s old raises an alert.",
           value: `${num(e.stale_s, 1)} s ago`,
           tone: e.stale_s > 5 ? "warn" : undefined,
         },
@@ -491,12 +494,8 @@ export function LatencyTable({ e, p99Limit }: { e: Engine; p99Limit?: number | n
     <div className="m-ops-tbl" role="table">
       <div className="m-ops-tr head" role="row">
         <span role="columnheader">Latency</span>
-        <span role="columnheader" className="m-tap" {...defineProps("p50", "Median latency of the step.")}>
-          <span className="m-defined">p50</span>
-        </span>
-        <span role="columnheader" className="m-tap" {...defineProps("p99", "99th percentile latency of the step: 1 in 100 is slower.")}>
-          <span className="m-defined">p99</span>
-        </span>
+        <span role="columnheader">p50</span>
+        <span role="columnheader">p99</span>
       </div>
       {e.latency.map((l) => (
         <div className="m-ops-tr" role="row" key={l.name}>

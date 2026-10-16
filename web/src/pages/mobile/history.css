@@ -68,10 +68,46 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.m-hb-svg text {
+.m-hb-svg text,
+.mk-curve-plot text {
   fill: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/* Analysis › Markouts: the horizon curve under the table */
+.mk-curve {
+  padding: 12px var(--m-pad-r) 4px var(--m-pad-l);
+}
+.mk-curve-lg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mk-curve-lg > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.mk-curve-lg i {
+  align-self: center;
+  width: 10px;
+  height: 2px;
+}
+.mk-curve-lg b {
+  font-weight: 400;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.mk-curve-lg b.up {
+  color: var(--up);
+}
+.mk-curve-lg b.down {
+  color: var(--down);
 }
 /* the day PnL column keeps one width, so the fills counts line up */
 .m-hist-day .m-row-side {

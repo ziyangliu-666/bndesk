@@ -59,11 +59,10 @@ export function DeskM() {
         v={sm.pnl_day}
         sub={
           <>
-            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 3)} of equity · </span>}
-            since {hm(sm.day_start, tz)}
-            {zone}
+            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 3)} of equity</span>}
           </>
         }
+        since={`since ${hm(sm.day_start, tz)}${zone}`}
         h1={sm.pnl_1h}
         equity={equity}
       />
@@ -93,7 +92,6 @@ export function DeskM() {
 
       <Section
         title="Quotes"
-        info="Our resting orders around each instrument's fair, live: bids in the gain colour, asks in the loss colour (a bigger dot is a bigger order), the market's bid–ask as the grey band, an amber ring on an order through fair. The 8 busiest instruments of the last 15 minutes. Tap a row to open it; press and hold to read a row, then slide to the next."
         right={
           <UnstyledButton className="m-link" onClick={() => openMarkets("quotes")}>
             All
@@ -114,7 +112,6 @@ export function DeskM() {
             who={o10.a.label}
             value={o10.v}
             limit={o10.lim}
-            info={`New orders in the last 10 s against the venue's limit, for the account closest to it: ${o10.a.label}. Another account takes the row only once it is 5 points of the limit closer.`}
           />
         )}
         {o1d && (
@@ -124,7 +121,6 @@ export function DeskM() {
             value={o1d.v}
             limit={o1d.lim}
             pct
-            info={`Orders today against the venue's daily limit, for the account closest to it: ${o1d.a.label}, ${int(o1d.v)} of ${limitK(o1d.lim)}. Another account takes the row only once it is 5 points of the limit closer.`}
           />
         )}
       </Section>
@@ -136,17 +132,14 @@ export function DeskM() {
             {
               label: "Fills / h",
               value: int(sm.fills_1h),
-              info: `Fills in the last hour, all accounts. ${int(sm.fills_day)} today; ${int(sm.fills_24h)} spot fills of tracked markets in the last 24 h.`,
             },
             {
               label: "Volume",
               value: <Money v={sm.volume_day} kind="short" />,
-              info: `Notional filled since the day start, USDT; ${money(sm.volume_24h, "short")} over the last 24 hours.`,
             },
             {
               label: "Markout 10 s",
               value: <Bps v={mk} />,
-              info: "Last hour: the notional-weighted 10 s markout of the fills, net of the reference move.",
             },
           ]}
         />
@@ -172,13 +165,13 @@ export function DeskM() {
 
 // ---- hero: Day PnL big, the eye that hides amounts, 1h and equity at the right ----
 
-function DeskHero({ v, sub, h1, equity }: { v: number; sub: ReactNode; h1: number; equity: number }) {
+function DeskHero({ v, sub, since, h1, equity }: { v: number; sub: ReactNode; since: string; h1: number; equity: number }) {
   const hide = useStore((s) => s.hideAmounts);
   return (
     <section className="dk-hero">
       <div className="dk-hero-top">
         <span className="dk-hero-label">
-          Day PnL (USDT)
+          Day PnL (USDT) <span className="dk-hero-since">{since}</span>
         </span>
         <UnstyledButton
           className="dk-eye"
@@ -260,7 +253,6 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
   return (
     <Section
       title="Top movers"
-      info="Spot instruments by PnL today: market making plus inventory PnL, all accounts (the perps are the hedge). Best: the four that made the most; worst: the four that lost the most."
       right={
         <Segmented
           label="Movers"
@@ -384,6 +376,3 @@ function useSticky(accts: Account[], f: (a: Account) => [number, number]): Worst
   shown.current = pick?.a.id ?? null;
   return pick;
 }
-
-/** A daily limit as the definitions write it: 160K. */
-const limitK = (n: number) => (n >= 10_000 ? `${int(n / 1000)}K` : int(n));

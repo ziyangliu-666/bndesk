@@ -69,7 +69,8 @@ function AlertRow({ a }: { a: Alert }) {
       sub={alertText(a, hide)}
       sub2
       value={<span className="o-alert-t r-fig">{a.active ? span(now - a.since) : hm(a.since, tz)}</span>}
-      valueSub={a.active ? `since ${hm(a.since, tz)}` : "cleared"}
+      // a cleared alert: the time it was raised (the feed keeps no clearing time), said as such
+      valueSub={a.active ? `since ${hm(a.since, tz)}` : "raised · cleared"}
       to={{ page: "alerts", detail: { kind: "alert", id: a.id } }}
     />
   );
