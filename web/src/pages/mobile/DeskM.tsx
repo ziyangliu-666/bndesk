@@ -25,16 +25,20 @@ import { Bps, FillRow, instPnl, InstrumentRow, useFillSheet } from "./shared";
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import "./desk.css";
 
+/** How often the Desk takes the store's figures: twice a second is live to the eye, and a slow phone keeps up. */
+const PAGE_MS = 500;
+
 // Desk, the phone's home: is anything wrong, what did the day make and from what, how close to the limits,
 // then who made it (movers, accounts), the day's shape, and the latest fills.
 export function DeskM() {
-  const sm = useStore((s) => s.snap?.summary);
-  const exposure = useStore((s) => s.snap?.exposure);
-  const accounts = useLive((s) => s.snap?.accounts, 250);
+  // the page redraws at most twice a second (useLive hands its values over together)
+  const sm = useLive((s) => s.snap?.summary, PAGE_MS);
+  const exposure = useLive((s) => s.snap?.exposure, PAGE_MS);
+  const accounts = useLive((s) => s.snap?.accounts, PAGE_MS);
   // the movers and the latest fills hold still under a resting finger
   const [held, hold] = useHold();
-  const symbols = useLive((s) => s.snap?.symbols, 500, held);
-  const fills = useLive((s) => s.snap?.fills, 250, held);
+  const symbols = useLive((s) => s.snap?.symbols, PAGE_MS, held);
+  const fills = useLive((s) => s.snap?.fills, PAGE_MS, held);
   const series = useStore((s) => s.snap?.series);
   const reconcile = useStore((s) => s.snap?.alerts.some((a) => a.active && a.rule === "reconcile") ?? false);
   const tz = useStore((s) => s.tz);
@@ -241,7 +245,7 @@ export function DeskM() {
 // ---- alert strip: the most urgent active alert, or nothing ----
 
 function AlertStrip() {
-  const alerts = useStore((s) => s.snap?.alerts);
+  const alerts = useLive((s) => s.snap?.alerts, 1000);
   const keys = useStore((s) => s.hiddenAlerts);
   const tz = useStore((s) => s.tz);
   const hide = useStore((s) => s.hideAmounts);

@@ -84,6 +84,9 @@ interface State {
   setPage: (p: Page) => void;
   setHideAmounts: (v: boolean) => void;
   apply: (m: Msg) => void;
+  /** Messages applied as one store update (ws.ts: the messages of one frame). Throws when a patch does not fit,
+   *  after applying the ones before it. */
+  applyBatch: (ms: Msg[]) => void;
 }
 
 // Fill events for grids that stream with transactions instead of re-rendering.
@@ -448,66 +451,100 @@ export const useStore = create<State>((set, get) => ({
     localStorage.setItem("desk.hideAmounts", hideAmounts ? "1" : "0");
     set({ hideAmounts });
   },
-  apply: (m) => {
-    const now = Date.now();
-    const snap = get().snap;
-    switch (m.type) {
-      case "snapshot": {
-        const s = { ...m.data, series: withBars(m.data.series, m.data.bars) };
-        set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts) });
-        fillListeners.forEach((fn) => fn({ kind: "reset", fills: s.fills }));
-        return;
-      }
-      case "patch": {
-        if (!snap) return;
-        const { diff, ...whole } = m.data;
-        const next = { ...snap, ...whole };
-        if (diff) for (const k of Object.keys(diff) as (keyof Diff)[]) Object.assign(next, { [k]: edit(snap[k], diff[k]!) });
-        set({
-          snap: next,
-          lastMsg: now,
-          skew: m.data.now != null ? m.data.now - now : get().skew,
-          ...(m.data.exposure || diff?.exposure ? sample(get().ring, next) : null),
-          ...(m.data.alerts || diff?.alerts ? pruneHidden(get().hiddenAlerts, next.alerts) : null),
-        });
-        if (m.data.fills) fillListeners.forEach((fn) => fn({ kind: "reset", fills: next.fills }));
-        return;
-      }
-      case "fills": {
-        if (!snap) return;
-        const r = upsertFills(snap.fills, m.data);
-        set({ snap: { ...snap, fills: r.fills }, lastMsg: now });
-        fillListeners.forEach((fn) => fn({ kind: "upsert", add: r.add, update: r.update, remove: r.remove }));
-        return;
-      }
-      case "series": {
-        if (!snap) return;
-        set({ snap: { ...snap, series: appendSeries(snap.series, m.data) }, lastMsg: now });
-        return;
-      }
-      case "account_series": {
-        if (!snap) return;
-        set({ snap: { ...snap, account_series: appendAccountSeries(snap.account_series, m.data) }, lastMsg: now });
-        return;
-      }
-      case "bars": {
-        if (!snap) return;
-        set({ snap: { ...snap, bars: mergeBars(snap.bars, m.data) }, lastMsg: now });
-        return;
-      }
-      case "older": {
-        if (!snap) return;
-        const r = mergeOlder(snap, m.data);
-        set({ snap: { ...snap, fills: r.fills, account_series: r.account_series }, lastMsg: now });
-        if (r.add.length) fillListeners.forEach((fn) => fn({ kind: "upsert", add: r.add, update: [], remove: r.remove }));
-        return;
+  apply: (m) => get().applyBatch([m]),
+  applyBatch: (ms) => {
+    const s0 = get();
+    let draft: Partial<State> = {};
+    const read = () => ({ ...s0, ...draft }) as State;
+    const write = (p: Partial<State>) => void (draft = { ...draft, ...p });
+    const events: FillEvent[] = [];
+    let error: unknown = null;
+    for (const m of ms) {
+      try {
+        reduce(m, read, write, events);
+      } catch (e) {
+        error = e;
+        break;
       }
     }
+    // the clocks move on every message; what draws them reads to the second: hold them still in between
+    if (draft.skew != null) skewNow = draft.skew;
+    if (s0.lastMsg && draft.conn == null && s0.conn === "live") {
+      if (draft.lastMsg != null && draft.lastMsg - s0.lastMsg < LAST_MSG_STEP) delete draft.lastMsg;
+      if (draft.skew != null && Math.abs(draft.skew - s0.skew) < SKEW_STEP) delete draft.skew;
+    }
+    if (Object.keys(draft).length) set(draft);
+    for (const e of events) fillListeners.forEach((fn) => fn(e));
+    if (error) throw error;
   },
 }));
 
+/** lastMsg in the store moves in steps this long at most (the freshness pills read seconds). */
+const LAST_MSG_STEP = 1000;
+/** skew in the store changes when it moved this much (clocks show seconds); serverNow() has it exact. */
+const SKEW_STEP = 250;
+let skewNow = 0;
+
+/** One message into the state: `get` reads it as changed so far, `set` changes it, fill events go to `events`. */
+function reduce(m: Msg, get: () => State, set: (p: Partial<State>) => void, events: FillEvent[]) {
+  const now = Date.now();
+  const snap = get().snap;
+  switch (m.type) {
+    case "snapshot": {
+      const s = { ...m.data, series: withBars(m.data.series, m.data.bars) };
+      set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts) });
+      events.push({ kind: "reset", fills: s.fills });
+      return;
+    }
+    case "patch": {
+      if (!snap) return;
+      const { diff, ...whole } = m.data;
+      const next = { ...snap, ...whole };
+      if (diff) for (const k of Object.keys(diff) as (keyof Diff)[]) Object.assign(next, { [k]: edit(snap[k], diff[k]!) });
+      set({
+        snap: next,
+        lastMsg: now,
+        skew: m.data.now != null ? m.data.now - now : get().skew,
+        ...(m.data.exposure || diff?.exposure ? sample(get().ring, next) : null),
+        ...(m.data.alerts || diff?.alerts ? pruneHidden(get().hiddenAlerts, next.alerts) : null),
+      });
+      if (m.data.fills) events.push({ kind: "reset", fills: next.fills });
+      return;
+    }
+    case "fills": {
+      if (!snap) return;
+      const r = upsertFills(snap.fills, m.data);
+      set({ snap: { ...snap, fills: r.fills }, lastMsg: now });
+      events.push({ kind: "upsert", add: r.add, update: r.update, remove: r.remove });
+      return;
+    }
+    case "series": {
+      if (!snap) return;
+      set({ snap: { ...snap, series: appendSeries(snap.series, m.data) }, lastMsg: now });
+      return;
+    }
+    case "account_series": {
+      if (!snap) return;
+      set({ snap: { ...snap, account_series: appendAccountSeries(snap.account_series, m.data) }, lastMsg: now });
+      return;
+    }
+    case "bars": {
+      if (!snap) return;
+      set({ snap: { ...snap, bars: mergeBars(snap.bars, m.data) }, lastMsg: now });
+      return;
+    }
+    case "older": {
+      if (!snap) return;
+      const r = mergeOlder(snap, m.data);
+      set({ snap: { ...snap, fills: r.fills, account_series: r.account_series }, lastMsg: now });
+      if (r.add.length) events.push({ kind: "upsert", add: r.add, update: [], remove: r.remove });
+      return;
+    }
+  }
+}
+
 /** Server time estimate, ms. */
-export const serverNow = () => Date.now() + useStore.getState().skew;
+export const serverNow = () => Date.now() + skewNow;
 
 // ---- navigation ----
 

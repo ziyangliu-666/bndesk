@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { memo, useCallback, type ReactNode } from "react";
 import { useElementSize } from "@mantine/hooks";
 import { useStore } from "../../store";
 import { DASH, MINUS, int, pnl, usd, usdShort } from "../../format";
@@ -63,8 +63,9 @@ export function useMoney(): (v: number | null | undefined, kind?: MoneyKind) => 
   return useCallback((v, kind = "pnl") => fmtMoney(v, kind, hide), [hide]);
 }
 
-/** A USD figure. Signed kinds take the sign's color unless `color` is false; `unit` adds a small "USDT". */
-export function Money({
+/** A USD figure. Signed kinds take the sign's color unless `color` is false; `unit` adds a small "USDT". Memoized:
+ *  a page re-rendering redraws only the figures whose value changed. */
+export const Money = memo(function Money({
   v,
   kind = "pnl",
   color,
@@ -88,7 +89,7 @@ export function Money({
       {unit && <span className="m-unit">{unit}</span>}
     </span>
   );
-}
+});
 
 // ---- hero: the one big figure of a screen ----
 

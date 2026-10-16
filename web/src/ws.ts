@@ -32,7 +32,7 @@ export function reconnectNow() {
 
 /** WebSocket client: snapshot on connect, then patch/fills/series; reconnect with backoff. */
 export function connect(): () => void {
-  const { apply, setConn } = useStore.getState();
+  const { applyBatch, setConn } = useStore.getState();
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
@@ -79,6 +79,27 @@ export function connect(): () => void {
     // Inflating is async: messages go through one promise chain so a large binary snapshot is applied
     // before any small text patch behind it. A superseded socket's leftovers are dropped.
     let queue: Promise<void> = Promise.resolve();
+    // messages go to the store once per frame, as one update: a tick's patch, fills and series render once
+    let batch: Msg[] = [];
+    let raf = 0;
+    let due: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(due);
+      due = undefined;
+      const ms = batch;
+      batch = [];
+      if (ws !== sock || !ms.length) return;
+      try {
+        applyBatch(ms);
+      } catch {
+        sock?.close(); // a patch that does not fit what we have: start over from a snapshot
+        return;
+      }
+      // the snapshot holds the first screen; the rest of it (older fills, account points) once it is drawn
+      if (ms.some((m) => m.type === "snapshot"))
+        afterPaint(() => ws === sock && sock.readyState === WebSocket.OPEN && sock.send("older"));
+    };
     const handle = (text: string) => {
       if (ws !== sock) return;
       let m: Msg;
@@ -87,14 +108,10 @@ export function connect(): () => void {
       } catch {
         return;
       }
-      try {
-        apply(m);
-      } catch {
-        sock?.close(); // a patch that does not fit what we have: start over from a snapshot
-        return;
-      }
-      // the snapshot holds the first screen; the rest of it (older fills, account points) once it is drawn
-      if (m.type === "snapshot") afterPaint(() => ws === sock && sock.readyState === WebSocket.OPEN && sock.send("older"));
+      batch.push(m);
+      if (due) return;
+      raf = requestAnimationFrame(flush);
+      due = setTimeout(flush, 250); // no frames in a background tab
     };
     ws.onopen = () => {
       attempt = 0;

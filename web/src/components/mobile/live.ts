@@ -3,8 +3,27 @@ import { useStore } from "../../store";
 
 type State = ReturnType<typeof useStore.getState>;
 
+// Hand-overs due at the same moment run in one task, so React renders them together: the due times are
+// multiples of `ms` on the clock, and one timer serves each.
+const due = new Map<number, Set<() => void>>();
+function at(ms: number, fn: () => void): () => void {
+  const t = Math.ceil((Date.now() + 1) / ms) * ms;
+  let fns = due.get(t);
+  if (!fns) {
+    const set = (fns = new Set());
+    due.set(t, set);
+    setTimeout(() => {
+      due.delete(t);
+      set.forEach((f) => f());
+    }, t - Date.now());
+  }
+  fns.add(fn);
+  return () => fns.delete(fn);
+}
+
 /**
- * A store value for a live list, handed to the page at most once per `ms` (trailing edge). Unlike
+ * A store value for a live list, handed to the page at most once per `ms` (trailing edge; on the clock's
+ * multiples of `ms`, together with the page's other live values). Unlike
  * useThrottled(useStore(sel)) the page does not re-render on every message in between, only when the value
  * is handed over. While `paused` (a finger rests on the list, see useHold) nothing is handed over; the latest
  * value follows on release. `key` re-reads the value at once when the selector's inputs change.
@@ -16,27 +35,25 @@ export function useLive<T>(sel: (s: State) => T, ms = 250, paused = false, key?:
   pausedRef.current = paused;
   const [v, setV] = useState(() => sel(useStore.getState()));
   const shown = useRef(v);
-  const last = useRef(0);
   const hand = useCallback(() => {
     const nv = selRef.current(useStore.getState());
-    last.current = Date.now();
     if (Object.is(nv, shown.current)) return;
     shown.current = nv;
     setV(() => nv);
   }, []);
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancel: (() => void) | undefined;
     const fire = () => {
-      timer = undefined;
+      cancel = undefined;
       if (!pausedRef.current) hand();
     };
     const off = useStore.subscribe((s) => {
-      if (timer || pausedRef.current || Object.is(selRef.current(s), shown.current)) return;
-      timer = setTimeout(fire, Math.max(0, last.current + ms - Date.now()));
+      if (cancel || pausedRef.current || Object.is(selRef.current(s), shown.current)) return;
+      cancel = at(ms, fire);
     });
     return () => {
       off();
-      if (timer) clearTimeout(timer);
+      cancel?.();
     };
   }, [ms, hand]);
   // released, or the selector changed: catch up now

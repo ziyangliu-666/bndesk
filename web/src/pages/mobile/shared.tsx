@@ -135,7 +135,8 @@ export function useAccountLabel(id: string): string {
 }
 
 /** One instrument: name / "inventory 4.2k · 10 s +0.8 bps"; PnL / a second figure (`side`, default the fills). */
-export function InstrumentRow({ r, pnl, sub, side }: { r: SymbolRow; pnl?: number | null; sub?: ReactNode; side?: ReactNode }) {
+// memoized: a patch keeps the rows that did not change, so a list re-renders the rows that did
+export const InstrumentRow = memo(function InstrumentRow({ r, pnl, sub, side }: { r: SymbolRow; pnl?: number | null; sub?: ReactNode; side?: ReactNode }) {
   const money = useMoney();
   return (
     <ListRow
@@ -146,7 +147,7 @@ export function InstrumentRow({ r, pnl, sub, side }: { r: SymbolRow; pnl?: numbe
       to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
     />
   );
-}
+});
 
 /** The figure a fill row shows at the right of its second line: the edge, or one markout horizon. */
 export type FillFig = "edge" | keyof Markouts;
