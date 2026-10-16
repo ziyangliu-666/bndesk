@@ -1,4 +1,4 @@
-// System (was Engine): tabs Engines | Feeds | Alerts. Each engine is a section on the panel: its name and state,
+// System (was Engine): the engines, then the feeds and the alerts side by side. Each engine is a section: its name and state,
 // a row of label-over-value figures (no tiles), then rejects, latency and venue connections side by side.
 import { useMemo, type ReactNode } from "react";
 import { AgGridReact } from "ag-grid-react";
@@ -12,7 +12,7 @@ import { int, num, stepName } from "../format";
 import { StateTag } from "../components/ui";
 import { fAge, DEFAULT_COL } from "../grid";
 import { AlertsList, useAlertList } from "../components/AlertsList";
-import { Tabs, TextToggle, useExPref } from "../components/ex";
+import { TextToggle, useExPref } from "../components/ex";
 import { Money } from "../mask";
 import "./ops/ops.css";
 
@@ -56,16 +56,16 @@ function EngineSection({ e }: { e: EngineT }) {
         <Pair label="Venue rejects" title="Orders the exchange rejected" tone={e.venue_rejects ? "warn-text" : ""}>
           {int(e.venue_rejects)}
         </Pair>
-        <Pair label="Realized (USDT)" title="Realized PnL reported by the engine">
+        <Pair label="Realized" title="Realized PnL reported by the engine">
           <Money v={e.realized} sign />
         </Pair>
-        <Pair label="Unrealized (USDT)" title="Unrealized PnL reported by the engine">
+        <Pair label="Unrealized" title="Unrealized PnL reported by the engine">
           <Money v={e.unrealized} sign />
         </Pair>
-        <Pair label="Fees (USDT)" title="Fees paid">
+        <Pair label="Fees" title="Fees paid">
           <Money v={e.fees} />
         </Pair>
-        <Pair label="Max loss (USDT)" title="Loss limit that triggers the engine's kill">
+        <Pair label="Max loss" title="Loss limit that triggers the engine's kill">
           {e.max_loss == null ? "--" : <Money v={e.max_loss} />}
         </Pair>
       </div>
@@ -193,15 +193,15 @@ function Feeds() {
 
 const rowIdFeed = (p: GetRowIdParams<Feed>) => p.data.name;
 
-type SysTab = "engines" | "feeds" | "alerts";
 type AlertView = "active" | "hidden" | "cleared";
 
 function Alerts() {
   const { active, hidden, cleared } = useAlertList();
   const [view, setView] = useExPref<AlertView>("system", "alerts", "active", ["active", "hidden", "cleared"]);
   return (
-    <div className="ops-sys-alerts">
-      <div className="ops-head ops-subhead">
+    <section className="ops-panel ops-sys-alerts">
+      <header className="ops-head">
+        <span className="ops-title">Alerts</span>
         <TextToggle
           label="Alerts"
           value={view}
@@ -212,41 +212,48 @@ function Alerts() {
             { value: "hidden", label: `Hidden ${hidden.length}`, title: "Hidden on this browser until they clear" },
           ]}
         />
+      </header>
+      <div className="ops-sys-scroll">
+        <AlertsList bare filter={view} />
       </div>
-      <AlertsList bare filter={view} />
-    </div>
+    </section>
   );
 }
 
+/** System on one screen: the engines on top (each a section of figures and tables), the feeds and the alerts
+ *  side by side under them, filling the rest (tabs would leave most of the screen empty with two engines). */
 export function Engine() {
   const engines = useStore((s) => s.snap?.engines);
   const feeds = useStore((s) => s.snap?.feeds);
-  const { active } = useAlertList();
-  const [tab, setTab] = useExPref<SysTab>("system", "tab", "engines", ["engines", "feeds", "alerts"]);
   const down = feeds?.filter((f) => !f.up).length ?? 0;
   const engDown = engines?.filter((e) => !e.up || e.kill).length ?? 0;
   return (
     <div className="page ops-system">
-      <div className="ops-tabbar">
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          items={[
-            { value: "engines", label: "Engines", count: engines ? (engDown ? `${engDown} down` : engines.length) : null },
-            { value: "feeds", label: "Feeds", count: feeds ? (down ? `${down} down` : `${feeds.length}/${feeds.length}`) : null },
-            { value: "alerts", label: "Alerts", count: active.length || null },
-          ]}
-        />
-      </div>
-      <div className={"ops-sys-body" + (tab === "feeds" ? " flush" : "")}>
-        {tab === "engines" &&
-          (engines?.length ? (
+      <section className="ops-panel ops-sys-engines">
+        <header className="ops-head">
+          <span className="ops-title">
+            Engines <span className="ops-count fig">{engines ? (engDown ? `${engDown} down` : engines.length) : ""}</span>
+          </span>
+          <span className="ops-head-right muted">Money in USDT</span>
+        </header>
+        <div className="ops-sys-scroll">
+          {engines?.length ? (
             engines.map((e) => <EngineSection key={e.name} e={e} />)
           ) : (
             <div className="ops-empty">{engines ? "No engine configured. Add an [[engines]] url to scrape Prometheus metrics." : "--"}</div>
-          ))}
-        {tab === "feeds" && <Feeds />}
-        {tab === "alerts" && <Alerts />}
+          )}
+        </div>
+      </section>
+      <div className="ops-sys-lower">
+        <section className="ops-panel">
+          <header className="ops-head">
+            <span className="ops-title">
+              Feeds <span className="ops-count fig">{feeds ? (down ? `${down} down` : `${feeds.length}/${feeds.length}`) : ""}</span>
+            </span>
+          </header>
+          <Feeds />
+        </section>
+        <Alerts />
       </div>
     </div>
   );

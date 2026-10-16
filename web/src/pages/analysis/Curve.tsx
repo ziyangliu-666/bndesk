@@ -38,6 +38,8 @@ export function Curve({
   onToggle,
   axisFormat,
   axis2Format,
+  unit,
+  unit2,
   heading,
   className,
 }: {
@@ -47,6 +49,9 @@ export function Curve({
   onToggle: (k: string) => void;
   axisFormat: (v: number) => string;
   axis2Format?: (v: number) => string;
+  /** Units over the right and the left axis (`bps`, `USDT`, `Fills`). */
+  unit?: string;
+  unit2?: string;
   /** The first legend item: the hovered category's name (`10 s`, `09:00`). */
   heading?: (cat: string) => string;
   className?: string;
@@ -55,12 +60,25 @@ export function Curve({
   const [hover, setHover] = useState<number | null>(null);
   const shown = useMemo(() => series.filter((s) => !hidden.includes(s.key)), [series, hidden]);
   const twoAxes = shown.some((s) => s.axis === 1);
+  // two axes share their zero (a count under a signed figure would read as negative otherwise): the right axis
+  // spans its data and 0, the left one is stretched below 0 by the same share, with no labels there
+  const ranges = useMemo(() => {
+    if (!twoAxes) return null;
+    const vals = (a: 0 | 1) => shown.filter((s) => (s.axis ?? 0) === a).flatMap((s) => s.data.filter((v): v is number => v != null && Number.isFinite(v)));
+    const r = vals(0);
+    const l = vals(1);
+    const lo = Math.min(0, ...r) * 1.1;
+    const hi = Math.max(0, ...r) * 1.1 || 1;
+    const lhi = Math.max(0, ...l) * 1.1 || 1;
+    const share = -lo / (hi - lo);
+    return { r: [lo, hi], l: [share >= 1 ? -lhi : (-share / (1 - share)) * lhi, lhi] };
+  }, [twoAxes, shown]);
 
   const option = useMemo(
     () => ({
       animation: false,
       textStyle: { fontFamily: SANS },
-      grid: { left: twoAxes ? 52 : 12, right: 64, top: 44, bottom: 28 },
+      grid: { left: twoAxes ? 56 : 12, right: 64, top: 52, bottom: 28 },
       tooltip: {
         trigger: "axis",
         showContent: false,
@@ -69,7 +87,8 @@ export function Curve({
       xAxis: {
         type: "category",
         data: categories,
-        boundaryGap: shown.some((s) => s.kind === "bar"),
+        // half a category of room at each end: the first and last points are not cut by the plot edge
+        boundaryGap: true,
         axisLine: { lineStyle: { color: C.rule } },
         axisTick: { show: false },
         axisLabel: { color: C.muted, fontSize: 11, margin: 10 },
@@ -79,16 +98,26 @@ export function Curve({
         {
           type: "value",
           position: "right",
+          name: unit,
+          nameLocation: "end",
+          nameGap: 14,
+          nameTextStyle: { color: C.muted, fontSize: 11, align: "left" },
           scale: false,
-          axisLabel: { color: C.muted, fontSize: 11, formatter: axisFormat },
+          ...(ranges ? { min: ranges.r[0], max: ranges.r[1] } : {}),
+          axisLabel: { color: C.muted, fontSize: 11, formatter: axisFormat, showMinLabel: !ranges, showMaxLabel: !ranges },
           splitLine: { lineStyle: { color: GRID } },
           axisLine: { show: false },
         },
         {
           type: "value",
           position: "left",
+          name: unit2,
+          nameLocation: "end",
+          nameGap: 14,
+          nameTextStyle: { color: C.muted, fontSize: 11, align: "right" },
           show: twoAxes,
-          axisLabel: { color: C.muted, fontSize: 11, formatter: axis2Format ?? axisFormat },
+          ...(ranges ? { min: ranges.l[0], max: ranges.l[1] } : {}),
+          axisLabel: { color: C.muted, fontSize: 11, formatter: (v: number) => (v < 0 ? "" : (axis2Format ?? axisFormat)(v)), showMinLabel: !ranges, showMaxLabel: !ranges },
           splitLine: { show: false },
           axisLine: { show: false },
         },
@@ -119,7 +148,7 @@ export function Curve({
             },
       ),
     }),
-    [categories, shown, axisFormat, axis2Format, twoAxes],
+    [categories, shown, axisFormat, axis2Format, twoAxes, unit, unit2, ranges],
   );
 
   useEffect(() => {
@@ -144,28 +173,35 @@ export function Curve({
     };
   };
 
-  const i = hover ?? categories.length - 1;
-  const cat = categories[i];
+  // values while hovering only: at rest the legend names the lines in their colours (the table under the chart
+  // holds the figures, so they are not printed twice)
+  const cat = hover == null ? null : categories[hover];
   return (
     <div className={"an-curve " + (className ?? "")}>
       <EChart onInit={onInit} />
-      {cat != null && (
-        <div className="ex-legend" style={{ top: 6, left: twoAxes ? 52 : 8 }}>
+      {categories.length > 0 && (
+        <div className="ex-legend" style={{ top: 6, left: twoAxes ? 56 : 8 }}>
           <div className="ex-lg-line">
-            <span className="ex-lg-it">
-              <span className="ex-lg-v" style={{ color: C.muted }}>
-                {heading ? heading(cat) : cat}
+            {cat != null && (
+              <span className="ex-lg-it">
+                <span className="ex-lg-v" style={{ color: C.muted }}>
+                  {heading ? heading(cat) : cat}
+                </span>
               </span>
-            </span>
+            )}
             {series.map((s) => {
-              const v = s.data[i];
+              const v = hover == null ? null : s.data[hover];
               const off = hidden.includes(s.key);
               return (
                 <span key={s.key} className={"ex-lg-it tog" + (off ? " off" : "")} onClick={() => onToggle(s.key)} title={s.title ?? "Click to hide or show"}>
-                  <span className="ex-lg-l">{s.label}</span>
-                  <span className="ex-lg-v" style={{ color: s.signValue ? sign(v) : s.color }}>
-                    {v == null ? "--" : s.format(v)}
+                  <span className="ex-lg-l" style={cat == null && !s.signBars ? { color: s.color } : undefined}>
+                    {s.label}
                   </span>
+                  {cat != null && (
+                    <span className="ex-lg-v" style={{ color: s.signValue ? sign(v) : s.color }}>
+                      {v == null ? "--" : s.format(v)}
+                    </span>
+                  )}
                 </span>
               );
             })}

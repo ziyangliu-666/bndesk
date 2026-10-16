@@ -128,7 +128,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
               {maskNode(hide, qty(l.qty))}
             </>
           ) : l.best ? (
-            <span className="dk-lad-mkt">best {l.side === "buy" ? "bid" : "ask"}</span>
+            <span className="dk-lad-mkt">market {l.side === "buy" ? "bid" : "ask"}</span>
           ) : null}
         </span>
         <span className="dk-lad-d">{d == null ? "--" : bps(d)}</span>
@@ -139,7 +139,9 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
   return (
     <section className="dk-panel dk-lad">
       <div className="dk-head">
-        <span className="dk-title">Quotes</span>
+        <span className="dk-title" title="Our resting orders at their prices, with the market's best bid and ask among them. Not the order book: the market's other levels are not shown">
+          Our quotes
+        </span>
         {inst && (
           <button type="button" className="dk-lad-sym" onClick={() => selectInstrument(inst)} title="Open this instrument">
             {inst.symbol}
@@ -156,18 +158,23 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
         <div className="dk-lad-fill" />
         {[...asks].reverse().map(renderRow)}
       </div>
+      {/* the middle row: the market's mid (bid + ask over 2), labelled, and our fair under it; the one "last
+          price" is Binance's, in the ticker */}
       <div className="dk-lad-mid">
-        <span className={"dk-lad-mid-px fig " + dir}>
-          {price(mid)}
-          {dir === "up" ? " ↑" : dir === "down" ? " ↓" : ""}
+        <span className="dk-lad-mid-main">
+          <span className="dk-lad-mid-l" title="The market's mid: (best bid + best ask) / 2">
+            Mid
+          </span>
+          <span className={"dk-lad-mid-px fig " + dir}>
+            {price(mid)}
+            {dir === "up" ? " ↑" : dir === "down" ? " ↓" : ""}
+          </span>
         </span>
         <span className="dk-lad-mid-sub">
-          <span>
+          <span title="Our fair value: the price the quotes are set around; the bps column is the distance from it">
             Fair <b className="fig">{price(fair)}</b>
           </span>
-          <span title="Mid against fair">
-            Mid {mid != null && fair ? `${bps(((mid - fair) / fair) * 1e4)} bps` : "--"}
-          </span>
+          <span title="Market spread: (ask − bid) / mid">Spread {row?.spread_bps == null ? "--" : `${bps(row.spread_bps, false)} bps`}</span>
         </span>
       </div>
       <div className="dk-lad-side bids" ref={sideBox}>

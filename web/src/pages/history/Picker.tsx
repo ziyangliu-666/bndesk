@@ -2,7 +2,9 @@
 // (the busiest first, each with its day PnL).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../../store";
-import { num, signClass } from "../../format";
+import { pnl } from "../../format";
+import { maskNode, useHide } from "../../mask";
+import { useInstPnl } from "../../selectors";
 import type { Venue } from "../../protocol";
 
 export function InstrumentPicker({
@@ -15,6 +17,8 @@ export function InstrumentPicker({
   active: boolean;
 }) {
   const symbols = useStore((s) => s.snap?.symbols);
+  const hide = useHide();
+  const pnlOf = useInstPnl();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
@@ -89,7 +93,7 @@ export function InstrumentPicker({
           />
           <div className="hx-pick-head">
             <span>Symbol</span>
-            <span>Day PnL</span>
+            <span>Trading PnL</span>
           </div>
           <div className="hx-pick-list" role="listbox">
             {list.map((r, i) => (
@@ -106,7 +110,7 @@ export function InstrumentPicker({
                   {r.symbol}
                   {r.venue === "usdm" && <span className="hx-perp">Perp</span>}
                 </span>
-                <span className={"fig " + signClass(r.trading_pnl)}>{num(r.trading_pnl, 2, true)}</span>
+                <span className={"fig " + (hide ? "" : pnlOf(r) > 0.005 ? "up" : pnlOf(r) < -0.005 ? "down" : "")}>{maskNode(hide, pnl(pnlOf(r)))}</span>
               </button>
             ))}
             {!list.length && <div className="hx-pick-none">No instrument matches</div>}

@@ -71,4 +71,16 @@ export const INVPNL_COLOR = "#a47ef0";
 export const HEDGE_COLOR = "#9aa3b2";
 export const REBATE_COLOR = "#4fb8c9";
 export const INV_COLOR = "#c98500";
+
+// The P&L split as lines on one chart (desktop Desk and History): hues that stay apart from each other and from
+// the Day PnL's up / down: Trading white, market making amber, inventory PnL violet, the hedge blue (dashed),
+// rebates aqua, other grey (dotted).
+export const PNL_COLORS = {
+  trading: C.ink,
+  mm: "#c98500",
+  inv: INVPNL_COLOR,
+  hedge: S1,
+  reb: REBATE_COLOR,
+  other: C.muted,
+} as const;
 export const FUT_COLOR = "#d55181";

@@ -52,7 +52,9 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
 - **Hidden keys**: series and overlays share one set of hidden keys, `"vol"`, `"fills"`, `"quotes"` and so
   on. Markers and price lines with a `key` hide with it. The set is stored per `id` in the store
   (`hidden["ex.<id>"]`), or you can control it with `hidden` and `onToggle`. `useExHidden(id)` gives a
-  separate `ChipRow` the same state. A pane whose series are all hidden folds away.
+  separate `ChipRow` the same state. A pane whose series are all hidden folds away, legend included.
+- **Legend at rest**: it reads the latest bar; `legendTime` (ms) makes it read another one, such as a day the
+  page zoomed to with `view`.
 - **Interval change**: the old bars go at once, and the plot shows only the frame with a small "Loading"
   text. ExChart does this by itself when `interval` changes but `data` does not. `loading` forces it. The
   view resets when the new data arrives, when `resetKey` changes, or (on new data) with `initialBars`.

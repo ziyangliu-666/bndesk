@@ -128,7 +128,19 @@ export function History() {
     const span = iv === "1w" ? 70 * DAY : iv === "1d" ? 10 * DAY : 0;
     return { time: { from: focusStart - span, to: focusStart + DAY + span } };
   }, [focusStart, iv]);
+  // the legend shows the chosen day at rest (its bar, or its last intraday bar), not the latest one
+  const legendTime = useMemo(() => {
+    if (focusStart == null) return null;
+    let t: number | null = null;
+    for (const r of rows) {
+      if (r.t >= focusStart + DAY) break;
+      t = r.t;
+    }
+    return t;
+  }, [rows, focusStart]);
   const onDay = (day: string) => navigate({ page: "history", detail: { kind: "day", date: day } }, { push: false });
+  const clearDay = () => navigate({ page: "history" }, { push: false });
+  const focusRow = focusDay ? (days.find((d) => d.day === focusDay) ?? null) : null;
 
   // ---- toolbar ----
   const ivOptions = INTERVALS.map((v) => ({ value: v, label: IV_LABEL[v] }));
@@ -198,6 +210,7 @@ export function History() {
               onInterval={(v) => setIv(v as HInterval)}
               modes={modes}
               view={view}
+              legendTime={legendTime}
               hide={hide}
             />
           )}
@@ -207,7 +220,18 @@ export function History() {
         {inst ? (
           <InstSide title={instTitle} fills={fills.fills} bars={kl.bars} loading={kl.loading || fills.loading} hide={hide} today={instRow} />
         ) : (
-          <DeskSide rows={days} title={`Desk · ${RANGE_LABEL[range]}`} todayDay={todayDay} selected={focusDay} onDay={onDay} hide={hide} />
+          <DeskSide
+            rows={days}
+            title={`Desk · ${RANGE_LABEL[range]}`}
+            todayDay={todayDay}
+            selected={focusDay}
+            day={focusRow}
+            onDay={onDay}
+            onClearDay={clearDay}
+            intraday={iv !== "1d" && iv !== "1w"}
+            onIntraday={() => setIv(iv === "1d" || iv === "1w" ? "15m" : "1d")}
+            hide={hide}
+          />
         )}
       </section>
       <section className="panel hx-table">

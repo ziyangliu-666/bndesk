@@ -221,6 +221,8 @@ export interface ExChartProps {
   initialBars?: number;
   /** The page's own view (24h on the Desk, a day zoomed on History). See ExView. */
   view?: ExView | null;
+  /** The bar the legend shows at rest (a chosen day, ms); default the latest one. */
+  legendTime?: number | null;
   /** Bars of space right of the latest one. Default 3 on touch, 5 with a mouse (a few daily bars want less; a
    *  history of days wants 1). */
   rightOffset?: number;
@@ -815,6 +817,15 @@ export function ExChart(p: ExChartProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawn]);
 
+  const restAt = useCallback(() => p.legendTime ?? latest(), [p.legendTime, latest]);
+  // panes below the main one whose series are all hidden: folded away, without a legend
+  const folded = useMemo(() => {
+    const out = new Set<number>();
+    const panes = new Set(p.series.map((s) => s.pane ?? 0));
+    for (const i of panes) if (i > 0 && p.series.filter((s) => (s.pane ?? 0) === i).every((s) => off(s.key))) out.add(i);
+    return out;
+  }, [p.series, off]);
+
   const legend = useMemo(
     () => buildLegend(p.series, p.legendExtra ?? [], lookup, touch, tz, step),
     [p.series, p.legendExtra, lookup, touch, tz, step],
@@ -906,9 +917,10 @@ export function ExChart(p: ExChartProps) {
           <LegendLayer
             model={legend}
             hov={hov}
-            latest={latest}
+            latest={restAt}
             tops={paneTops}
             off={off}
+            folded={folded}
             toggle={toggle}
             touch={touch}
             closed={closed}
@@ -1074,6 +1086,7 @@ const LegendLayer = memo(function LegendLayer({
   latest,
   tops,
   off,
+  folded,
   toggle,
   touch,
   closed,
@@ -1085,6 +1098,7 @@ const LegendLayer = memo(function LegendLayer({
   latest: () => number | null;
   tops: number[];
   off: (k: string | undefined) => boolean;
+  folded: ReadonlySet<number>;
   toggle: (k: string) => void;
   touch: boolean;
   closed: boolean;
@@ -1097,8 +1111,8 @@ const LegendLayer = memo(function LegendLayer({
   return (
     <>
       {model.map(({ pane, lines }) => {
-        if (tops[pane] == null) return null;
         // a folded pane (every series hidden) shows no legend
+        if (tops[pane] == null || folded.has(pane)) return null;
         return (
           <div key={pane} className="ex-legend" style={{ top: tops[pane]! + 4, maxWidth: `calc(100% - ${axisW + 16}px)` }}>
             {lines.map((items, i) => {

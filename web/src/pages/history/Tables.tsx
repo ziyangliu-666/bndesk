@@ -1,11 +1,11 @@
 // The tables under the History chart: the desk by day (or by hour today), an instrument's fills by day (or by
 // hour today). Plain rows, figures coloured as text only.
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { HistFill } from "../../api";
 import { compact, hm, int, num, price, se, signClass, type TzMode } from "../../format";
 import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
-import { dayOf, daySummary, sumDays, summaryNote, type DayRow, type Row } from "./data";
+import { dayOf, type DayRow, type Row } from "./data";
 
 export interface Col<R> {
   key: string;
@@ -16,13 +16,15 @@ export interface Col<R> {
   left?: boolean;
   cell: (r: R) => ReactNode;
   cls?: (r: R) => string;
+  /** Sort value: a click on the header sorts by it (largest first), again reverses, a third time back to the
+   *  table's own order. Unknowns last. */
+  sort?: (r: R) => number | string | null;
 }
 
 export function Table<R>({
   cols,
   rows,
   rowKey,
-  foot,
   onRow,
   selected,
   empty,
@@ -30,22 +32,44 @@ export function Table<R>({
   cols: Col<R>[];
   rows: R[];
   rowKey: (r: R) => string;
-  foot?: R | null;
   onRow?: (r: R) => void;
   selected?: string | null;
   empty: string;
 }) {
+  const [by, setBy] = useState<{ key: string; desc: boolean } | null>(null);
+  const sorted = useMemo(() => {
+    const f = by && cols.find((x) => x.key === by.key)?.sort;
+    if (!f) return rows;
+    return rows.slice().sort((a, b) => {
+      const x = f(a);
+      const y = f(b);
+      if (x == null) return y == null ? 0 : 1;
+      if (y == null) return -1;
+      const d = typeof x === "string" ? x.localeCompare(y as string) : x - (y as number);
+      return by.desc ? -d : d;
+    });
+  }, [rows, by, cols]);
+  const click = (k: string) => setBy((b) => (b?.key !== k ? { key: k, desc: true } : b.desc ? { key: k, desc: false } : null));
   return (
     <table className="hx-t">
       <thead>
         <tr>
-          {cols.map((c) => (
-            <th key={c.key} className={c.left ? "l" : undefined}>
-              <span className={c.dot ? "dotted" : undefined} title={c.title}>
-                {c.label}
-              </span>
-            </th>
-          ))}
+          {cols.map((c) => {
+            const on = by?.key === c.key;
+            return (
+              <th
+                key={c.key}
+                className={(c.left ? "l" : "") + (c.sort ? " sortable" : "") + (on ? " on" : "")}
+                onClick={c.sort ? () => click(c.key) : undefined}
+                aria-sort={on ? (by!.desc ? "descending" : "ascending") : undefined}
+              >
+                <span className={c.dot ? "dotted" : undefined} title={c.title}>
+                  {c.label}
+                </span>
+                {c.sort && <span className="hx-sort">{on ? (by!.desc ? "↓" : "↑") : ""}</span>}
+              </th>
+            );
+          })}
         </tr>
       </thead>
       <tbody>
@@ -54,7 +78,7 @@ export function Table<R>({
             <td colSpan={cols.length}>{empty}</td>
           </tr>
         ) : (
-          rows.map((r) => {
+          sorted.map((r) => {
             const k = rowKey(r);
             return (
               <tr key={k} className={(onRow ? "click" : "") + (k === selected ? " on" : "")} onClick={onRow ? () => onRow(r) : undefined}>
@@ -68,17 +92,6 @@ export function Table<R>({
           })
         )}
       </tbody>
-      {foot && rows.length > 1 && (
-        <tfoot>
-          <tr>
-            {cols.map((c) => (
-              <td key={c.key} className={(c.left ? "l " : "") + (c.cls?.(foot) ?? "")}>
-                {c.cell(foot)}
-              </td>
-            ))}
-          </tr>
-        </tfoot>
-      )}
     </table>
   );
 }
@@ -96,9 +109,11 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     dot: k === "other",
     cell: (r) => m(sg(r[k])),
     cls: (r) => "fig " + (hide ? "masked" : signClass(r[k])),
+    // no sort by a hidden figure (the order would tell it)
+    sort: hide ? undefined : (r) => r[k],
   });
   return [
-    { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label },
+    { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label, sort: (r) => r.key },
     p("pnl", pnlLabel),
     p("mm", "Market making", PART_META.mm.title),
     p("inv", "Inventory PnL", PART_META.inv.title),
@@ -114,9 +129,10 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
         <span title={r.split === false ? "No split kept this day: not in the total" : r.se != null ? se(r.se) + " (Newey–West standard error)" : undefined}>{m(sg(r.pi))}</span>
       ),
       cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : signClass(r.pi)),
+      sort: hide ? undefined : (r) => r.pi,
     },
-    { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig" },
-    { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : "") },
+    { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills },
+    { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : ""), sort: hide ? undefined : (r) => r.volume },
   ];
 }
 
@@ -131,16 +147,12 @@ export function DeskDays({ rows, todayDay, selected, onDay, hide }: { rows: DayR
       </>
     ),
   }));
-  const t = sumDays(rows);
-  const sm = daySummary(rows, todayDay);
-  // the foot's Day PnL is the summary's total (the days with a Day PnL); its label says what it covers
-  const foot: PnlRow = { ...t, pnl: sm.total, key: "total", label: <span title={summaryNote(sm) + (sm.unsplit ? ` · the parts: the ${rows.length - sm.unsplit} days with a split` : "")}>{sm.days === 1 ? "1 day" : `${sm.days} days`}{sm.missing ? ` (+${sm.missing} without)` : ""}</span> };
+  // no sum row: the range's sums are the summary at the right
   return (
     <Table
-      cols={pnlCols("Day", "PnL day, newest first; the last row sums the days shown", "Day PnL", hide)}
+      cols={pnlCols("Day", "PnL day, newest first; a click on a header sorts by it", "Day PnL", hide)}
       rows={data}
       rowKey={(r) => r.key}
-      foot={foot}
       onRow={(r) => onDay(r.key)}
       selected={selected}
       empty="No days in this range"
@@ -192,10 +204,10 @@ function group(fills: HistFill[], keyOf: (t: number) => number, label: (t: numbe
 }
 
 const fillCols = (first: string, title: string, hide: boolean): Col<FillGroup>[] => [
-  { key: "d", label: first, title, left: true, cell: (g) => g.label },
-  { key: "f", label: "Fills", cell: (g) => int(g.fills), cls: () => "fig" },
-  { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig up" },
-  { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig down" },
+  { key: "d", label: first, title, left: true, cell: (g) => g.label, sort: (g) => g.t },
+  { key: "f", label: "Fills", cell: (g) => int(g.fills), cls: () => "fig", sort: (g) => g.fills },
+  { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig up", sort: (g) => g.buys },
+  { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig down", sort: (g) => g.sells },
   { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (g) => maskText(hide, compact(g.bn + g.sn)), cls: () => "fig" + (hide ? " masked" : "") },
   { key: "ab", label: "Avg buy", cell: (g) => (g.bq > 0 ? price(g.bn / g.bq) : "--"), cls: () => "fig" },
   { key: "as", label: "Avg sell", cell: (g) => (g.sq > 0 ? price(g.sn / g.sq) : "--"), cls: () => "fig" },

@@ -6,7 +6,7 @@ import type { ColDef, GetRowIdParams, GridApi, ICellRendererParams, RowClickedEv
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import type { OpenOrder } from "../../protocol";
 import { gridTheme } from "../../gridTheme";
-import { fBpsU, fPrice, fTime, fUsd, DEFAULT_COL, flexCols, maskCls, maskVF } from "../../grid";
+import { fBps, fPrice, fTime, fUsd, DEFAULT_COL, flexCols, maskCls, maskVF } from "../../grid";
 import { qty } from "../../format";
 
 const rowId = (p: GetRowIdParams<OpenOrder>) => p.data.id;
@@ -40,7 +40,7 @@ function cols(): ColDef<OpenOrder>[] {
       field: "dist_bps",
       headerName: "Dist(bps)",
       width: 76,
-      valueFormatter: fBpsU,
+      valueFormatter: fBps,
       cellClassRules: { "warn-text": (p) => p.value != null && (p.value as number) < 0 },
       headerTooltip: "Distance from fair, bps; through fair (negative) in amber",
       initialSort: "asc",

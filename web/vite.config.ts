@@ -97,7 +97,8 @@ function longTap(): Plugin {
     name: "lwc-long-tap",
     enforce: "pre",
     transform(code, id) {
-      if (!/lightweight-charts[\\/]dist[\\/].*\.m?js$/.test(id)) return null;
+      // the dev server asks with a ?v= query on the id; the build without
+      if (!/lightweight-charts[\\/]dist[\\/][^?]*\.m?js(\?.*)?$/.test(id)) return null;
       const re = /(setTimeout\(this\.[\w$]+\.bind\(this,\s*\w+\),\s*)240(\s*(?:\/\* Delay\.LongTap \*\/)?\))/;
       if (!re.test(code)) this.error("lwc-long-tap: the long-tap delay was not found in " + id);
       return { code: code.replace(re, `$1${LONG_TAP_MS}$2`), map: null };
@@ -105,8 +106,25 @@ function longTap(): Plugin {
   };
 }
 
+/** Lightweight Charts moves the time axis' first and last labels inside the axis only with fixLeftEdge /
+ *  fixRightEdge; otherwise they are cut at the edges (`11:0`, `ep 16`). Here they are always moved inside. Fails
+ *  the build if the pattern is gone (check the new version's TimeScale marks). */
+function edgeLabels(): Plugin {
+  return {
+    name: "lwc-edge-labels",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/lightweight-charts[\\/]dist[\\/][^?]*\.m?js(\?.*)?$/.test(id)) return null;
+      const re = /needAlignCoordinate\s*=\s*\(?\s*[\w$.]+\s*&&\s*([\w$.]+)\.index\s*<=\s*([\w$.]+)\s*\)?\s*\|\|\s*\(?\s*[\w$.]+\s*&&\s*\1\.index\s*>=\s*([\w$.]+)\s*\)?/;
+      if (!re.test(code)) this.error("lwc-edge-labels: the time-mark alignment was not found in " + id);
+      // aligning moves a label only when it would cross an edge: the inner ones stay where they are
+      return { code: code.replace(re, "needAlignCoordinate=!0"), map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [longTap(), react(), preloadDesk(), precompress()],
+  plugins: [longTap(), edgeLabels(), react(), preloadDesk(), precompress()],
   // pre-bundled deps skip the transform above: the dev server serves this one as it is, through it
   optimizeDeps: { exclude: ["lightweight-charts"] },
   // shown on the phone's More page

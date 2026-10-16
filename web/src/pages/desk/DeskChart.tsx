@@ -3,9 +3,10 @@
 import { useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
-import { ACCOUNT_SERIES, C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1 } from "../../theme";
+import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, S1 } from "../../theme";
 import { ExChart, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries, type ExView } from "../../components/ex";
-import { MIN, Stable, accountRows, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
+import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, valueAt, type Row } from "./model";
+import { useDeskHistory } from "../history/data";
 import { maskFormat, maskText, useHide } from "../../mask";
 
 type Tab = "pnl" | "equity" | "exposure";
@@ -63,6 +64,18 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const exposure = useStore((s) => (tab === "exposure" ? s.snap?.exposure : undefined));
   const step = STEP[iv] ?? MIN;
   const stable = useRef(new Stable()).current;
+  // today's rebates by minute (cumulative, from the desk history: the snapshot's minute bars do not carry them)
+  const hist = useDeskHistory(60, tab === "pnl" && dayStart ? dayStart : null);
+  const reb = useMemo(() => {
+    const t: number[] = [];
+    const v: number[] = [];
+    for (const b of hist.bars)
+      if (b.rebates != null && b.t >= dayStart) {
+        t.push(b.t);
+        v.push(b.rebates);
+      }
+    return { t, v };
+  }, [hist.bars, dayStart]);
 
   // minute rows (the volume pane at every interval), and the 5 s rows for Line
   const minRows = useMemo(() => todayRows(bars, series, fills, dayStart, MIN), [bars, series, fills, dayStart]);
@@ -74,6 +87,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const money = (f: (v: number) => string) => maskFormat(hide, f);
   const fPnl = money(pnl);
   const fBig = money((v) => compact(v));
+  // exposure is signed (long +, short −), on the axis, the tags and the legend
+  const fSigned = money((v) => compact(v, 2, true));
   const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
     stable.get(
       k + iv,
@@ -90,7 +105,14 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     data: pts("vol", (r) => r.vol, volRows),
     format: fBig,
     lastValue: false,
+    // on Line the bars are 5 s and the volume minutes: its legend reads the minute of the bar (below)
+    legend: step === 0 ? false : undefined,
   };
+  const volAt = (t: number) => volByT.get(step === 0 ? Math.floor(t / MIN) * MIN : t);
+  const volLegend: ExLegendItem[] =
+    step === 0 && tab !== "equity" && tab !== "exposure"
+      ? [{ pane: 1, key: "vol", label: "Vol(USDT)", value: (t) => { const r = volAt(t); return r ? [fBig(r.vol), C.ink] : "--"; } }]
+      : [];
 
   let list: ExSeries[];
   let extra: ExLegendItem[] = [];
@@ -112,25 +134,47 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
           }
         : { key: "day", kind: "baseline", label: "Day PnL", toggle: false, format: fPnl, signColor: true, data: pts("day", (r) => r.c) };
     const has = (k: "mm" | "hedge") => rows.some((r) => r[k] != null);
+    // rebates at a row: the last minute's figure inside it; Other is what the parts leave of Day PnL
+    const rebAt = (r: Row) => valueAt(reb.t, reb.v, step > MIN ? r.t + step - MIN : r.t);
+    const P = PNL_COLORS;
     list = [
       day,
-      { key: "trading", kind: "line", label: "Trading", color: S1, width: 1, format: fPnl, signColor: false, data: pts("trading", (r) => r.trading) },
+      { key: "trading", kind: "line", label: "Trading", color: P.trading, width: 1, format: fPnl, signColor: false, data: pts("trading", (r) => r.trading) },
       ...(has("mm")
         ? [
-            { key: "mm", kind: "line", label: "MM", color: MM_COLOR, width: 1, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
-            { key: "inv", kind: "line", label: "Inv", color: INVPNL_COLOR, width: 1, format: fPnl, data: pts("invp", (r) => (r.trading != null && r.mm != null ? r.trading - r.mm : null)) } as ExSeries,
+            { key: "mm", kind: "line", label: "MM", color: P.mm, width: 1, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
+            { key: "inv", kind: "line", label: "Inv", color: P.inv, width: 1, format: fPnl, data: pts("invp", (r) => (r.trading != null && r.mm != null ? r.trading - r.mm : null)) } as ExSeries,
           ]
         : []),
-      ...(has("hedge") ? [{ key: "hedge", kind: "line", label: "Hedge", color: HEDGE_COLOR, width: 1, lineStyle: "dashed", format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
+      ...(has("hedge") ? [{ key: "hedge", kind: "line", label: "Hedge", color: P.hedge, width: 1, lineStyle: "dashed", format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
+      ...(reb.t.length
+        ? [
+            { key: "reb", kind: "line", label: "Reb", color: P.reb, width: 1, format: fPnl, data: pts("reb", rebAt) } as ExSeries,
+            {
+              key: "other",
+              kind: "line",
+              label: "Other",
+              color: P.other,
+              width: 1,
+              lineStyle: "dotted",
+              format: fPnl,
+              data: pts("other", (r) => {
+                const b = rebAt(r);
+                return r.trading == null || b == null ? null : r.c - r.trading - (r.hedge ?? 0) - b;
+              }),
+            } as ExSeries,
+          ]
+        : []),
       vol,
     ];
     extra = [
+      ...volLegend,
       {
         pane: 1,
         label: "Fills",
         color: C.ink2,
         value: (t) => {
-          const n = volByT.get(t)?.fills;
+          const n = volAt(t)?.fills;
           return n == null ? "--" : String(n);
         },
       },
@@ -147,15 +191,16 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         width: 1,
         format: fPnl,
         lastValue: false,
-        data: stable.get("acc" + a.account + iv, accountRows(a, dayStart, step), sameValue),
+        // on the main pane's bar times: the legend then has each account's value at every bar, at rest too
+        data: stable.get("acc" + a.account + iv, accountOnGrid(a, rows, dayStart), sameValue),
       });
     });
     stretch = [1, 0.6];
   } else {
     list = [
-      { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fBig, data: pts("net", (r) => r.inv + r.fut) },
-      { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fBig, data: pts("spot", (r) => r.inv), lastValue: false },
-      { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fBig, data: pts("fut", (r) => r.fut), lastValue: false },
+      { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fSigned, data: pts("net", (r) => r.inv + r.fut) },
+      { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
+      { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fSigned, data: pts("fut", (r) => r.fut), lastValue: false },
     ];
     const x = exposure;
     if (x?.gap != null)
