@@ -5,22 +5,22 @@ import { useMemo, type ReactNode } from "react";
 import { ExChart, rgba, signColor, UP, DOWN, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView, type Chip } from "../../components/ex";
 import { MASK, maskFormat } from "../../mask";
 import { REF_LINE } from "../../components/ex/palette";
-import { C, FUT_COLOR, PNL_COLORS } from "../../theme";
+import { C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { compact, num, int } from "../../format";
 import { PARTS, type HInterval, type Mode, type Part, type Row } from "./data";
 
-export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style?: "dashed" | "dotted" }> = {
-  pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
-  mm: { label: "MM", long: "Market making", color: PNL_COLORS.mm, title: "Market making: each fill against the mid 60 s later, minus fees" },
-  inv: { label: "Inv", long: "Inventory PnL", color: PNL_COLORS.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
-  hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, title: "Futures legs: price, fees, funding", style: "dashed" },
-  reb: { label: "Reb", long: "Rebates", color: PNL_COLORS.reb, title: "Market-maker rebates" },
-  other: { label: "Other", long: "Other", color: PNL_COLORS.other, title: "What the split does not explain: Day PnL − trading − hedge − rebates", style: "dotted" },
+export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
+  pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
+  mm: { label: "Market making", long: "Market making", color: PNL_COLORS.mm, style: PNL_STROKES.mm, title: "Market making: each fill against the mid 60 s later, minus fees" },
+  inv: { label: "Inventory PnL", long: "Inventory PnL", color: PNL_COLORS.inv, style: PNL_STROKES.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
+  hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, style: PNL_STROKES.hedge, title: "Futures legs: price, fees, funding" },
+  reb: { label: "Rebates", long: "Rebates", color: PNL_COLORS.reb, style: PNL_STROKES.reb, title: "Market-maker rebates" },
+  other: { label: "Other", long: "Other", color: PNL_COLORS.other, style: PNL_STROKES.other, title: "What the split does not explain: Day PnL − trading − hedge − rebates" },
 };
 /** The parts that add up to the P&L (Trading is MM + Inv). */
 const STACK: Part[] = ["mm", "inv", "hedge", "reb", "other"];
-/** The inventory pane's line: a quantity, not a gain or a warning (amber is market making's). */
-const HELD = C.ink2;
+/** The inventory pane's line: the inventory hue (the Desk's Exposure tab and Assets draw spot inventory so too). */
+const HELD = INV_COLOR;
 
 const sign2 = (v: number) => num(v, 2, true);
 const val2 = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
@@ -55,6 +55,8 @@ export function DeskChart({
   modes,
   view,
   legendTime,
+  chosen,
+  onBarClick,
   hide,
 }: {
   rows: Row[];
@@ -72,6 +74,10 @@ export function DeskChart({
   view: ExView | null;
   /** The bar the legend shows at rest (the chosen day's). */
   legendTime?: number | null;
+  /** The chosen day's (week's) bar, ms: marked on the chart. */
+  chosen?: number | null;
+  /** A click on a bar. */
+  onBarClick?: (t: number) => void;
   /** Hide amounts: the axis and legend figures read •••. */
   hide: boolean;
 }) {
@@ -101,7 +107,12 @@ export function DeskChart({
         signColor: true,
         lastValue: true,
         format: sgn,
-        data: points(hide ? "d.pnl.h" : "d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: hide ? rgba(C.ink2, 0.5) : rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })),
+        // a chosen day: its bar full, the others dimmed
+        data: points(`d.pnl.${hide ? "h" : ""}.${chosen ?? ""}`, rows, (r) => ({
+          time: r.t,
+          value: r.pnl,
+          color: hide ? rgba(C.ink2, chosen == null || r.t === chosen ? 0.5 : 0.25) : rgba(r.pnl >= 0 ? UP : DOWN, chosen == null || r.t === chosen ? 0.85 : 0.35),
+        })),
       });
     } else if (mode === "daily") {
       // stacked: the positive parts upwards and the negative ones downwards, each bar drawn from the top of the
@@ -128,11 +139,27 @@ export function DeskChart({
                 const v = unsplit && kk === "other" ? r.pnl : r.bar[kk];
                 if (v != null && v * side > 0) s += v;
               }
-              return { time: r.t, value: s };
+              // nothing on this side: a gap, not a hairline along zero
+              return { time: r.t, value: s === 0 ? null : s };
             }),
           });
         }
       }
+      // the bar's net P&L as a dot over its stack
+      if (out.length)
+        out.push({
+          key: "net",
+          kind: "line",
+          label: pnlLabel,
+          color: C.ink,
+          legend: false,
+          toggle: false,
+          lastValue: false,
+          box: false,
+          format: sgn,
+          options: { lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 2.5, crosshairMarkerVisible: false },
+          data: points("stk.net", rows, (r) => ({ time: r.t, value: r.pnl })),
+        });
       if (!out.length)
         out.push({ key: "pnl", kind: "histogram", label: pnlLabel, toggle: false, signColor: true, format: sgn, data: points(hide ? "d.pnl.h" : "d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: hide ? rgba(C.ink2, 0.5) : rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })) });
     } else if (mode === "cum") {
@@ -144,7 +171,7 @@ export function DeskChart({
           kind: "line",
           label: m.label,
           color: m.color,
-          width: k === "pi" ? 1 : 1.5,
+          width: 1.5,
           lineStyle: m.style,
           lastValue: false,
           legend: 2,
@@ -175,7 +202,12 @@ export function DeskChart({
     out.push({ key: "held", kind: "line", label: "Inventory", pane: 2, color: HELD, format: amt, lastValue: true, data: points("held", rows, (r) => ({ time: r.t, value: r.inventory })) });
     out.push({ key: "fut", kind: "line", label: "Futures", pane: 2, color: FUT_COLOR, format: amt, lastValue: true, data: points("fut", rows, (r) => ({ time: r.t, value: r.futures })) });
     return out;
-  }, [rows, mode, stack, shownStack, pnlLabel, hide]);
+  }, [rows, mode, stack, shownStack, pnlLabel, hide, chosen]);
+  // the chosen bar also gets a mark under it (whatever the chart type)
+  const markers = useMemo(
+    () => (chosen != null && rows.some((r) => r.t === chosen) && series[0] ? [{ series: series[0].key, time: chosen, color: C.accent, shape: "arrowUp" as const, position: "belowBar" as const, size: 1 }] : []),
+    [chosen, rows, series],
+  );
 
   const legendExtra = useMemo<ExLegendItem[]>(() => {
     const out: ExLegendItem[] = [];
@@ -216,7 +248,7 @@ export function DeskChart({
     if (mode === "daily") out.push({ key: "stack", label: "Stack split", title: "Draw each bar as its parts, stacked" });
     const parts = mode === "cum" ? PARTS : stack ? STACK : [];
     if (parts.length && out.length) out.push("|");
-    for (const k of parts) out.push({ key: k, label: PART_META[k].label, color: PART_META[k].color, title: PART_META[k].long });
+    for (const k of parts) out.push({ key: k, label: PART_META[k].label, color: PART_META[k].color, stroke: mode === "cum" ? PART_META[k].style : undefined, bar: mode !== "cum", title: PART_META[k].title });
     if (out.length) out.push("|");
     out.push({ key: "vol", label: "Vol" }, { key: "held", label: "Inventory", color: HELD }, { key: "fut", label: "Futures", color: FUT_COLOR });
     return out;
@@ -250,6 +282,8 @@ export function DeskChart({
       rightOffset={1}
       view={view}
       legendTime={legendTime}
+      markers={markers}
+      onBarClick={onBarClick}
     />
   );
 }

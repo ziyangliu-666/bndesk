@@ -104,6 +104,18 @@ export function qty(v: number | null | undefined, sign = false): string {
   return signed(s, v, sign);
 }
 
+/** Decimals for a column of quantities whose largest size is `maxAbs`: one precision down the column (fixed,
+ *  so the figures line up), as `qty` picks it for that size. */
+export const qtyDecimals = (maxAbs: number) => (maxAbs >= 1000 ? 0 : maxAbs >= 1 ? 3 : 6);
+
+/** A quantity at fixed decimals (a column's: `qtyDecimals`), trailing zeros kept. */
+export function qtyFixed(v: number | null | undefined, d: number, sign = false): string {
+  if (v == null || !Number.isFinite(v)) return DASH;
+  const s = fmtFixed(Math.abs(v), d);
+  if (Number(s.replace(/,/g, "")) === 0) return s;
+  return signed(s, v, sign);
+}
+
 export function pct(v: number | null | undefined, d = 0): string {
   if (v == null || !Number.isFinite(v)) return DASH;
   return fmtFixed(v * 100, d) + "%";
@@ -163,8 +175,10 @@ export function countdown(ms: number | null | undefined): string {
   return `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
 
-export function signClass(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v) || v === 0) return "";
+/** "up" / "down" by sign; "" for a value that reads 0 at `d` decimals (2: money), so a printed 0.00 is never
+ *  coloured. */
+export function signClass(v: number | null | undefined, d = 2): string {
+  if (v == null || !Number.isFinite(v) || Math.abs(v) < 0.5 * 10 ** -d) return "";
   return v > 0 ? "up" : "down";
 }
 

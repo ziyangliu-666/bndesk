@@ -223,7 +223,7 @@
 }
 .hx-split-row {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 80px 72px;
+  grid-template-columns: 16px minmax(0, 1fr) 80px 72px;
   align-items: center;
   gap: 8px;
   height: 26px;
@@ -234,9 +234,12 @@
 .hx-split-row .fig {
   text-align: right;
 }
-.hx-sw {
-  width: 10px;
-  height: 2px;
+/* market making and inventory PnL make the Trading PnL above them: indented under it */
+.hx-split-row.sub > span:nth-child(2) {
+  padding-left: 14px;
+}
+.hx-split-row.total {
+  color: var(--ink);
 }
 .hx-bar-cell {
   display: flex;

@@ -1,14 +1,8 @@
 import { useMemo } from "react";
-import { useStore } from "../../store";
+import { navigate, useStore } from "../../store";
 import { useThrottled } from "../../hooks";
 import { bps, compact, int } from "../../format";
-import {
-  C,
-  HEDGE_COLOR,
-  INVPNL_COLOR,
-  MM_COLOR,
-  REBATE_COLOR,
-} from "../../theme";
+import { C, PNL_COLORS as P, PNL_STROKES as S } from "../../theme";
 import {
   ExChart,
   rgba,
@@ -17,6 +11,7 @@ import {
   type ExSeries,
 } from "../../components/ex";
 import type { SymbolRow } from "../../protocol";
+import { useHedgePnl } from "../../selectors";
 import { daySummary, rangeFrom, summaryNote, useRangeDays, type DayRow, type Range as HRange } from "../history/data";
 import { dayTitle } from "./index";
 import {
@@ -43,7 +38,6 @@ const RANGES: { value: Range; label: string }[] = [
   { value: "90", label: "90D" },
   { value: "all", label: "All" },
 ];
-const OTHER = "#6b7484";
 
 const RANGE_OF: Record<Range, HRange> = { "7": "7d", "30": "30d", "90": "90d", all: "all" };
 
@@ -128,6 +122,7 @@ function DeskHistory() {
         value: (p.v[key] as number | null) ?? null,
       })),
       lastValue: false,
+      width: 1.5,
       hiddenByDefault: true,
       options:
         view === "daily" && days.length <= 31
@@ -141,6 +136,7 @@ function DeskHistory() {
             key: "pnl",
             kind: "histogram",
             label: "Day PnL",
+            toggle: false,
             signColor: true,
             format: fmt,
             lastValue: true,
@@ -154,16 +150,17 @@ function DeskHistory() {
             key: "pnl",
             kind: "baseline",
             label: "Cumulative",
+            toggle: false,
             signColor: true,
             format: fmt,
             data: chart.pts.map((p) => ({ time: p.time, value: p.v.pnl })),
           },
-      line("pi", "Trading", C.ink2, { width: 1 }),
-      line("mm", "MM", MM_COLOR),
-      line("inv", "Inv", INVPNL_COLOR),
-      line("hedge", "Hedge", HEDGE_COLOR, { lineStyle: "dashed" }),
-      line("reb", "Reb", REBATE_COLOR),
-      line("other", "Other", OTHER),
+      line("pi", "Trading", P.trading),
+      line("mm", "MM", P.mm, { lineStyle: S.mm }),
+      line("inv", "Inv", P.inv, { lineStyle: S.inv }),
+      line("hedge", "Hedge", P.hedge, { lineStyle: S.hedge }),
+      line("reb", "Rebates", P.reb, { lineStyle: S.reb }),
+      line("other", "Other", P.other, { lineStyle: S.other }),
     ];
   }, [chart, hide, view, days.length]);
   const boxRows = (t: number): ExBoxRow[] => {
@@ -179,12 +176,14 @@ function DeskHistory() {
       color ?? (hide ? C.muted : v! > 0 ? C.up : v! < 0 ? C.down : C.ink),
     ];
     return [
-      ["Day", p.d.day.slice(5).replace("-", "/")],
+      ["Day", p.d.day],
       r(view === "cum" ? "Cumulative" : "Day PnL", p.v.pnl),
-      r("MM", p.v.mm, MM_COLOR),
-      r("Inv", p.v.inv, INVPNL_COLOR),
-      r("Hedge", p.v.hedge, HEDGE_COLOR),
-      r("Reb", p.v.reb, REBATE_COLOR),
+      r("Trading", p.v.pi, P.trading),
+      r("MM", p.v.mm, P.mm),
+      r("Inv", p.v.inv, P.inv),
+      r("Hedge", p.v.hedge, P.hedge),
+      r("Rebates", p.v.reb, P.reb),
+      r("Other", p.v.other, P.other),
       ["Fills", int(p.d.fills)],
     ];
   };
@@ -206,16 +205,19 @@ function DeskHistory() {
             {
               label: "Days up",
               info: "Finished days that made money, of the finished days in the range. Today is still moving: it counts in the total, not here, nor as the best or worst day.",
-              value: sum.finished ? `${sum.up} of ${sum.finished}` : "--",
+              value: sum.finished ? `${sum.up} of ${sum.finished} finished` : "--",
             },
             {
               label: "Best day",
               value: <Amt v={sum.best?.pnl ?? null} />,
+              // a tap opens the day (its page has the path and the split)
+              onClick: sum.best ? () => navigate({ page: "history", detail: { kind: "day", date: sum.best!.day } }) : undefined,
             },
             { label: "Fills", value: rows.length ? compact(sum.fills) : "--" },
             {
               label: "Worst day",
               value: <Amt v={sum.worst?.pnl ?? null} />,
+              onClick: sum.worst ? () => navigate({ page: "history", detail: { kind: "day", date: sum.worst!.day } }) : undefined,
             },
           ]}
         />
@@ -245,17 +247,12 @@ function DeskHistory() {
             },
           ]}
           chips={[
-            {
-              key: "pnl",
-              label: view === "cum" ? "Cumulative" : "Day PnL",
-              color: C.up,
-            },
-            { key: "pi", label: "Trading", color: C.ink2 },
-            { key: "mm", label: "MM", color: MM_COLOR },
-            { key: "inv", label: "Inv", color: INVPNL_COLOR },
-            { key: "hedge", label: "Hedge", color: HEDGE_COLOR },
-            { key: "reb", label: "Reb", color: REBATE_COLOR },
-            { key: "other", label: "Other", color: OTHER },
+            { key: "pi", label: "Trading", color: P.trading, stroke: S.trading },
+            { key: "mm", label: "MM", color: P.mm, stroke: S.mm },
+            { key: "inv", label: "Inv", color: P.inv, stroke: S.inv },
+            { key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge },
+            { key: "reb", label: "Rebates", color: P.reb, stroke: S.reb },
+            { key: "other", label: "Other", color: P.other, stroke: S.other },
           ]}
           boxRows={boxRows}
           emptyText="No days kept yet"
@@ -292,7 +289,7 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
       value={<Amt v={d.pnl} />}
       valueSub={
         d.split
-          ? `MM ${money(d.mm)} · Inv ${money(d.inv)}`
+          ? `Trading ${money(d.pi)} · Hedge ${money(d.hedge)} · Rebates ${money(d.reb)}`
           : d.pnl != null
             ? "No split kept"
             : `Trading ${money(d.pi)} · no Day PnL`
@@ -310,26 +307,20 @@ function Instruments() {
     1000,
   );
   const money = useAmt();
+  const hide = useStore((s) => s.hideAmounts);
+  const hedgeOf = useHedgePnl();
+  // by today's volume; by name while amounts are hidden (the order would give the volumes away)
   const rows = useMemo(
     () =>
       (symbols ?? [])
-        .filter(
-          (r) =>
-            r.fills_day > 0 ||
-            Math.abs(r.inv_value) >= 1 ||
-            r.trading_pnl !== 0,
-        )
-        .sort(
-          (a, b) =>
-            b.volume_day - a.volume_day ||
-            Math.abs(b.trading_pnl) - Math.abs(a.trading_pnl),
-        ),
-    [symbols],
+        .filter((r) => r.fills_day > 0 || Math.abs(r.inv_value) >= 1 || r.trading_pnl !== 0)
+        .sort((a, b) => (hide ? 0 : b.volume_day - a.volume_day || Math.abs(b.trading_pnl) - Math.abs(a.trading_pnl)) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue)),
+    [symbols, hide],
   );
   return (
-    <Sec title="Traded today" right="by volume · Day PnL">
+    <Sec title="Traded today" right={hide ? "by name · Trading PnL" : "by volume · Trading PnL"}>
       {rows.map((r) => (
-        <InstRow key={r.venue + r.symbol} r={r} money={money} />
+        <InstRow key={r.venue + r.symbol} r={r} hedge={hedgeOf(r)} money={money} />
       ))}
       {!rows.length && <Empty>No instrument traded today</Empty>}
     </Sec>
@@ -338,9 +329,12 @@ function Instruments() {
 
 function InstRow({
   r,
+  hedge,
   money,
 }: {
   r: SymbolRow;
+  /** A perp's hedge leg today (a perp has no Trading PnL). */
+  hedge: number | null;
   money: (
     v: number | null | undefined,
     k?: "pnl" | "full" | "k" | "pnlK",
@@ -356,8 +350,8 @@ function InstRow({
         </>
       }
       sub={`${int(r.fills_day)} fills · Vol ${money(r.volume_day, "k")}`}
-      value={<Amt v={r.trading_pnl} />}
-      valueSub={edge != null ? `edge ${bps(edge)} bps` : undefined}
+      value={r.venue === "usdm" ? <Amt v={hedge} /> : <Amt v={r.trading_pnl} />}
+      valueSub={r.venue === "usdm" ? "hedge leg" : edge != null ? `edge ${bps(edge)} bps` : undefined}
       to={{
         page: "history",
         detail: {

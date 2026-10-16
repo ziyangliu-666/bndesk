@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import { useStore, serverNow } from "../../store";
 import { getJSON, type History as Hist } from "../../api";
 import { int, num } from "../../format";
-import { C, HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
-import { ExChart, type ExBoxRow, type ExSeries } from "../../components/ex";
+import { C, PNL_COLORS as P, PNL_STROKES as S, type Stroke } from "../../theme";
+import { ExChart, SeriesKey, type ExBoxRow, type ExSeries } from "../../components/ex";
 import { showInfo } from "../../components/mobile";
 import { DAY, PART_INFO, useLoad } from "./shared";
 import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
@@ -13,15 +13,16 @@ import "./history.css";
 
 const DEF_SE =
   "± is the likely error of the figure: its standard error, from how much the day's hourly results varied (Newey–West, lag 3).";
-const OTHER = "#6b7484";
-
+// the split as the desk lists it: Trading PnL as the subtotal of its two parts, then the rest
 const PARTS = [
-  { key: "mm", label: "Market making", short: "MM", color: MM_COLOR },
-  { key: "inventory", label: "Inventory PnL", short: "Inv", color: INVPNL_COLOR },
-  { key: "hedge", label: "Hedge", short: "Hedge", color: HEDGE_COLOR },
-  { key: "rebates", label: "Rebates", short: "Reb", color: REBATE_COLOR },
-  { key: "other", label: "Other", short: "Other", color: OTHER },
-] as const;
+  { key: "trading", label: "Trading PnL", color: P.trading, stroke: S.trading, sub: false },
+  { key: "mm", label: "Market making", color: P.mm, stroke: S.mm, sub: true },
+  { key: "inventory", label: "Inventory PnL", color: P.inv, stroke: S.inv, sub: true },
+  { key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge, sub: false },
+  { key: "rebates", label: "Rebates", color: P.reb, stroke: S.reb, sub: false },
+  { key: "other", label: "Other", color: P.other, stroke: S.other, sub: false },
+] as const satisfies readonly { key: string; label: string; color: string; stroke: Stroke; sub: boolean }[];
+const TRADING_INFO = "Market making plus inventory PnL, fees included; not hedged. USDT.";
 
 /** One PnL day: its result, its path through the day on a chart, the split, the hedged views and the activity. */
 export function DayM({ date }: { date: string }) {
@@ -67,30 +68,35 @@ export function DayM({ date }: { date: string }) {
               key={p.key}
               dense
               title={
-                <>
-                  <span className="h-sw" style={{ background: p.color }} />
+                <span className={"h-part" + (p.sub ? " sub" : "")}>
+                  <SeriesKey color={p.color} stroke={p.stroke} />
                   {p.label}
-                </>
+                </span>
               }
               value={<Amt v={d![p.key]} />}
-              onClick={() => showInfo(p.label, PART_INFO[p.key])}
+              onClick={() => showInfo(p.label, p.key === "trading" ? TRADING_INFO : PART_INFO[p.key])}
             />
           ))}
         </Sec>
       )}
+      {d && !kept && d.trading != null && (
+        <Sec title="Split" right="USDT">
+          <Row dense title="Trading PnL" value={<Amt v={d.trading} />} onClick={() => showInfo("Trading PnL", TRADING_INFO + " The rest of the split was not kept this day.")} />
+        </Sec>
+      )}
 
-      {d && <><Sec title="Hedged views" info={`Trading PnL: market making plus inventory PnL, fees included, not hedged. Ref-hedged and beta-hedged take off what the inventory would have made on its references, or on the beta instrument. ${DEF_SE}`} right="± likely error">
+      {d && <><Sec title="Trading PnL if hedged" info={`Trading PnL minus what the inventory would have made on its references (hedged on refs), or on the beta instrument (hedged on beta). ${DEF_SE}`} right="± likely error">
         <Stats
           cols={3}
           items={[
-            ...(kept ? [{ label: "Trading PnL", value: <SeVal v={d.trading} se={d.trading_se} /> }] : []),
+            { label: "Not hedged", value: <SeVal v={d.trading} se={d.trading_se} /> },
             {
-              label: "Ref-hedged",
+              label: "On refs",
               info: "Trading PnL minus what the inventory would have made on each instrument's own reference, hedged with a 0–1 s delay. USDT. " + DEF_SE,
               value: <SeVal v={d.hedged} se={d.hedged_se} />,
             },
             {
-              label: "Beta-hedged",
+              label: "On beta",
               info: "Trading PnL minus what the inventory would have made on the beta instrument, each market weighted by its beta. USDT. " + DEF_SE,
               value: <SeVal v={d.factor} se={d.factor_se} />,
             },
@@ -128,7 +134,7 @@ function SeVal({ v, se }: { v: number | null; se: number | null }) {
   );
 }
 
-type PathPt = { time: number; pnl: number; mm: number | null; inv: number | null; hedge: number | null; reb: number | null };
+type PathPt = { time: number; pnl: number; trading: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null };
 
 type DayPathLoad = { pts: PathPt[]; loading: boolean; err: string | null };
 
@@ -147,10 +153,12 @@ function useDayPath(start: number, live: boolean): DayPathLoad {
     return bars.map((b) => ({
       time: b.t,
       pnl: b.c - o,
+      trading: b.pi,
       mm: b.mm,
       inv: b.pi != null && b.mm != null ? b.pi - b.mm : null,
       hedge: b.hedge,
       reb: b.rebates,
+      other: b.pi != null && b.rebates != null ? b.c - o - b.pi - (b.hedge ?? 0) - b.rebates : null,
     }));
   }, [data, start]);
   return { pts, loading: hist.loading && !data, err: hist.err };
@@ -164,35 +172,37 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
   const by = useMemo(() => new Map(pts.map((p) => [p.time, p])), [pts]);
   const series = useMemo<ExSeries[]>(() => {
     const fmt = hide ? () => MASK : (x: number) => amt(x, "pnl");
-    const line = (k: keyof PathPt, label: string, color: string, dashed?: boolean): ExSeries => ({
+    const line = (k: keyof PathPt, label: string, color: string, stroke: Stroke): ExSeries => ({
       key: k,
       kind: "line",
       label,
       color,
       format: fmt,
       lastValue: false,
-      lineStyle: dashed ? "dashed" : "solid",
+      width: 1.5,
+      lineStyle: stroke,
       data: pts.map((p) => ({ time: p.time, value: p[k] as number | null })),
     });
+    // a day kept without its split: only the lines it has (no chips that switch nothing)
+    const has = (k: keyof PathPt) => pts.some((p) => p[k] != null);
     return [
       { key: "pnl", kind: "baseline", label: "Day PnL", signColor: true, format: fmt, toggle: false, data: pts.map((p) => ({ time: p.time, value: p.pnl })) },
-      line("mm", "MM", MM_COLOR),
-      line("inv", "Inv", INVPNL_COLOR),
-      line("hedge", "Hedge", HEDGE_COLOR, true),
-      line("reb", "Reb", REBATE_COLOR),
+      ...(has("trading") ? [line("trading", "Trading", P.trading, S.trading)] : []),
+      ...(has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : []),
+      ...(has("hedge") ? [line("hedge", "Hedge", P.hedge, S.hedge)] : []),
+      ...(has("reb") ? [line("reb", "Rebates", P.reb, S.reb), line("other", "Other", P.other, S.other)] : []),
     ];
   }, [pts, hide]);
   const boxRows = (t: number): ExBoxRow[] => {
     const p = by.get(t);
     if (!p) return [];
     const r = (label: string, v: number | null, color: string): ExBoxRow => [label, money(v), color];
-    return [
-      r("Day PnL", p.pnl, hide ? C.muted : p.pnl > 0 ? C.up : p.pnl < 0 ? C.down : C.ink),
-      r("MM", p.mm, MM_COLOR),
-      r("Inv", p.inv, INVPNL_COLOR),
-      r("Hedge", p.hedge, HEDGE_COLOR),
-      r("Reb", p.reb, REBATE_COLOR),
-    ];
+    const rows: ExBoxRow[] = [r("Day PnL", p.pnl, hide ? C.muted : p.pnl > 0 ? C.up : p.pnl < 0 ? C.down : C.ink)];
+    if (p.trading != null) rows.push(r("Trading", p.trading, P.trading));
+    if (p.mm != null) rows.push(r("MM", p.mm, P.mm), r("Inv", p.inv, P.inv));
+    if (p.hedge != null) rows.push(r("Hedge", p.hedge, P.hedge));
+    if (p.reb != null) rows.push(r("Rebates", p.reb, P.reb), r("Other", p.other, P.other));
+    return rows;
   };
   return (
     <div className="r-chart">
@@ -203,7 +213,7 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
         series={series}
         height={240}
         fullscreen
-        chips
+        chips={series.length > 1}
         loading={path.loading}
         emptyText={path.err ? "Could not load the day's path" : "No path kept for this day"}
         resetKey={start}

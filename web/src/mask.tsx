@@ -18,7 +18,7 @@
 //   maskTone(hide, cls)     a sign class, dropped while masked
 import { memo, useCallback, type ReactNode } from "react";
 import { useStore } from "./store";
-import { DASH, MINUS, compact, num, pnl, qty, usd, usdShort } from "./format";
+import { DASH, MINUS, compact, num, pnl, qty, qtyFixed, usd, usdShort } from "./format";
 
 export const MASK = "•••";
 
@@ -129,8 +129,9 @@ export function signTone(v: number | null | undefined, text?: string): "" | "up"
 }
 
 /** A quantity, masked: a size gives the amount away even where the price does not. */
-export function qtyText(v: number | null | undefined, hide: boolean, sign = false): string {
-  return v == null || !Number.isFinite(v) ? DASH : hide ? MASK : qty(v, sign);
+/** A quantity, or the mask; `d`: fixed decimals (a column's, format.qtyDecimals) instead of trimmed ones. */
+export function qtyText(v: number | null | undefined, hide: boolean, sign = false, d?: number): string {
+  return v == null || !Number.isFinite(v) ? DASH : hide ? MASK : d == null ? qty(v, sign) : qtyFixed(v, d, sign);
 }
 export function useQty(): (v: number | null | undefined, sign?: boolean) => string {
   const hide = useHide();

@@ -29,7 +29,7 @@
 .m-hb-read b {
   color: var(--ink);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
 }
 .m-hb-read .v {
   margin-left: 4px;
@@ -132,14 +132,14 @@
 }
 .h-sum-v {
   display: block;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 500;
   line-height: 38px;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
 .h-sum-v.masked {
-  font-size: 22px;
+  font-size: 20px;
 }
 .h-sum-r.r-stats {
   flex: none;
@@ -151,15 +151,17 @@
   align-items: flex-end;
 }
 .h-sum-r .r-stat-v {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 18px;
 }
-.h-sw {
-  flex: none;
-  align-self: center;
-  width: 10px;
-  height: 2px;
-  border-radius: 1px;
+.h-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+/* a part of the subtotal above it (Trading PnL = market making + inventory PnL) */
+.h-part.sub {
+  padding-left: 16px;
 }
 .h-se {
   font-size: 12px;

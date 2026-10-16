@@ -23,11 +23,13 @@ import {
   RANGES,
   RANGE_LABEL,
   STEP_S,
+  dayOf,
   dayRows,
   deskRows,
   rangeFrom,
+  todayOf,
   useDeskHistory,
-  useInstrumentFills,
+  weekOf,
   weekBars,
   type HInterval,
   type Mode,
@@ -35,6 +37,7 @@ import {
   type Row,
 } from "./history/data";
 import "./history/history.css";
+import { useInstFills } from "./desk/instFills";
 
 const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
@@ -58,9 +61,10 @@ function saveInst(v: { symbol: string; venue: Venue } | null) {
 }
 
 const pad = (n: number) => (n < 10 ? "0" + n : String(n));
+// the page's one date format (the tables, the legend and the lists use it too)
 const ymd = (ms: number) => {
   const d = new Date(ms);
-  return `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 };
 
 export function History() {
@@ -112,22 +116,35 @@ export function History() {
   }, [desk.bars, iv, dayStart]);
   const hourRows = useMemo(() => (dayStart == null ? [] : deskRows(hours.bars, "day", dayStart, null)), [hours.bars, dayStart]);
   const days = useMemo(() => (from == null ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
-  const todayDay = snapDays?.[snapDays.length - 1]?.day ?? null;
+  // today by its start, not the snapshot's last day (yesterday until the P&L engine has started)
+  const todayDay = dayStart == null ? null : todayOf(dayStart);
 
   // ---- instrument ----
   const nBars = from == null || dayStart == null ? 0 : Math.min(MAX_KLINES, Math.ceil((dayStart + DAY - from) / IV_MS[iv]));
   const kl = useKlines(inst && nBars ? inst.symbol : null, inst?.venue ?? "spot", iv as KInterval, { bars: nBars });
-  const fills = useInstrumentFills(inst?.symbol ?? null, inst?.venue ?? "spot", inst ? from : null);
+  const fills = useInstFills(inst?.symbol ?? null, inst?.venue ?? "spot", inst ? from : null);
   const instRow = inst ? symbols?.find((s) => s.symbol === inst.symbol && s.venue === inst.venue) : undefined;
   const avgCost = instRow?.avg_cost ?? null;
 
   // ---- zoom to a chosen day: the chart's view while a day is chosen (ExChart applies it after each load) ----
+  // the same from the table, the calendar, the best and worst days and a click on a bar: days and weeks, the
+  // chosen bar in the middle of 11 (moved in at the range's ends); an intraday interval, the day itself
   const focusStart = focusDay ? (days.find((d) => d.day === focusDay)?.start ?? null) : null;
+  const barTimes = useMemo(() => (inst ? kl.bars.map((b) => b.time) : rows.map((r) => r.t)), [inst, kl.bars, rows]);
+  const focusT = focusStart == null ? null : iv === "1w" ? weekOf(focusStart) : iv === "1d" ? focusStart : null;
+  const focusI = focusT == null ? -1 : barTimes.indexOf(focusT);
+  const nBarTimes = barTimes.length;
   const view = useMemo<ExView | null>(() => {
     if (focusStart == null) return null;
-    const span = iv === "1w" ? 70 * DAY : iv === "1d" ? 10 * DAY : 0;
-    return { time: { from: focusStart - span, to: focusStart + DAY + span } };
-  }, [focusStart, iv]);
+    if (iv !== "1d" && iv !== "1w") return { time: { from: focusStart, to: focusStart + DAY - 1 } };
+    if (focusI < 0) return null;
+    const HALF = 5;
+    let from = focusI - HALF;
+    let to = focusI + HALF;
+    if (to > nBarTimes - 1) (from -= to - (nBarTimes - 1)), (to = nBarTimes - 1);
+    if (from < 0) (to = Math.min(nBarTimes - 1, to - from)), (from = 0);
+    return { logical: { from: from - 0.6, to: to + 0.6 } };
+  }, [focusStart, iv, focusI, nBarTimes]);
   // the legend shows the chosen day at rest (its bar, or its last intraday bar), not the latest one
   const legendTime = useMemo(() => {
     if (focusStart == null) return null;
@@ -140,6 +157,23 @@ export function History() {
   }, [rows, focusStart]);
   const onDay = (day: string) => navigate({ page: "history", detail: { kind: "day", date: day } }, { push: false });
   const clearDay = () => navigate({ page: "history" }, { push: false });
+  // Esc lets the chosen day go, as it lets an instrument go on the Desk
+  useEffect(() => {
+    if (!focusDay) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || document.querySelector(".ex-fs")) return;
+      navigate({ page: "history" }, { push: false });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusDay]);
+  // a click on a bar picks its day (days, or an intraday bar's day; a week has no one day)
+  const dayNames = useMemo(() => new Map(days.map((d) => [d.start, d.day])), [days]);
+  const onBar = (t: number) => {
+    if (iv === "1w" || dayStart == null) return;
+    const name = dayNames.get(dayOf(t, dayStart));
+    if (name) onDay(name);
+  };
   const focusRow = focusDay ? (days.find((d) => d.day === focusDay) ?? null) : null;
 
   // ---- toolbar ----
@@ -194,6 +228,7 @@ export function History() {
               onInterval={(v) => setIv(v as HInterval)}
               view={view}
               hide={hide}
+              onBarClick={onBar}
             />
           ) : (
             <DeskChart
@@ -211,7 +246,9 @@ export function History() {
               modes={modes}
               view={view}
               legendTime={legendTime}
+              chosen={focusT}
               hide={hide}
+              onBarClick={onBar}
             />
           )}
         </div>
