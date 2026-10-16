@@ -1,30 +1,3 @@
-/* ---- history, day, instrument history, markouts (phone) ---- */
-
-/* range chips and the view toggle on one line */
-.m-hist-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0 8px;
-}
-.m-hist-controls .m-chips {
-  flex: 1;
-  min-width: 0;
-  margin-right: 0;
-  padding-right: 0;
-}
-.m-hist-controls > .m-seg {
-  flex: none;
-}
-.m-hist-controls .m-seg button {
-  min-width: 44px;
-  padding: 0 10px;
-}
-
-.m-hist-chart {
-  position: relative;
-  padding-bottom: 12px;
-}
 .m-hist-state {
   position: absolute;
   left: 0;
@@ -33,228 +6,10 @@
   font-size: 13px;
   color: var(--muted);
 }
-
-/* the split key under the days heading: tap for the definitions */
-.m-hist-key {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  width: 100%;
-  min-height: 44px;
-  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
-  margin-top: -4px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-}
-.m-hist-key:active {
-  background: var(--raised);
-}
-.m-hist-key-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.m-hist-sw {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 1px;
-  flex: none;
-}
-.m-hist-defs p {
-  margin: 0 0 10px;
-}
-.m-hist-defs .m-hist-sw {
-  margin-right: 8px;
-  vertical-align: 0;
-}
-.m-hist-defs b {
-  color: var(--ink);
-  font-weight: 600;
-}
-
 /* a day: date / bar + fills left, day PnL right */
 .m-hist-day .m-row-main {
   gap: 6px;
 }
-.m-hist-sub {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.m-hist-bar {
-  position: relative;
-  flex: 1;
-  min-width: 120px;
-  height: 8px;
-}
-.m-hist-bar::before {
-  content: "";
-  position: absolute;
-  left: var(--zero, 50%);
-  top: -4px;
-  bottom: -4px;
-  width: 1px;
-  background: #3a424e;
-}
-.m-hist-bar > span {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-}
-/* a hairline between touching segments, so neighbours of near colors stay apart */
-.m-hist-bar > span + span {
-  box-shadow: inset 1px 0 0 #000;
-}
-.m-hist-nosplit {
-  flex: 1;
-}
-.m-hist-fills {
-  flex: none;
-  min-width: 64px;
-  text-align: right;
-}
-.m-hist-fills.alone {
-  text-align: left;
-}
-
-/* figure rows with a standard error: label · bar with whisker · value ± se */
-.m-pm-row {
-  position: relative;
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: subgrid;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
-}
-.m-body > * + .m-pm-row::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: var(--m-pad-l);
-  right: var(--m-pad-r);
-  border-top: 1px solid var(--rule);
-}
-.m-pm-label {
-  min-width: 0;
-  font-size: 14px;
-  color: var(--ink-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.m-pm-track {
-  position: relative;
-  height: 10px;
-}
-.m-pm-track::before {
-  content: "";
-  position: absolute;
-  left: var(--zero, 50%);
-  top: -7px;
-  bottom: -7px;
-  width: 1px;
-  background: #3a424e;
-}
-.m-pm-fill {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  border-radius: 1px;
-  opacity: 0.85;
-}
-.m-pm-fill.up {
-  background: var(--up);
-}
-.m-pm-fill.down {
-  background: var(--down);
-}
-.m-pm-se {
-  position: absolute;
-  top: 4px;
-  height: 2px;
-  background: var(--ink-2);
-}
-.m-pm-se::before,
-.m-pm-se::after {
-  content: "";
-  position: absolute;
-  top: -4px;
-  width: 1px;
-  height: 10px;
-  background: var(--ink-2);
-}
-.m-pm-se::before {
-  left: 0;
-}
-.m-pm-se::after {
-  right: 0;
-}
-.m-pm-value {
-  text-align: right;
-  font-size: 15px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.m-pm-value small {
-  margin-left: 4px;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-}
-
-/* ---- markouts (the matrix itself is in mobile.css: one look on every page) ---- */
-/* the toxicity disclosure */
-.m-disc {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 44px;
-  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  position: relative;
-}
-.m-disc:active {
-  background: var(--raised);
-}
-.m-disc::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: var(--m-pad-l);
-  right: var(--m-pad-r);
-  border-top: 1px solid var(--rule);
-}
-.m-disc > svg {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--muted);
-}
-.m-disc svg {
-  color: var(--muted);
-  transition: transform 160ms;
-}
-.m-disc[aria-expanded="true"] svg {
-  transform: rotate(180deg);
-}
-.m-disc-body .m-note {
-  padding: 4px 0 10px;
-}
-
 /* by hour: the readout over the bars */
 .m-hb {
   padding: 0 var(--m-pad-r) 8px var(--m-pad-l);
@@ -325,43 +80,62 @@
   font-size: 10px;
   font-family: inherit;
 }
-
-/* instrument history: the window's fills */
-.m-hist-ivals {
-  padding: 4px 0 8px;
-}
-.m-hist-path-wait {
-  min-height: 74px;
-  font-size: 12px;
-  color: var(--muted);
-}
 /* the day PnL column keeps one width, so the fills counts line up */
 .m-hist-day .m-row-side {
   min-width: 88px;
 }
-
-/* days with Trading PnL only: said once under the heading, and on the day's page */
-.m-hist-note {
-  grid-column: 1 / -1;
-  padding: 2px var(--m-pad-r) 6px var(--m-pad-l);
-  font-size: 12px;
-  color: var(--muted);
+/* ---- History (exchange grammar): the range's total at the left, four facts at the right ---- */
+.h-sum {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 2px 0 8px;
 }
-.m-hist-unkept {
-  grid-column: 1 / -1;
-  padding: 4px var(--m-pad-r) 12px var(--m-pad-l);
+.h-sum-l {
+  flex: 1;
+  min-width: 0;
+}
+.h-sum-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.h-sum-v {
+  display: block;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 38px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.h-sum-v.r-masked {
+  font-size: 22px;
+}
+.h-sum-r.r-stats {
+  flex: none;
+  gap: 4px 16px;
+  padding: 0;
+  text-align: right;
+}
+.h-sum-r .r-stat {
+  align-items: flex-end;
+}
+.h-sum-r .r-stat-v {
   font-size: 13px;
-  line-height: 1.45;
-  color: var(--ink-2);
+  line-height: 18px;
 }
-
-/* the disclosure's fact at the right, as a section's: what its horizons count from */
-.m-disc .m-disc-right {
-  margin-left: auto;
+.h-sw {
+  flex: none;
+  align-self: center;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+}
+.h-se {
   font-size: 12px;
-  font-weight: 400;
   color: var(--muted);
 }
-.m-disc .m-disc-right + svg {
-  margin-left: 0;
+.r-chart .ex-chart.touch .ex-tt button {
+  min-height: 44px;
 }

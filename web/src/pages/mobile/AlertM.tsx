@@ -9,6 +9,8 @@ import type { RingPoint, Route } from "../../store";
 import { bandDef, pctDigits, useRejectSpike, EngineFacts, EngineState, FeedRow, KillBar, LatencyTable, feedProblem, useQty } from "./shared";
 import { RULES, alertText } from "./rules";
 import "./ops.css";
+import "./rest/ops.css";
+import { Sec, Stats } from "./rest/ui";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -30,42 +32,36 @@ export function AlertM({ id }: { id: string }) {
   }
   const rule = RULES[alert.rule];
   const zone = tz === "utc" ? " UTC" : "";
+  const hidden = isHidden(alert, keys);
   return (
-    <>
-      <Section>
-        <div className={"m-ops-alert-text " + alert.level}>
+    <div className="o-page">
+      <Sec flush>
+        <div className="o-text">
           <LevelIcon level={alert.level} size={20} />
           <p>{alertText(alert, hide)}</p>
         </div>
         {/* the server rewrites the text at each check while the alert holds */}
-        {alert.active && <p className="m-ops-asof">Text from the server's last check</p>}
-        <KV
+        {alert.active && <p className="o-asof">Text from the server's last check</p>}
+        {/* a warning or info can leave the badge and the Desk on this browser until it clears; a critical one never */}
+        {canHide(alert) && (
+          <div className="o-act-line">
+            <span>{hidden ? "Hidden on this browser until it clears" : "On the bell and the Desk"}</span>
+            <button type="button" className="r-act" onClick={() => (hidden ? showAlert(alert) : hideAlert(alert))}>
+              {hidden ? "Show" : "Hide"}
+            </button>
+          </div>
+        )}
+        <Stats
           cols={3}
           items={[
             { label: "Rule", value: rule?.name ?? alert.rule, info: rule?.means },
             { label: "Since", value: hms(alert.since, tz) + zone },
-            alert.active ? { label: "Active for", value: span(now - alert.since) } : { label: "State", value: "cleared" },
+            alert.active ? { label: "Active for", value: span(now - alert.since) } : { label: "State", value: "Cleared" },
           ]}
         />
-      </Section>
-      {/* a warning or info can leave the badge and the Desk on this browser until it clears; a critical one never */}
-      {canHide(alert) && (
-        <Section>
-          {isHidden(alert, keys) ? (
-            <ListRow dense chevron={false} title="Show this alert" subtitle="Hidden on this browser" onClick={() => showAlert(alert)} />
-          ) : (
-            <ListRow
-              dense
-              chevron={false}
-              title="Hide this alert"
-              subtitle="Off the badge and the Desk on this browser, until it clears"
-              onClick={() => hideAlert(alert)}
-            />
-          )}
-        </Section>
-      )}
+      </Sec>
       {alert.active ? <Evidence a={alert} now={now} /> : <Subject a={alert} />}
-    </>
+    </div>
   );
 }
 

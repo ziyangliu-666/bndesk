@@ -1,0 +1,257 @@
+/* ---- Alerts, Alert, Orders, System, Fills, More (exchange grammar) ---- */
+.o-alert {
+  align-items: flex-start;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.o-alert .r-row-r {
+  padding-top: 1px;
+}
+.o-alert-t {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+.o-alert .r-row-s.two {
+  color: var(--ink-2);
+  opacity: 0.8;
+  line-height: 17px;
+}
+.o-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  font-size: 14px;
+}
+.o-note {
+  padding-top: 8px;
+}
+
+/* the alert's text, under its level */
+.o-text {
+  display: flex;
+  gap: 10px;
+  padding: 12px 0 4px;
+}
+.o-text p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 21px;
+  color: var(--ink);
+}
+.o-text svg {
+  flex: none;
+  margin-top: 1px;
+}
+.o-asof {
+  margin: 0 0 4px 30px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.o-act-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.o-act-line .r-act {
+  margin-left: auto;
+}
+
+/* a short trend line under a figure */
+.o-trend {
+  padding: 4px 0 10px;
+}
+.o-trend-head {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+.o-trend-head span:last-child {
+  margin-left: auto;
+}
+
+/* More: grouped rows */
+.o-set {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  font-size: 15px;
+}
+.o-set + .o-set,
+.r-row + .o-set,
+.o-set + .r-row::before {
+  border-top: 1px solid var(--rule);
+}
+.o-set .ex-tt {
+  margin-left: auto;
+  margin-right: -8px;
+}
+.o-set .ex-tt button {
+  font-size: 14px;
+  min-height: 44px;
+  min-width: 52px;
+  padding: 0 10px;
+}
+.o-set .o-logout {
+  margin: 0 -8px;
+  font-weight: 400;
+  font-size: 15px;
+  color: var(--down);
+}
+.o-set-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.o-about {
+  padding: 0 0 20px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--muted);
+}
+.o-about a {
+  color: var(--accent);
+}
+
+/* a search box */
+.o-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 8px 0;
+}
+.o-search input {
+  width: 100%;
+  height: 40px;
+  padding: 0 40px 0 36px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+}
+.o-search input::placeholder {
+  color: var(--muted);
+}
+.o-search > svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+}
+.o-search button {
+  position: absolute;
+  right: 0;
+  width: 44px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+/* a filter row: small pills (accounts), a text toggle at the right */
+.o-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.o-pills {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.o-pills::-webkit-scrollbar {
+  display: none;
+}
+.o-pill {
+  flex: none;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.o-pill.on {
+  background: #232a35;
+  color: var(--ink);
+}
+.o-pill .n {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.o-filters .ex-tt {
+  margin-left: auto;
+  flex: none;
+}
+.o-filters .ex-tt button {
+  font-size: 13px;
+  min-height: 40px;
+  padding: 0 8px;
+}
+/* pages that keep the phone kit's sections and rows (Alert evidence, System): the same heads, no chevrons */
+.o-page .m-section-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+.o-page .m-row-chev {
+  display: none;
+}
+.o-page .m-row {
+  padding-right: var(--m-pad-r);
+}
+/* a row that only leads somewhere says so at its right, in the link colour */
+.o-page button.m-row:not(:has(.m-row-side))::after {
+  content: "Open";
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--accent);
+}
+.o-page .m-section {
+  margin-top: 8px;
+}
+.o-page .m-link {
+  color: var(--accent);
+  font-size: 13px;
+}
+.o-page .m-link svg {
+  display: none;
+}
+
+.o-side {
+  flex: none;
+  font-size: 13px;
+  font-weight: 500;
+}
+.o-open-l {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--accent);
+}
+.o-sheet .r-stats {
+  padding-top: 4px;
+}
+.o-qmap {
+  padding-top: 8px;
+}
+.o-buy {
+  color: var(--up);
+}
+.o-sell {
+  color: var(--down);
+}

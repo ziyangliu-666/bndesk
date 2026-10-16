@@ -1,5 +1,3 @@
-import { useState } from "react";
-import { UnstyledButton } from "@mantine/core";
 import { useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { int } from "../../format";
@@ -7,6 +5,9 @@ import { KV, Section, Tag } from "../../components/mobile";
 import type { Alert, Engine, Feed } from "../../protocol";
 import { EngineFacts, EngineState, feedState, feedSummary, FeedRow, KillBar, LatencyTable, useRejectSpike, type FeedState } from "./shared";
 import "./ops.css";
+import "./rest/ops.css";
+import { useExPref } from "../../components/ex";
+import { Empty, PageTabs } from "./rest/ui";
 
 const OK = ["up", "running", "live", "ok", "connected"];
 const ORDER: Record<FeedState, number> = { down: 0, flapping: 1, silent: 2, up: 3 };
@@ -111,48 +112,67 @@ function EngineSection({ e, feeds, now, alerts }: { e: Engine; feeds: Feed[]; no
   );
 }
 
-/** Health: each engine, then the monitor's feeds with the ones that need a look first. */
+/** System: Engines | Feeds. The engines with their kill state, latency, rejects and venues; the monitor's feeds
+ *  with the ones that need a look first. */
 export function EngineM() {
   const engines = useStore((s) => s.snap?.engines);
   const feeds = useStore((s) => s.snap?.feeds) ?? [];
   const alerts = useStore((s) => s.snap?.alerts);
   const now = useNow(1000) + useStore.getState().skew;
-  const [all, setAll] = useState(false);
+  const [tab, setTab] = useExPref<"engines" | "feeds">("m-system", "tab", "engines", ["engines", "feeds"]);
 
   const states = new Map(feeds.map((f) => [f, feedState(f, now, alerts)]));
   // down first, then flapping, then silent
   const bad = feeds.filter((f) => states.get(f) !== "up").sort((a, b) => ORDER[states.get(a)!] - ORDER[states.get(b)!]);
   const good = feeds.filter((f) => states.get(f) === "up");
   const sum = feedSummary(feeds, now, alerts);
+  const running = (engines ?? []).filter((e) => e.up && !e.kill && e.state === "running").length;
+  const tone = (w: string) => (w === "crit" ? "crit-text" : w === "warn" ? "warn-text" : "");
 
   return (
-    <>
-      <Section
-        title="Feeds"
-        info={
-          "Connections and pollers the monitor runs: public market data, each account's user data stream, the REST pollers and the engines' metrics." +
-          "\n\nUp: connected, messages arriving. Silent: connected, but nothing for a while (market data for 45 s; a poller or engine metrics for 10 s). " +
-          "Flapping: connected, but it keeps reconnecting (an alert says so). Down: disconnected.\n\nTap a feed for its details."
-        }
-        right={<span className={sum.worst === "crit" ? "m-ops-crit" : sum.worst === "warn" ? "warn-text" : ""}>{sum.text}</span>}
-      >
-        {bad.map((f) => (
-          <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
-        ))}
-        {good.length > 0 && (
-          <UnstyledButton className="m-ops-more" onClick={() => setAll(!all)} aria-expanded={all}>
-            {all ? "Hide the feeds that are up" : bad.length ? `${good.length} more up` : `Show all ${good.length}`}
-          </UnstyledButton>
-        )}
-        {all && good.map((f) => <FeedRow key={f.name} f={f} now={now} alerts={alerts} />)}
-      </Section>
-      {engines?.length ? (
-        engines.map((e) => <EngineSection key={e.name} e={e} feeds={feeds} now={now} alerts={alerts} />)
+    <div className="o-page">
+      <PageTabs
+        items={[
+          {
+            value: "engines",
+            label: <span className={engines && running < engines.length ? "warn-text" : ""}>Engines</span>,
+            count: engines ? `${running}/${engines.length}` : null,
+          },
+          { value: "feeds", label: <span className={tone(sum.worst)}>Feeds</span>, count: bad.length ? `${bad.length} to check` : `${feeds.length}` },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === "engines" ? (
+        engines?.length ? (
+          engines.map((e) => <EngineSection key={e.name} e={e} feeds={feeds} now={now} alerts={alerts} />)
+        ) : (
+          <Empty>No engine configured.</Empty>
+        )
       ) : (
-        <Section title="Engines">
-          <div className="m-empty">No engine configured.</div>
-        </Section>
+        <>
+          {bad.length > 0 && (
+            <Section title="Need a look" right={<span className={tone(sum.worst)}>{sum.text}</span>}>
+              {bad.map((f) => (
+                <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
+              ))}
+            </Section>
+          )}
+          <Section
+            title={bad.length ? "Up" : "All up"}
+            info={
+              "Connections and pollers the monitor runs: public market data, each account's user data stream, the REST pollers and the engines' metrics." +
+              "\n\nUp: connected, messages arriving. Silent: connected, but nothing for a while (market data for 45 s; a poller or engine metrics for 10 s). " +
+              "Flapping: connected, but it keeps reconnecting (an alert says so). Down: disconnected.\n\nTap a feed for its details."
+            }
+            right={`${good.length} of ${feeds.length}`}
+          >
+            {good.map((f) => (
+              <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
+            ))}
+          </Section>
+        </>
       )}
-    </>
+    </div>
   );
 }

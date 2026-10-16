@@ -1,56 +1,140 @@
 import { useMemo } from "react";
-import { useStore } from "../../store";
+import { navigate, useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { hm, int, num, pct, usdShort } from "../../format";
-import { Dot } from "../../components/ui";
-import {
-  Hero,
-  KV,
-  ListRow,
-  Money,
-  RateMeter,
-  Section,
-  Sparkline,
-  SplitRows,
-  Tag,
-  span,
-  useHold,
-  useLive,
-  useMoney,
-} from "../../components/mobile";
+import { bps, int, num, pct } from "../../format";
+import { span, useHold, useLive } from "../../components/mobile";
+import { useExPref } from "../../components/ex";
 import type { Fill } from "../../protocol";
-import { Bps, FillRow, InstName, PositionsTable, TIP, useFillSheet } from "./shared";
+import { FillRow, TIP, useFillSheet } from "./shared";
+import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
+import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
 
-const FILLS = 20;
+const FILLS = 30;
+type Tab = "balance" | "instruments" | "orders" | "fills";
 
-/** A daily limit as the definitions write it: 160k. */
-const limitK = (n: number) => (n >= 10_000 ? `${int(n / 1000)}k` : int(n));
-
+/** One account: its Day PnL today on a chart, then Balance | Instruments | Orders | Fills. */
 export function AccountM({ id }: { id: string }) {
   const a = useLive((s) => s.snap?.accounts.find((x) => x.id === id), 250, false, id);
   const series = useLive((s) => s.snap?.account_series.find((x) => x.account === id), 1000, false, id);
-  const [held, hold] = useHold();
-  const allFills = useLive((s) => s.snap?.fills, 250, held);
-  const tz = useStore((s) => s.tz);
+  const accounts = useLive((s) => s.snap?.accounts, 1000);
+  const [tab, setTab] = useExPref<Tab>("m-account", "tab", "balance", ["balance", "instruments", "orders", "fills"]);
   const now = useNow(1000) + useStore.getState().skew;
-  const fill = useFillSheet();
-  const money = useMoney();
-  const fills = useMemo(() => (allFills ?? []).filter((f) => f.account === id), [allFills, id]);
-  // the perps only this account holds, when their fills are not among the recent ones: the hedge's own counts
+  if (!a || !accounts) return <Empty>No account “{id}” on the desk.</Empty>;
+
+  // Day PnL an hour ago, from the account's own series
+  const pts = series?.pnl_day ?? [];
+  const ts = series?.t ?? [];
+  let h1: number | null = null;
+  if (ts.length > 1 && ts[ts.length - 1]! - ts[0]! >= 3_600_000) {
+    const cut = ts[ts.length - 1]! - 3_600_000;
+    let i = ts.length - 1;
+    while (i > 0 && ts[i]! > cut) i--;
+    h1 = a.pnl_day - pts[i]!;
+  }
+  const old = now - a.updated > 30_000;
+  return (
+    <>
+      <Big
+        label={
+          <>
+            Day PnL (USDT)
+            <Eye />
+          </>
+        }
+        value={<Amt v={a.pnl_day} />}
+        sub={
+          <>
+            {h1 != null && (
+              <>
+                1h <Amt v={h1} />
+              </>
+            )}
+            <span className={a.user_stream === "down" ? "crit-text" : old ? "warn-text" : ""}>
+              {h1 != null && " · "}Stream {a.user_stream}
+              {old ? `, ${span(now - a.updated)} old` : ""}
+            </span>
+          </>
+        }
+      />
+      <AccountsChart accounts={accounts} only={id} />
+      <PageTabs
+        items={[
+          { value: "balance", label: "Balance" },
+          { value: "instruments", label: "Instruments" },
+          { value: "orders", label: "Orders", count: a.open_orders || null },
+          { value: "fills", label: "Fills" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === "balance" ? <Balance id={id} /> : tab === "instruments" ? <Instruments id={id} /> : tab === "orders" ? <Orders id={id} /> : <Fills id={id} />}
+    </>
+  );
+}
+
+function Balance({ id }: { id: string }) {
+  const a = useLive((s) => s.snap?.accounts.find((x) => x.id === id), 250, false, id);
+  const money = useAmt();
+  if (!a) return null;
+  const hasFut = a.fut_wallet !== 0 || a.positions.length > 0;
+  return (
+    <>
+      <Sec flush>
+        <Stats
+          cols={3}
+          items={[
+            { label: "Equity", info: TIP.equity, value: money(a.equity, "full") },
+            { label: "Day start", info: "Equity at the day start, USDT.", value: money(a.equity_open, "full") },
+            {
+              label: a.transfers_day >= 0 ? "Transfers in" : "Transfers out",
+              info: "Money moved into the account since the day start (out, if negative), net. Day PnL = equity change − transfers in.",
+              value: money(Math.abs(a.transfers_day), "full"),
+            },
+            { label: "USDT free", value: money(a.quote_free, "full") },
+            { label: "USDT locked", info: "Spot quote balance locked in open orders, USDT.", value: money(a.quote_locked, "full") },
+            { label: "Inventory", info: "Non-quote spot assets, free + locked, at mid, USDT.", value: money(a.inventory_value, "full") },
+            { label: "Rebates", info: "Market-maker rebates credited since the day start: already part of Day PnL, USDT.", value: <Amt v={a.rebates} /> },
+          ]}
+        />
+      </Sec>
+      {hasFut && (
+        <Sec title="Futures" right="uPnL · today">
+          <Stats
+            cols={3}
+            items={[
+              { label: "Wallet", value: money(a.fut_wallet, "full") },
+              { label: "uPnL", info: TIP.upnl, value: <Amt v={a.fut_upnl} /> },
+              { label: "Available", value: money(a.fut_available, "full") },
+            ]}
+          />
+          {a.positions.map((p) => (
+            <PositionRow key={p.symbol} p={p} />
+          ))}
+        </Sec>
+      )}
+    </>
+  );
+}
+
+type InstDay = { symbol: string; venue: Fill["venue"]; n: number; volume: number; share: number | null; edge: number | null | undefined };
+
+function Instruments({ id }: { id: string }) {
+  const allFills = useLive((s) => s.snap?.fills, 1000);
   const symbols = useLive((s) => s.snap?.symbols, 1000);
   const holders = useLive((s) => s.snap?.accounts, 1000);
+  const money = useAmt();
   const insts = useMemo(() => {
+    const fills = (allFills ?? []).filter((f) => f.account === id);
     let xs: InstDay[] = byInstrument(fills);
-    // where this account is the only one trading the instrument, the instrument's own day counts are its
-    // counts: they agree with the instrument's page (the recent fills reach back only 2,000 fills)
+    // where this account is the only one trading the instrument, the instrument's own day counts are its counts
     const others = new Set((allFills ?? []).filter((f) => f.account !== id).map((f) => f.venue + f.symbol));
     xs = xs.map((x) => {
       const r = others.has(x.venue + x.symbol) ? null : symbols?.find((s) => s.symbol === x.symbol && s.venue === x.venue);
       return r && r.fills_day >= x.n ? { ...x, n: r.fills_day, volume: r.volume_day } : x;
     });
     const total = xs.reduce((t, x) => t + x.volume, 0);
-    xs = xs.map((x) => ({ ...x, share: total > 0 ? x.volume / total : 0 })).sort((a, b) => b.volume - a.volume);
+    xs = xs.map((x) => ({ ...x, share: total > 0 ? x.volume / total : 0 })).sort((p, q) => q.volume - p.volume);
     for (const r of symbols ?? []) {
       if (r.venue !== "usdm" || !(r.fills_day > 0)) continue;
       if (xs.some((x) => x.venue === "usdm" && x.symbol === r.symbol)) continue;
@@ -59,232 +143,109 @@ export function AccountM({ id }: { id: string }) {
       xs.push({ symbol: r.symbol, venue: "usdm", n: r.fills_day, volume: r.volume_day, share: null, edge: undefined });
     }
     return xs;
-  }, [fills, allFills, symbols, holders, id]);
-  if (!a) {
-    return (
-      <Section>
-        <div className="m-empty">No account “{id}” on the desk.</div>
-      </Section>
-    );
-  }
-  const zone = tz === "utc" ? " UTC" : "";
-  const pts = series?.pnl_day ?? [];
-  const ts = series?.t ?? [];
-  // day PnL an hour ago, from the account's own series
-  let h1: number | null = null;
-  if (ts.length > 1 && ts[ts.length - 1]! - ts[0]! >= 3_600_000) {
-    const cut = ts[ts.length - 1]! - 3_600_000;
-    let i = ts.length - 1;
-    while (i > 0 && ts[i]! > cut) i--;
-    h1 = a.pnl_day - pts[i]!;
-  }
-  const stream = a.user_stream;
+  }, [allFills, symbols, holders, id]);
+  return (
+    <Sec
+      flush
+      title="Traded today"
+      info="What this account traded today, by instrument: fills, the share of the account's volume, the volume and the notional-weighted edge at the fill. PnL is not split by account; the instrument's page has it, all accounts."
+      right="volume · edge"
+    >
+      {insts.map((x) => (
+        <Row
+          key={x.venue + x.symbol}
+          title={
+            <>
+              {x.symbol}
+              {x.venue === "usdm" && <span className="r-tag">Perp</span>}
+            </>
+          }
+          sub={x.share != null ? `${int(x.n)} fills · ${pct(x.share, 0)} of volume` : `${int(x.n)} fills`}
+          value={money(x.volume, "k")}
+          valueSub={x.edge != null ? `edge ${bps(x.edge)} bps` : undefined}
+          to={{ page: "desk", detail: { kind: "instrument", symbol: x.symbol, venue: x.venue } }}
+        />
+      ))}
+      {!insts.length && <Empty>No fills today</Empty>}
+    </Sec>
+  );
+}
+
+/** A daily limit as the definitions write it: 160K. */
+const limitK = (n: number) => (n >= 10_000 ? `${int(n / 1000)}K` : int(n));
+
+function Orders({ id }: { id: string }) {
+  const a = useLive((s) => s.snap?.accounts.find((x) => x.id === id), 250, false, id);
+  const money = useAmt();
+  if (!a) return null;
   const util = a.utilization != null && Number.isFinite(a.utilization) ? a.utilization : null;
-  const hasFut = a.fut_wallet !== 0 || a.positions.length > 0;
   return (
     <>
-      <Section>
-        <ListRow
-          dense
-          dot={<Dot ok={stream === "up"} warn={stream === "n/a"} />}
-          title={<>Stream {stream}</>}
-          subtitle={a.email || undefined}
-          tone={stream === "down" ? "crit" : undefined}
-          primary={<span className={"m-fig m-acc-meta" + (now - a.updated > 30_000 ? " warn-text" : " muted")}>updated {span(now - a.updated)} ago</span>}
-        />
-        <Hero
-          label="Day PnL"
-          info={TIP.dayPnl}
-          v={a.pnl_day}
-          sub={
-            h1 != null ? (
-              <>
-                1h <Money v={h1} />
-              </>
-            ) : undefined
-          }
-        >
-          {pts.length > 1 && (
-            <Sparkline
-              values={pts}
-              height={48}
-              range={(v) => (usdShort(v) === usdShort(a.pnl_day) ? "" : money(v, "pnlShort"))}
-              ends={[hm(ts[0]!, tz), hm(ts[ts.length - 1]!, tz) + zone]}
-            />
-          )}
-        </Hero>
-        {/* where the day's figure comes from: the equity's move, less what was moved in (nothing to split without) */}
-        {a.transfers_day !== 0 && (
-        <SplitRows
-          waterfall
-          ink
-          rows={[
-            {
-              key: "eq",
-              label: "Equity change",
-              info: `Equity now ${money(a.equity, "usd")} minus equity at the day start ${money(a.equity_open, "usd")}. Day PnL = Equity change − Transfers in.`,
-              v: a.equity - a.equity_open,
-            },
-            {
-              key: "tr",
-              label: a.transfers_day > 0 ? "Transfers in" : "Transfers out",
-              info:
-                "Money moved into the account since the day start (out, if negative), net. Day PnL = Equity change − Transfers in: " +
-                "money moved in is not a gain, money moved out not a loss.",
-              v: -a.transfers_day,
-              shown: { v: Math.abs(a.transfers_day), kind: "usd" },
-            },
-          ]}
-        />
-        )}
-      </Section>
-
-      {a.positions.length > 0 && (
-        <Section title="Futures positions" link={{ label: "All accounts", to: { page: "assets" } }}>
-          <PositionsTable rows={a.positions.map((p) => ({ ...p, account: a.label }))} showAccount={false} />
-        </Section>
-      )}
-
-      <Section
-        title="Instruments today"
-        info={
-          "What this account traded today, by instrument: fills, the share of the account's volume, the volume (right) and the " +
-          "notional-weighted edge at the fill.\n\nCounts are the instrument's own day counts (as on its page) where only this account " +
-          "trades it; where other accounts trade it too, they count this account's fills in the latest 2,000 fills of the desk. " +
-          "PnL is not split by account; the instrument's page has it, all accounts."
-        }
-        right={insts.length ? "volume" : undefined}
-      >
-        {insts.length === 0 && <div className="m-empty">No fills today</div>}
-        {insts.slice(0, 8).map((x) => (
-          <ListRow
-            key={x.venue + x.symbol}
-            dense
-            title={<InstName r={{ symbol: x.symbol, venue: x.venue, dust: false }} />}
-            subtitle={x.share != null ? `${int(x.n)} fills · ${pct(x.share, 0)} of volume` : `${int(x.n)} fills`}
-            primary={<Money v={x.volume} kind="short" />}
-            secondary={
-              x.edge !== undefined ? (
-                <>
-                  edge <Bps v={x.edge} />
-                </>
-              ) : undefined
-            }
-            to={{ page: "desk", detail: { kind: "instrument", symbol: x.symbol, venue: x.venue } }}
-          />
-        ))}
-      </Section>
-
-      <Section title="Balance" info={TIP.equity}>
-        <KV
+      <Sec flush>
+        {a.orders_10s_limit > 0 && <Meter label="Orders 10 s" value={a.orders_10s} limit={a.orders_10s_limit} />}
+        {a.orders_1d_limit > 0 && <Meter label="Orders 1 d" sub={`${int(a.orders_1d)} of ${limitK(a.orders_1d_limit)}`} value={a.orders_1d} limit={a.orders_1d_limit} pct />}
+        {util != null && <Meter label="Bid use" sub="resting bids ÷ USDT" value={util} limit={1} pct digits={0} />}
+      </Sec>
+      <Sec title="Resting" right={<button type="button" className="r-act" onClick={() => navigate({ page: "orders", account: id })}>Open orders</button>}>
+        <Stats
           cols={3}
           items={[
-            { label: "Equity", info: TIP.equity, value: <Money v={a.equity} kind="usd" /> },
-            { label: "Day start equity", info: "Equity at the day start, USDT.", value: <Money v={a.equity_open} kind="usd" /> },
-            {
-              label: "Rebates",
-              info: "Market-maker rebates credited since the day start: already part of Day PnL (they raise the equity), USDT.",
-              value: <Money v={a.rebates} kind="usd" />,
-            },
-            { label: "USDT free", info: "Free spot quote balance, USDT.", value: <Money v={a.quote_free} kind="usd" /> },
-            { label: "USDT locked", info: "Spot quote balance locked in open orders, USDT.", value: <Money v={a.quote_locked} kind="usd" /> },
-            {
-              label: "Inventory",
-              info: "Non-quote spot assets, free + locked, at mid, USDT.",
-              value: <Money v={a.inventory_value} kind="usd" />,
-            },
+            { label: "Open", value: int(a.open_orders) },
+            { label: "Bids (USDT)", value: money(a.bids_notional, "full") },
+            { label: "Asks (USDT)", value: money(a.asks_notional, "full") },
           ]}
         />
-      </Section>
-
-      {hasFut && (
-        <Section title="Futures">
-          <KV
-            cols={3}
-            items={[
-              { label: "Wallet", info: "USD-M futures wallet balance, USDT.", value: <Money v={a.fut_wallet} kind="usd" /> },
-              { label: "uPnL", info: "Unrealized PnL of futures positions at mark, USDT.", value: <Money v={a.fut_upnl} /> },
-              { label: "Available", info: "Futures available balance, USDT.", value: <Money v={a.fut_available} kind="usd" /> },
-            ]}
-          />
-        </Section>
-      )}
-
-      <Section title="Orders" link={{ label: "Open orders", to: { page: "orders" } }}>
-        {a.orders_10s_limit > 0 && (
-          <RateMeter
-            label="Orders 10 s"
-            info={`${TIP.o10} ${int(a.orders_10s)} of ${int(a.orders_10s_limit)}.`}
-            value={a.orders_10s}
-            limit={a.orders_10s_limit}
-          />
-        )}
-        {a.orders_1d_limit > 0 && (
-          <RateMeter
-            label="Orders 1 d"
-            info={`${TIP.o1d} ${int(a.orders_1d)} of ${limitK(a.orders_1d_limit)} today (${pct(a.orders_1d / a.orders_1d_limit, 1)}).`}
-            value={a.orders_1d}
-            limit={a.orders_1d_limit}
-            pct
-          />
-        )}
-        {util != null && (
-          <RateMeter
-            label="Bid use"
-            info={`${TIP.bid} Near 100 %, there is little USDT left to bid with. Resting bids ${money(a.bids_notional, "usd")} of ${money(a.bids_notional + a.quote_free, "usd")} USDT quote.`}
-            value={util}
-            limit={1}
-            pct
-          />
-        )}
-        <KV
-          cols={3}
-          items={[
-            { label: "Open", info: "Number of open orders.", value: int(a.open_orders) },
-            { label: "Bids", info: "Resting bid notional, USDT.", value: <Money v={a.bids_notional} kind="usd" /> },
-            { label: "Asks", info: "Resting ask notional, USDT.", value: <Money v={a.asks_notional} kind="usd" /> },
-          ]}
-        />
+      </Sec>
+      <Sec title="Fees" right="maker / taker">
         {a.fees.map((f) => (
-          <ListRow
+          <Row
             key={f.venue}
             dense
             title={
               <>
-                {f.venue === "spot" ? "Spot fee" : "USD-M fee"}
-                {f.changed && <Tag tone="warn">changed</Tag>}
+                {f.venue === "spot" ? "Spot" : "USD-M"}
+                {f.changed && <span className="r-tag warn">Changed</span>}
               </>
             }
-            subtitle="maker / taker"
-            primary={
-              <span className={"m-fig" + (f.changed ? " warn-text" : "")}>
-                {num(f.maker_bps, 1)} / {num(f.taker_bps, 1)}
-                <span className="m-unit">bps</span>
+            value={
+              <span className={"r-fig" + (f.changed ? " warn-text" : "")}>
+                {num(f.maker_bps, 1)} / {num(f.taker_bps, 1)} bps
               </span>
             }
           />
         ))}
-      </Section>
-
-      {/* nothing recent: Instruments today has already said so */}
-      {fills.length > 0 && (
-        <div className="m-hold" {...hold}>
-          <Section
-            title="Recent fills"
-            link={fills.length > FILLS ? { label: `All ${int(fills.length)}`, to: { page: "fills", account: id } } : undefined}
-          >
-            {fills.slice(0, FILLS).map((f) => (
-              <FillRow key={f.id} f={f} onOpen={fill.open} account={false} />
-            ))}
-          </Section>
-        </div>
-      )}
-      {fill.sheet}
+      </Sec>
     </>
   );
 }
 
-type InstDay = { symbol: string; venue: Fill["venue"]; n: number; volume: number; share: number | null; edge: number | null | undefined };
+function Fills({ id }: { id: string }) {
+  const [held, hold] = useHold();
+  const allFills = useLive((s) => s.snap?.fills, 250, held);
+  const fill = useFillSheet();
+  const fills = useMemo(() => (allFills ?? []).filter((f) => f.account === id), [allFills, id]);
+  return (
+    <div className="m-hold" {...hold}>
+      <Sec flush title={fills.length > FILLS ? `Newest ${FILLS} of ${int(fills.length)}` : `${int(fills.length)} fills`} right={fills.length > FILLS ? <AllFills id={id} /> : undefined}>
+        <div className="m-body">
+          {fills.slice(0, FILLS).map((f) => (
+            <FillRow key={f.id} f={f} onOpen={fill.open} account={false} />
+          ))}
+        </div>
+        {!fills.length && <Empty>No fills today</Empty>}
+      </Sec>
+      {fill.sheet}
+    </div>
+  );
+}
+
+function AllFills({ id }: { id: string }) {
+  return (
+    <button type="button" className="r-act" onClick={() => navigate({ page: "fills", account: id })}>
+      All fills
+    </button>
+  );
+}
 
 /** Today's fills of one account by instrument: count, volume, its share, the notional-weighted edge. */
 function byInstrument(fills: Fill[]): InstDay[] {
@@ -304,5 +265,5 @@ function byInstrument(fills: Fill[]): InstDay[] {
   }
   return [...m.values()]
     .map((x) => ({ symbol: x.symbol, venue: x.venue, n: x.n, volume: x.volume, share: total > 0 ? x.volume / total : 0, edge: x.w > 0 ? x.ew / x.w : null }))
-    .sort((a, b) => b.volume - a.volume);
+    .sort((p, q) => q.volume - p.volume);
 }

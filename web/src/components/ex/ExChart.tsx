@@ -211,6 +211,8 @@ export interface ExChartProps {
   touch?: boolean;
   /** Bars in view after a (re)load; default all of them, fitted. */
   initialBars?: number;
+  /** Bars of space right of the latest one. Default 3 on touch, 5 with a mouse (a few daily bars want less). */
+  rightOffset?: number;
   /** A change of this value resets the view (a new symbol). */
   resetKey?: string | number;
   /** Controlled hidden keys (else per-id in the store). */
@@ -246,7 +248,7 @@ function minMoveFor(v: number): number {
 }
 const defaultFormat = (s: ExSeries) => s.format ?? (s.kind === "candles" ? (v: number) => fmtPrice(v) : (v: number) => num(v, 2));
 
-function chartOptions(touch: boolean, tz: TzMode, step: number): DeepPartial<ChartOptions> {
+function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: number): DeepPartial<ChartOptions> {
   return {
     autoSize: true,
     layout: {
@@ -271,7 +273,7 @@ function chartOptions(touch: boolean, tz: TzMode, step: number): DeepPartial<Cha
       borderColor: C.rule,
       timeVisible: true,
       secondsVisible: step < 60_000,
-      rightOffset: touch ? 3 : 5,
+      rightOffset: rightOffset ?? (touch ? 3 : 5),
       minBarSpacing: 0.3,
       tickMarkFormatter: (t: Time, kind: number) => tickLabel((t as number) * 1000, tz, kind),
     },
@@ -441,7 +443,7 @@ export function ExChart(p: ExChartProps) {
   // ---- mount ----
   useLayoutEffect(() => {
     const el = host.current!;
-    const c = createChart(el, chartOptions(touch, tz, stepRef.current));
+    const c = createChart(el, chartOptions(touch, tz, stepRef.current, p.rightOffset));
     chart.current = c;
     cbs.current.chartRef?.(c);
     const onMove = (e: MouseEventParams<Time>) => {
@@ -489,11 +491,11 @@ export function ExChart(p: ExChartProps) {
   useEffect(() => {
     const c = chart.current;
     if (!c) return;
-    // only the labels: applying the time scale's spacing options again would undo a fit just made (the bar
-    // spacing goes back to its default and the view scrolls to the end), as on a switch of interval
-    const o = chartOptions(touch, tz, step);
-    c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter }, localization: o.localization });
-  }, [tz, step, touch]);
+    // only the labels (and the right offset): applying the time scale's spacing options again would undo a fit
+    // just made (the bar spacing goes back to its default and the view scrolls to the end), as on a switch of interval
+    const o = chartOptions(touch, tz, step, p.rightOffset);
+    c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter, rightOffset: o.timeScale!.rightOffset }, localization: o.localization });
+  }, [tz, step, touch, p.rightOffset]);
 
   // ---- series: structure, options, data ----
   const structure = p.series.map((s) => `${s.key}:${s.kind}:${s.pane ?? 0}:${s.scale ?? ""}`).join("|");
@@ -514,8 +516,13 @@ export function ExChart(p: ExChartProps) {
       else c.timeScale().fitContent();
     };
     apply();
-    // the chart takes new data on its next frame and clamps a range set before it to the old bars: again then
-    requestAnimationFrame(() => chart.current === c && apply());
+    // the chart takes new data on its next frame and clamps a range set before it to the old bars, and a chart
+    // created with its data at hand is laid out (autoSize) a frame or two later: fit again after each
+    requestAnimationFrame(() => {
+      if (chart.current !== c) return;
+      apply();
+      requestAnimationFrame(() => chart.current === c && apply());
+    });
   }, [touch]);
 
   useLayoutEffect(() => {

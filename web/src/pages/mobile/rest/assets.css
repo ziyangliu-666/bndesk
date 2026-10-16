@@ -1,0 +1,103 @@
+/* ---- Assets (AccountsM, AccountM) ---- */
+.a-today {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: -12px 0 -10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+}
+.a-today::after {
+  content: "›";
+  margin-left: 2px;
+  font-size: 16px;
+  color: var(--muted);
+}
+.a-today .r-fig {
+  font-size: 13px;
+}
+.a-side {
+  flex: none;
+  font-size: 12px;
+  font-weight: 400;
+}
+.a-chart-t {
+  padding-left: 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.crit-text {
+  color: var(--crit);
+}
+
+/* a signed value against its ±band */
+.a-gap {
+  padding: 10px 0 8px;
+}
+.a-gap-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 24px;
+}
+.a-gap-l {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.a-gap-v {
+  margin-left: auto;
+  font-size: 15px;
+  font-weight: 500;
+}
+.a-gap-v .of {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.a-gap.warn .a-gap-v .v {
+  color: var(--warn);
+}
+.a-gap.crit .a-gap-v .v {
+  color: var(--crit);
+}
+.a-gap-track {
+  position: relative;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--m-track);
+}
+.a-gap-track::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--muted);
+}
+.a-gap-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--ink-2);
+}
+.a-gap.warn .a-gap-fill {
+  background: var(--warn);
+}
+.a-gap.crit .a-gap-fill {
+  background: var(--crit);
+}

@@ -1,53 +1,71 @@
 import { useMemo } from "react";
-import { create } from "zustand";
 import { useStore, serverNow } from "../../store";
-import { getJSON, type History as Hist, type HistDay, type HistFill, type Kline } from "../../api";
-import { InstrumentChart } from "../../components/HistoryChart";
-import { hm, int, price } from "../../format";
-import { Chips, KV, ListRow, Money, Section } from "../../components/mobile";
+import { getJSON, type HistFill } from "../../api";
+import { compact, int, price } from "../../format";
+import { C } from "../../theme";
+import {
+  ExChart,
+  closePoints,
+  fillMarkers,
+  fillsByBar,
+  fillsShort,
+  fillsText,
+  useExPref,
+  useKlines,
+  volumePoints,
+  type ExSeries,
+  type KInterval,
+} from "../../components/ex";
 import type { Venue } from "../../protocol";
-import { ChartState, DAY, useLoad } from "./shared";
-import { dayTitle } from "./index";
+import { useLoad } from "./shared";
+import { Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./history.css";
 
-const STEPS = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
-type Interval = (typeof STEPS)[number];
-const SEC: Record<Interval, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14_400, "1d": 86_400 };
-const BARS = 1500; // per load: a phone does not need the desktop's 5000
-const REFRESH = 30_000;
-
-// stable empties, so the memos below don't rerun (and the chart doesn't reset) on every render while loading
-const NO_KLINES: Kline[] = [];
+const IVS = [
+  { value: "line", label: "Line" },
+  { value: "5m", label: "5m" },
+  { value: "15m", label: "15m" },
+  { value: "1h", label: "1H" },
+  { value: "4h", label: "4H" },
+];
+const MORE = [
+  { value: "1m", label: "1m" },
+  { value: "30m", label: "30m" },
+  { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" },
+];
+const ALL = [...IVS, ...MORE].map((i) => i.value);
+const BARS = 1000;
 const NO_FILLS: HistFill[] = [];
-const NO_DAYS: HistDay[] = [];
 
-const useIval = create<{ ival: Interval; set: (v: Interval) => void }>((set) => ({ ival: "5m", set: (ival) => set({ ival }) }));
-
-/** One instrument's market candles with our fills on them, reached from the instrument's page. */
+/** One instrument's market candles over a longer span, with our fills on them (per bar and side, one circle
+ *  at our VWAP), and what was bought and sold in that span. */
 export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: Venue }) {
-  const { ival, set } = useIval();
-  const tz = useStore((s) => s.tz);
-  const dayStart = useStore((s) => s.snap?.summary.day_start ?? 0);
-  const step = SEC[ival];
-  // BARS back from now, moved forward onto a day start
-  const from = dayStart ? dayStart - Math.floor((BARS * step * 1000) / DAY) * DAY : 0;
-  const key = dayStart ? `${symbol}|${venue}|${ival}|${from}` : null;
-  const load = useLoad<{ klines: Kline[]; fills: HistFill[]; days: HistDay[] }>(
+  const [iv, setIv] = useExPref<string>("m-hinst", "interval", "1h", ALL);
+  const kIv = (iv === "line" ? "15m" : iv) as KInterval;
+  const k = useKlines(symbol, venue, kIv, { bars: BARS });
+  const money = useAmt();
+  const first = k.bars[0]?.time;
+  const key = first != null ? `${symbol}|${venue}|${kIv}|${Math.floor(first / 3_600_000)}` : null;
+  const load = useLoad<HistFill[]>(
     key,
-    async (signal) => {
-      const to = serverNow();
-      const [klines, fills, h] = await Promise.all([
-        getJSON<Kline[]>("/api/klines", { symbol, venue, interval: ival, from, to }, signal),
-        getJSON<HistFill[]>("/api/fills", { symbol, from, to }, signal),
-        getJSON<Hist>("/api/history", { from: to - 60_000, to, step: 60 }, signal),
-      ]);
-      return { klines, fills: fills.filter((f) => f.venue === venue), days: h.days };
-    },
-    REFRESH,
+    (signal) =>
+      getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first!, to: serverNow() }, signal).then((xs) => xs.filter((f) => f.venue === venue && f.t >= first!)),
+    60_000,
   );
-  const data = load.key === key ? load.data : null;
-  const klines = data?.klines ?? NO_KLINES;
-  const fills = data?.fills ?? NO_FILLS;
+  const fills = load.key === key && load.data ? load.data : NO_FILLS;
+  const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
+  const row = useStore((s) => s.snap?.symbols.find((r) => r.symbol === symbol && r.venue === venue));
+
+  const series = useMemo<ExSeries[]>(
+    () => [
+      iv === "line"
+        ? { key: "k", kind: "line", label: symbol, color: C.ink, data: closePoints(k.bars), toggle: false, format: price }
+        : { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false, format: price },
+      { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 1, data: volumePoints(k.bars, true), format: (v) => compact(v), lastValue: false },
+    ],
+    [iv, k.bars, symbol],
+  );
 
   const sum = useMemo(() => {
     const s = { bn: 0, bq: 0, bv: 0, sn: 0, sq: 0, sv: 0 };
@@ -64,59 +82,54 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
     }
     return s;
   }, [fills]);
-  const since = klines[0]?.[0];
+  const ready = load.key === key && load.data != null;
 
   return (
     <>
-      <Section card={false}>
-        <div className="m-hist-ivals">
-          <Chips value={ival} onChange={set} data={STEPS.map((s) => ({ value: s, label: s }))} label="Interval" />
-        </div>
-        <div className="m-hist-chart">
-          <InstrumentChart
-            phone
-            height={260}
-            klines={klines}
-            fills={fills}
-            days={data?.days ?? NO_DAYS}
-            step={step}
-            tz={tz}
-            fitKey={load.key}
-          />
-          <ChartState load={load} empty={data != null && klines.length === 0} />
-        </div>
-      </Section>
+      <div className="r-chart h-inst-chart">
+        <ExChart
+          id="m-hinst"
+          title={symbol}
+          series={series}
+          paneStretch={[1, 0.22]}
+          intervals={IVS}
+          moreIntervals={MORE}
+          interval={iv}
+          onInterval={setIv}
+          loading={k.loading}
+          emptyText={k.error ?? undefined}
+          height={380}
+          initialBars={80}
+          resetKey={symbol + venue}
+          fullscreen
+          markers={fillMarkers(byBar, "k")}
+          priceLines={
+            row?.avg_cost ? [{ series: "k", key: "avg", price: row.avg_cost, color: C.muted, title: "Avg cost", style: "large", labelColor: C.raised, labelTextColor: C.ink }] : undefined
+          }
+          legendExtra={[{ key: "fills", label: "Fills", value: (t) => fillsText(byBar.get(t)), box: (t) => fillsShort(byBar.get(t)) }]}
+          chips={[{ key: "fills", label: "Fills", color: C.up }, ...(row?.avg_cost ? [{ key: "avg", label: "Avg cost", color: C.muted }] : []), "|", { key: "vol", label: "Vol" }]}
+        />
+      </div>
 
-      {data && (
-        <Section
-          title="Our fills"
-          info={`Fills on ${venue === "usdm" ? "USD-M" : "spot"} in the loaded window, all accounts; avg is the quantity-weighted price.`}
-          right={since != null ? `since ${dayTitle(ymd(since, tz === "utc"))} ${hm(since, tz)}` : undefined}
-        >
-          <KV
-            items={[
-              { label: "Buys", value: sum.bn ? `${int(sum.bn)} @ ${price(sum.bv / sum.bq)}` : "0" },
-              { label: "Sells", value: sum.sn ? `${int(sum.sn)} @ ${price(sum.sv / sum.sq)}` : "0" },
-              { label: "Bought, USDT", value: <Money v={sum.bv} kind="short" /> },
-              { label: "Sold, USDT", value: <Money v={sum.sv} kind="short" /> },
-            ]}
-          />
-          <ListRow
-            dense
-            title="Today"
-            subtitle="quotes, inventory and markouts"
-            to={{ page: "desk", detail: { kind: "instrument", symbol, venue } }}
-          />
-        </Section>
-      )}
+      <Sec title="Our fills" right={first != null ? `in the chart's ${int(k.bars.length)} bars` : undefined} info={`Fills on ${venue === "usdm" ? "USD-M" : "spot"} over the bars loaded, all accounts; @ is the quantity-weighted price.`}>
+        <Stats
+          cols={2}
+          items={[
+            { label: "Buys", value: !ready ? "--" : sum.bn ? `${int(sum.bn)} @ ${price(sum.bv / sum.bq)}` : "0", tone: sum.bn ? "up" : "" },
+            { label: "Sells", value: !ready ? "--" : sum.sn ? `${int(sum.sn)} @ ${price(sum.sv / sum.sq)}` : "0", tone: sum.sn ? "down" : "" },
+            { label: "Bought (USDT)", value: ready ? money(sum.bv, "k") : "--" },
+            { label: "Sold (USDT)", value: ready ? money(sum.sv, "k") : "--" },
+          ]}
+        />
+      </Sec>
+      <Sec>
+        <Row
+          title="Today"
+          sub="Quotes, fills, markouts and inventory"
+          value={row ? <span className="r-fig">{int(row.fills_day)} fills</span> : undefined}
+          to={{ page: "desk", detail: { kind: "instrument", symbol, venue } }}
+        />
+      </Sec>
     </>
   );
-}
-
-/** YYYY-MM-DD of a moment, in UTC or local time. */
-function ymd(t: number, utc: boolean): string {
-  const d = new Date(t);
-  if (utc) return d.toISOString().slice(0, 10);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
