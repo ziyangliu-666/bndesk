@@ -72,9 +72,34 @@
 .q-lg-dot.down {
   background: var(--down);
 }
+/* size: a small and a large neutral dot (area = notional) */
+.q-lg-dot.sm,
+.q-lg-dot.lg {
+  background: var(--ink-2);
+}
+.q-lg-dot.sm {
+  width: 5px;
+  height: 5px;
+  margin-right: -2px;
+}
+.q-lg-dot.lg {
+  width: 10px;
+  height: 10px;
+}
+/* through fair: an amber ring clear of the dot, as on the map */
 .q-lg-dot.ring {
-  background: var(--up);
-  box-shadow: 0 0 0 1.5px var(--warn);
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  background: var(--ink-2);
+  box-shadow:
+    0 0 0 2px var(--ground, #000),
+    0 0 0 3.25px var(--warn);
+}
+.q-legend.short {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 14px;
 }
 .q-lg-tri {
   width: 0;

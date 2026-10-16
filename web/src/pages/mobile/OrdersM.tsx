@@ -3,9 +3,11 @@ import { IconSearch, IconX } from "@tabler/icons-react";
 import { selectInstrument, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { bps, hms, int, price } from "../../format";
-import { Sheet, span, useHold, useLive } from "../../components/mobile";
+import { Chips, Sheet, span, useHold, useLive } from "../../components/mobile";
 import { TextToggle, useExPref } from "../../components/ex";
-import { QuoteMapFull } from "../../components/quotes";
+import { QuotesFull } from "./desk/QuoteTouch";
+import "./desk.css";
+import "./desk/mk.css";
 import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
@@ -45,9 +47,9 @@ export function OrdersM() {
       {cur === "orders" ? (
         <OpenOrders accounts={trading} all={accounts} />
       ) : cur === "quotes" ? (
-        <div className="o-qmap">
-          <QuoteMapFull phone onSelect={(symbol, venue) => selectInstrument({ symbol, venue })} />
-        </div>
+        <section className="o-qmap mk-quotes">
+          <QuotesFull ms={250} />
+        </section>
       ) : (
         <Rates accounts={trading} />
       )}
@@ -108,15 +110,18 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
         )}
       </div>
       <div className="o-filters">
-        <div className="o-pills" role="group" aria-label="Account">
-          {[{ id: "all", label: "All" }, ...accounts.map((a) => ({ id: a.id, label: a.label }))].map((o) => (
-            <button key={o.id} type="button" className={"o-pill" + (acct === o.id ? " on" : "")} aria-pressed={acct === o.id} onClick={() => setAcct(o.id)}>
-              {o.label}
-              <span className="n">{count((x) => o.id === "all" || x.account === o.id)}</span>
-            </button>
-          ))}
-        </div>
-        </div>
+        {/* a row that runs past the edge fades there, so a cut name reads as more to scroll to */}
+        <Chips
+          label="Account"
+          value={acct}
+          onChange={setAcct}
+          data={[{ id: "all", label: "All" }, ...accounts.map((a) => ({ id: a.id, label: a.label }))].map((o) => ({
+            value: o.id,
+            label: o.label,
+            count: count((x) => o.id === "all" || x.account === o.id),
+          }))}
+        />
+      </div>
       <div className="m-hold" {...hold}>
         <Sec
           title={`${int(rows.length)} orders`}
@@ -126,6 +131,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
               {through > 0 && <span className="warn-text">{int(through)} through</span>}
               <TextToggle
                 label="Side"
+                className="o-tt"
                 value={side}
                 onChange={setSide}
                 options={[

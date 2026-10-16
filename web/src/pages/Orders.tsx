@@ -10,7 +10,7 @@ import type { Account, OpenOrder } from "../protocol";
 import { gridTheme } from "../gridTheme";
 import { hms, int, pct } from "../format";
 import { fBps, fPrice, DEFAULT_COL } from "../grid";
-import { QuoteControls, QuoteLegend, QuoteMapEC, useQuoteMapState } from "../components/quotes";
+import { QuoteControls, QuoteLegend, QuoteMapEC, useMapCounts, useQuoteMapState } from "../components/quotes";
 import { TextToggle } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
@@ -210,6 +210,7 @@ export function Orders() {
   const acct = st.account != null && trading.some((a) => a.id === st.account) ? st.account : null;
   const shown = acct == null ? orders : orders.filter((o) => o.account === acct);
   const through = shown.filter((o) => o.dist_bps != null && o.dist_bps < 0).length;
+  const counts = useMapCounts(acct);
 
   return (
     <div className="page ops-orders">
@@ -229,6 +230,8 @@ export function Orders() {
           <span className="ops-head-right fig">
             <span className="muted">{shown.length} orders</span>
             {through ? <span className="warn-text">{through} through fair</span> : null}
+            {counts.oneSide ? <span className="muted">{counts.oneSide} one side</span> : null}
+            {counts.wide ? <span className="muted">{counts.wide} wide</span> : null}
           </span>
         </header>
         <div className="ops-qmap-legend">

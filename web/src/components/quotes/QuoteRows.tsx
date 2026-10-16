@@ -1,11 +1,12 @@
 // The light quote map: plain canvas, no chart library. One row per instrument, x in bps from fair (the centre
-// line): the market's bid–ask as a grey band, our bids and asks as dots (area ~ notional; an amber ring when
-// through fair; a faded triangle on the edge when beyond the range), and optionally the inventory value as a
-// neutral bar at the right. Redrawn on each store update (its live motion), at most once a frame.
+// line): the market's bid–ask as a grey band, our bids and asks as dots (area ~ notional; a separate amber
+// ring around an order through fair; a faded triangle on the edge when beyond the range), a row's status at
+// the right of the plot (No ask, No bid, Not quoted, Wide), and optionally the inventory value as a neutral bar
+// at the right. Redrawn on each store update (its live motion), at most once a frame.
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { C, SANS } from "../../theme";
 import { MINUS } from "../../format";
-import { BAND, BAND_EDGE, INV_FILL, clamp, dotSize, off, short, type QRow } from "./model";
+import { BAND, BAND_EDGE, INV_FILL, THROUGH_GAP, clamp, dotSize, off, rowStatus, short, wideCut, type QRow } from "./model";
 import { MASK, useHide } from "../../mask";
 
 export interface QuoteRowsProps {
@@ -26,6 +27,8 @@ export interface QuoteRowsProps {
   onRow?: (r: QRow) => void;
   /** Text when there are no rows. */
   empty?: string;
+  /** Each row's status at the right of the plot: No ask, No bid, Not quoted, Wide (default on). */
+  status?: boolean;
   className?: string;
 }
 
@@ -41,7 +44,7 @@ const tick = (v: number, r: number) => (v === 0 ? "fair" : (v > 0 ? "+" : MINUS)
  * The quote map drawn on a canvas, `rows.length × rowH` (+ 18 px of ticks) tall, as wide as its parent. Cheap
  * enough for the phone: the mini map on the Desk, the full map in Markets, the band on an instrument page.
  */
-export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axis = true, selected, onRow, empty, className }: QuoteRowsProps) {
+export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axis = true, selected, onRow, empty, status = true, className }: QuoteRowsProps) {
   const box = useRef<HTMLDivElement>(null);
   const cv = useRef<HTMLCanvasElement>(null);
   const [w, setW] = useState(0);
@@ -49,8 +52,8 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
   const h = top + Math.max(1, rows.length) * rowH;
   // Hide amounts: the inventory column reads ••• with no bars
   const hide = useHide();
-  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty, hide });
-  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty, hide };
+  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status });
+  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty, hide, status };
 
   useEffect(() => {
     const el = box.current;
@@ -96,7 +99,7 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
 
 function draw(
   cv: HTMLCanvasElement,
-  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string; hide: boolean },
+  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string; hide: boolean; status: boolean },
 ) {
   const { rows, range, rowH, label, inv, top, w, h } = p;
   if (!w) return;
@@ -128,12 +131,26 @@ function draw(
       g.fillStyle = "#161b22";
       g.fillRect(x - 0.5, top, 1, h - top);
     }
-    // the half ticks' labels only where there is room for them
-    if (top && (v === 0 || Math.abs(v) === range || span >= 220)) {
-      g.fillStyle = C.muted;
-      g.textAlign = v === -range ? "left" : v === range ? "right" : "center";
-      g.fillText(tick(v, range), v === -range ? x0 : v === range ? x1 : x, top / 2);
-    }
+  }
+  if (top) {
+    // the labels' extents: the ends and fair always, a half tick only with 8 px clear on both sides of it
+    const lab = ticks.map((v) => {
+      const t = tick(v, range);
+      const tw = g.measureText(t).width;
+      const x = v === -range ? x0 : v === range ? x1 : xOf(v);
+      const a = v === -range ? x : v === range ? x - tw : x - tw / 2;
+      return { v, t, x, a, b: a + tw, align: (v === -range ? "left" : v === range ? "right" : "center") as CanvasTextAlign };
+    });
+    g.fillStyle = C.muted;
+    lab.forEach((l, i) => {
+      if (Math.abs(l.v) === half && l.v !== 0 && half !== range) {
+        const prev = lab[i - 1];
+        const next = lab[i + 1];
+        if ((prev && l.a < prev.b + 8) || (next && l.b > next.a - 8)) return;
+      }
+      g.textAlign = l.align;
+      g.fillText(l.t, l.x, top / 2);
+    });
   }
   if (inv && top) {
     g.textAlign = "right";
@@ -159,6 +176,7 @@ function draw(
   const invSpan = Math.max(50, invHi - invLo);
   const ix0 = w - PAD / 2 - INV_TXT - INV_W;
   const ixOf = (v: number) => ix0 + ((v - invLo) / invSpan) * INV_W;
+  const cut = wideCut(rows);
 
   rows.forEach((r, i) => {
     const y0 = top + i * rowH;
@@ -174,6 +192,14 @@ function draw(
       g.textAlign = "left";
       g.fillStyle = name === p.selected ? C.accent : r.orders.length ? C.ink : C.muted;
       g.fillText(name, 0, yc, label);
+    }
+    // the row's status at the right of the plot, under the marks (an order out there stays on top)
+    const st = p.status ? rowStatus(r, cut) : null;
+    if (st) {
+      g.font = `400 11px ${SANS}`;
+      g.textAlign = "right";
+      g.fillStyle = st === "Wide" ? C.ink2 : C.muted;
+      g.fillText(st, x1 - 2, yc);
     }
     const fair = s.fair ?? s.mid;
     if (fair) {
@@ -210,7 +236,7 @@ function draw(
           g.globalAlpha = 1;
           continue;
         }
-        const rad = Math.min(dotSize(o.notional, through), rowH - 4) / 2;
+        const rad = Math.min(dotSize(o.notional), rowH - 4 - 2 * THROUGH_GAP) / 2;
         g.globalAlpha = 0.9;
         g.fillStyle = col;
         g.beginPath();
@@ -218,8 +244,11 @@ function draw(
         g.fill();
         g.globalAlpha = 1;
         if (through) {
+          // a ring clear of the dot: "through fair" whatever the order's size
           g.strokeStyle = C.warn;
-          g.lineWidth = 1.5;
+          g.lineWidth = 1.25;
+          g.beginPath();
+          g.arc(x, yc, rad + THROUGH_GAP, 0, Math.PI * 2);
           g.stroke();
         }
       }
@@ -229,7 +258,7 @@ function draw(
       const a = ixOf(0);
       const b = ixOf(v);
       g.fillStyle = INV_FILL;
-      if (!p.hide) g.fillRect(Math.min(a, b), yc - Math.min(4.5, rowH * 0.22), Math.max(1, Math.abs(b - a)), Math.min(9, rowH * 0.45));
+      if (!p.hide && Math.abs(v) >= 1) g.fillRect(Math.min(a, b), yc - Math.min(4.5, rowH * 0.22), Math.max(1, Math.abs(b - a)), Math.min(9, rowH * 0.45));
       if (Math.abs(v) >= 1) {
         g.font = `400 11px ${SANS}`;
         g.textAlign = "right";

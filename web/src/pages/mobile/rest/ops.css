@@ -104,6 +104,13 @@
 .o-about a {
   color: var(--accent);
 }
+/* the attribution link: a thumb's 44 px tall line */
+.o-about .ex-tv {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 13px;
+}
 
 /* a search box */
 .o-search {
@@ -188,6 +195,16 @@
   font-size: 13px;
   min-height: 40px;
   padding: 0 8px;
+}
+.o-filters .m-chips {
+  flex: 1;
+  min-width: 0;
+}
+/* a section's own toggle (Both | Buy | Sell, Edge | 10 s | 60 s): a thumb's 44 px each */
+.ex-tt.o-tt button {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
 }
 /* pages that keep the phone kit's sections and rows (Alert evidence, System): the same heads, no chevrons */
 .o-page .m-section-title {

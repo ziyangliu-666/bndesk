@@ -1,18 +1,22 @@
 // The quote map for a thumb: QuoteRows (the shared canvas) with a phone's gestures. A tap opens the row's
-// instrument; a long press reads the row under the finger (our best bid and ask from fair, the market's spread,
-// the inventory, the orders) and a drag up or down moves the reading from row to row, the page held still
-// meanwhile. The reading stays after the finger lifts, until the next tap (the charts' tracking mode).
+// instrument; a long press reads the row under the finger (our best bid and ask from fair, signed as the axis,
+// the market's spread, the orders, the inventory) and a drag up or down moves the reading from row to row, the
+// page held still meanwhile. The reading stays after the finger lifts and belongs to the instrument, not to the
+// row's place (the busiest list re-ranks); it ends on the next tap on the map, a touch anywhere else on the
+// page, or a scroll.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { QuoteLegend, QuoteRows, quoteRows, rowsFor, type MapSort, type QRow } from "../../../components/quotes";
+import { QuoteLegend, QuoteRows, SORTS, mapCounts, quoteRows, rowsFor, sidesOf, type MapSort, type QRow } from "../../../components/quotes";
 import { useBusiest } from "../../../selectors";
 import { selectInstrument } from "../../../store";
 import { useExPref } from "../../../components/ex";
-import { bps, price } from "../../../format";
-import { Segmented, useLive, useMoney } from "../../../components/mobile";
+import { bps, int, price } from "../../../format";
+import { Chips, Segmented, useLive, useMoney } from "../../../components/mobile";
 
 const AXIS_H = 18;
 const PRESS_MS = 320;
 const SLOP = 9;
+
+const keyOf = (r: QRow) => `${r.sym.venue}:${r.sym.symbol}`;
 
 export function QuoteTouch({
   rows,
@@ -32,7 +36,8 @@ export function QuoteTouch({
   empty?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const [read, setRead] = useState<{ i: number; x: number } | null>(null);
+  // the reading: the instrument under the finger and the finger's x (the box goes on the other side)
+  const [read, setRead] = useState<{ key: string; x: number } | null>(null);
   const live = useRef({ rows, rowH, read, axis });
   live.current = { rows, rowH, read, axis };
 
@@ -47,9 +52,13 @@ export function QuoteTouch({
       const { rows, rowH, axis } = live.current;
       const r = el.getBoundingClientRect();
       const i = Math.floor((clientY - r.top - (axis ? AXIS_H : 0)) / rowH);
-      return Math.max(0, Math.min(rows.length - 1, i));
+      return rows[Math.max(0, Math.min(rows.length - 1, i))];
     };
     const xIn = (clientX: number) => clientX - el.getBoundingClientRect().left;
+    const readAt = (cx: number, cy: number) => {
+      const r = rowAt(cy);
+      if (r) setRead({ key: keyOf(r), x: xIn(cx) });
+    };
     const down = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
       const t = e.touches[0]!;
@@ -61,7 +70,7 @@ export function QuoteTouch({
         if (!start || moved || !live.current.rows.length) return;
         scrub = true;
         if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(8);
-        setRead({ i: rowAt(start.y), x: xIn(start.x) });
+        readAt(start.x, start.y);
       }, PRESS_MS);
     };
     const move = (e: TouchEvent) => {
@@ -69,12 +78,13 @@ export function QuoteTouch({
       if (!t || !start) return;
       if (scrub) {
         e.preventDefault(); // the page holds still while the finger reads rows
-        setRead({ i: rowAt(t.clientY), x: xIn(t.clientX) });
+        readAt(t.clientX, t.clientY);
         return;
       }
       if (Math.abs(t.clientX - start.x) > SLOP || Math.abs(t.clientY - start.y) > SLOP) {
         moved = true;
         clearTimeout(timer);
+        if (live.current.read) setRead(null); // a swipe that starts on the map scrolls the page: the reading goes
       }
     };
     const up = (e: TouchEvent) => {
@@ -91,7 +101,7 @@ export function QuoteTouch({
         setRead(null); // the tap that ends a reading opens nothing
         return;
       }
-      const row = live.current.rows[rowAt(s.y)];
+      const row = rowAt(s.y);
       if (row) selectInstrument({ symbol: row.sym.symbol, venue: row.sym.venue });
     };
     const cancel = () => {
@@ -100,14 +110,23 @@ export function QuoteTouch({
     };
     // a mouse (desktop testing): a click opens the row
     const click = (e: MouseEvent) => {
-      const row = live.current.rows[rowAt(e.clientY)];
+      const row = rowAt(e.clientY);
       if (row) selectInstrument({ symbol: row.sym.symbol, venue: row.sym.venue });
+    };
+    // a finger anywhere else on the page, or the page scrolling, ends a reading
+    const away = (e: TouchEvent) => {
+      if (live.current.read && !el.contains(e.target as Node)) setRead(null);
+    };
+    const scrolled = () => {
+      if (live.current.read && !scrub) setRead(null);
     };
     el.addEventListener("touchstart", down, { passive: true });
     el.addEventListener("touchmove", move, { passive: false });
     el.addEventListener("touchend", up, { passive: false });
     el.addEventListener("touchcancel", cancel);
     el.addEventListener("click", click);
+    document.addEventListener("touchstart", away, { capture: true, passive: true });
+    window.addEventListener("scroll", scrolled, { passive: true });
     return () => {
       clearTimeout(timer);
       el.removeEventListener("touchstart", down);
@@ -115,14 +134,17 @@ export function QuoteTouch({
       el.removeEventListener("touchend", up);
       el.removeEventListener("touchcancel", cancel);
       el.removeEventListener("click", click);
+      document.removeEventListener("touchstart", away, { capture: true });
+      window.removeEventListener("scroll", scrolled);
     };
   }, []);
 
-  // a reading ends when its rows go (another sort, the page's data replaced)
-  const row = read ? rows[read.i] : undefined;
-  const top = (axis ? AXIS_H : 0) + (read?.i ?? 0) * rowH;
+  // the reading follows its instrument to wherever the rows now put it, and ends when it leaves them
+  const i = read ? rows.findIndex((r) => keyOf(r) === read.key) : -1;
+  const row = i >= 0 ? rows[i] : undefined;
+  const top = (axis ? AXIS_H : 0) + Math.max(0, i) * rowH;
   const w = box.current?.clientWidth ?? 0;
-  const below = (read?.i ?? 0) < 2;
+  const below = i < 2;
   return (
     <div ref={box} className="dk-qt" onContextMenu={(e) => e.preventDefault()}>
       <QuoteRows rows={rows} range={range} rowH={rowH} label={label} inv={inv} axis={axis} empty={empty} selected={row ? row.sym.symbol.replace(/USDT$/, "") : undefined} />
@@ -143,13 +165,16 @@ export function QuoteTouch({
   );
 }
 
+/** Our best order's distance from fair, signed as the map's axis: a bid below fair is negative. */
+const signed = (v: number | null, side: "bid" | "ask") => (v == null ? "--" : bps(side === "bid" ? -v : v) + " bps");
+
 /** The row under the finger, in figures. */
 function Reading({ row, style }: { row: QRow; style: CSSProperties }) {
   const money = useMoney();
   const s = row.sym;
   const nb = row.orders.filter((o) => o.side === "buy").length;
   const na = row.orders.length - nb;
-  const d = (v: number | null) => (v == null ? "--" : bps(v, false) + " bps");
+  const sides = sidesOf(row);
   return (
     <div className="dk-qt-read" style={style} role="status">
       <div className="dk-qt-read-h">
@@ -157,16 +182,14 @@ function Reading({ row, style }: { row: QRow; style: CSSProperties }) {
         <span className="m-fig">{price(s.mid)}</span>
       </div>
       <dl>
-        <dt>Bid below fair</dt>
-        <dd className={s.bid_dist_bps == null ? "" : "up"}>{d(s.bid_dist_bps)}</dd>
-        <dt>Ask above fair</dt>
-        <dd className={s.ask_dist_bps == null ? "" : "down"}>{d(s.ask_dist_bps)}</dd>
-        <dt>Spread</dt>
-        <dd>{d(s.spread_bps)}</dd>
+        <dt>Our Bid vs fair</dt>
+        <dd className={s.bid_dist_bps == null ? "muted" : "up"}>{nb ? signed(s.bid_dist_bps, "bid") : "No bid"}</dd>
+        <dt>Our Ask vs fair</dt>
+        <dd className={s.ask_dist_bps == null ? "muted" : "down"}>{na ? signed(s.ask_dist_bps, "ask") : "No ask"}</dd>
+        <dt>Market spread</dt>
+        <dd>{s.spread_bps == null ? "--" : bps(s.spread_bps, false) + " bps"}</dd>
         <dt>Orders</dt>
-        <dd>
-          {nb} bid{nb === 1 ? "" : "s"} · {na} ask{na === 1 ? "" : "s"}
-        </dd>
+        <dd>{sides === "none" ? "None" : `${nb} Bid${nb === 1 ? "" : "s"} · ${na} Ask${na === 1 ? "" : "s"}`}</dd>
         <dt>Inventory</dt>
         <dd>{money(s.inv_value, "usd")}</dd>
       </dl>
@@ -185,16 +208,16 @@ export function QuotesMini({ n = 8, ms }: { n?: number; ms: number }) {
 
 const RANGES = [10, 25, 50, 100] as const;
 
-/** Markets → Quotes: every quoted instrument, with the range and the order as chips above the map. */
+/** Markets → Quotes and More → Orders → Quotes: every quoted instrument, with the range and the order above the
+ *  map and its counts (one side, wide, through fair) under them. */
 export function QuotesFull({ ms }: { ms: number }) {
   // the map's choices, shared with the desktop's Orders map (useQuoteMapState keeps them under ex.qmap.*)
   const [range, setRange] = useExPref<number>("qmap", "range", 25);
-  const [sort, setSort] = useExPref<MapSort>("qmap", "sort", "activity", ["activity", "inventory", "name"]);
+  const [sort, setSort] = useExPref<MapSort>("qmap", "sort", "activity", SORTS);
   const symbols = useLive((s) => s.snap?.symbols, ms);
   const orders = useLive((s) => s.snap?.orders, ms);
   const rows = useMemo(() => quoteRows(symbols ?? [], orders ?? [], sort), [symbols, orders, sort]);
-  const nOrders = orders?.filter((o) => o.venue === "spot").length ?? 0;
-  const through = orders?.filter((o) => o.venue === "spot" && o.dist_bps != null && o.dist_bps < 0).length ?? 0;
+  const n = useMemo(() => mapCounts(rows), [rows]);
   return (
     <>
       <QuoteLegend short />
@@ -208,21 +231,25 @@ export function QuotesFull({ ms }: { ms: number }) {
         />
       </div>
       <div className="dk-qf-ctl">
-        <span className="dk-qf-l">Order</span>
-        <Segmented
-          label="Order"
+        <span className="dk-qf-l">Sort</span>
+        <Chips
+          label="Sort"
           value={sort}
           onChange={setSort}
           data={[
             { value: "activity", label: "Busiest" },
+            { value: "wide", label: "Widest" },
+            { value: "oneside", label: "One side" },
             { value: "inventory", label: "Inventory" },
             { value: "name", label: "A–Z" },
           ]}
         />
       </div>
       <div className="dk-qf-sum m-fig">
-        {rows.length} instruments · {nOrders} orders
-        {through > 0 && <span className="warn"> · {through} through fair</span>}
+        {int(n.rows)} instruments · {int(n.orders)} orders
+        {n.oneSide > 0 && <> · {int(n.oneSide)} one side</>}
+        {n.wide > 0 && <> · {int(n.wide)} wide</>}
+        {n.through > 0 && <span className="warn"> · {int(n.through)} through fair</span>}
       </div>
       <QuoteTouch rows={rows} range={range} rowH={34} label={54} inv />
     </>

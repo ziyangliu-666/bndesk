@@ -5,7 +5,7 @@ import { C, SANS } from "../theme";
 import { bps, MINUS, price, usd } from "../format";
 import { MASK, hideNow, maskText, useHide } from "../mask";
 import { EChart, phoneDpr, type EChartsType } from "./EChart";
-import { BAND, BAND_EDGE, INV_FILL, LADDER, clamp, dotSize, off, quoteRows, short, type MapSort, type QRow } from "./quotes/model";
+import { BAND, BAND_EDGE, INV_FILL, LADDER, THROUGH_GAP, clamp, dotSize, off, quoteRows, rowStatus, short, sidesOf, wideCut, widthOf, type MapSort, type QRow } from "./quotes/model";
 
 export type { MapSort };
 
@@ -37,6 +37,13 @@ const TD = "padding:1px 4px";
 const TH = "padding:0 4px 2px;font-weight:400;font-size:10.5px";
 const R = ";text-align:right";
 
+/** The tip's title suffix: a missing side, or our width. */
+function tipStatus(r: Row): string {
+  const s = sidesOf(r);
+  const t = s === "noask" ? "No ask" : s === "nobid" ? "No bid" : s === "none" ? "Not quoted" : `Width ${bps(widthOf(r), false)} bps`;
+  return ` <span class="muted" style="font-weight:400">· ${t}</span>`;
+}
+
 function tipHtml(r: Row, hide: boolean): string {
   const s = r.sym;
   const os = [...r.orders].sort((a, b) => b.price - a.price);
@@ -64,7 +71,7 @@ function tipHtml(r: Row, hide: boolean): string {
       )
     : `<div class="muted" style="padding:0 4px 3px">No resting orders</div>`;
   return (
-    `<div style="font-weight:600;padding:0 4px 4px">${short(s.symbol)}</div>` +
+    `<div style="font-weight:500;padding:0 4px 4px">${short(s.symbol)}${tipStatus(r)}</div>` +
     orders +
     table(
       "<tbody>" +
@@ -155,7 +162,12 @@ export function QuoteMap({
     const market: number[][] = [];
     const bids: object[] = [];
     const asks: object[] = [];
+    const rings: object[] = [];
+    const status: [number, number, string][] = [];
+    const cut = wideCut(rows);
     rows.forEach((r, i) => {
+      const st = rowStatus(r, cut);
+      if (st) status.push([range, i, st]);
       const s = r.sym;
       const fair = s.fair ?? s.mid;
       if (!fair) return;
@@ -164,19 +176,17 @@ export function QuoteMap({
         const b = off(o.price, fair);
         const out = Math.abs(b) > range;
         const through = o.dist_bps != null && o.dist_bps < 0;
+        const size = out ? 8 : dotSize(o.notional);
         const item = {
           value: [clamp(b, range), i],
           symbol: out ? "triangle" : "circle",
           symbolRotate: out ? (b > 0 ? -90 : 90) : 0,
-          // a ring needs room inside it for the side colour
-          symbolSize: out ? 8 : dotSize(o.notional, through),
-          itemStyle: {
-            opacity: out ? 0.55 : 0.9,
-            borderColor: through ? C.warn : "transparent",
-            borderWidth: through ? 1.5 : 0,
-          },
+          symbolSize: size,
+          itemStyle: { opacity: out ? 0.55 : 0.9 },
         };
         (o.side === "buy" ? bids : asks).push(item);
+        // through fair: a hollow amber ring clear of the dot, whatever its size
+        if (through && !out) rings.push({ value: [clamp(b, range), i], symbolSize: size + 2 * THROUGH_GAP + 1.5 });
       }
     });
 
@@ -436,6 +446,39 @@ export function QuoteMap({
           color: C.down,
           data: asks,
           z: 3,
+        },
+        {
+          id: "through",
+          type: "scatter",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          silent: true,
+          symbol: "circle",
+          itemStyle: { color: "transparent", borderColor: C.warn, borderWidth: 1.25 },
+          data: rings,
+          z: 2,
+        },
+        {
+          // a row's status at the right of the plot (No ask, No bid, Not quoted, Wide), under the marks
+          id: "status",
+          type: "custom",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          silent: true,
+          clip: true,
+          encode: { x: 0, y: 1 },
+          data: status,
+          z: 1,
+          renderItem: (params: any, api: any) => {
+            const p = api.coord([api.value(0), api.value(1)]);
+            const t = status[params.dataIndex]?.[2] ?? "";
+            return {
+              type: "text",
+              x: p[0] - 4,
+              y: p[1],
+              style: { text: t, fill: t === "Wide" ? C.ink2 : C.muted, font: `400 11px ${SANS}`, align: "right", verticalAlign: "middle" },
+            };
+          },
         },
         {
           id: "inv",

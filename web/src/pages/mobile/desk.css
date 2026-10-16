@@ -66,6 +66,11 @@
 .dk-hero-v .masked {
   font-size: 20px;
 }
+.dk-hero-since {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .dk-hero-sub {
   margin-top: 2px;
   font-size: 12px;
@@ -235,6 +240,20 @@
 }
 .dk-qf-sum .warn {
   color: var(--warn);
+}
+/* the sort chips scroll inside the row after their label (no bleed on the label's side) */
+.dk-qf-ctl .m-chips {
+  flex: 1;
+  min-width: 0;
+  margin-left: 0;
+  padding-left: 0;
+  scroll-padding-inline: 0;
+}
+.dk-qf-l {
+  flex: none;
+}
+.dk-qt-read dd.muted {
+  color: var(--muted);
 }
 
 /* risk: bars are neutral while far from a limit; amber and red only near and past it */

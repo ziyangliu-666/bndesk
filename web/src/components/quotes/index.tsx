@@ -12,11 +12,11 @@ import { useBusiest } from "../../selectors";
 import { TextToggle } from "../ex/controls";
 import { useExPref } from "../ex/prefs";
 import { QuoteRows } from "./QuoteRows";
-import { RANGES, quoteRows, rowsFor, type MapSort, type QRow } from "./model";
+import { RANGES, SORTS, mapCounts, quoteRows, rowsFor, type MapSort, type QRow } from "./model";
 import "./quotes.css";
 
 export { QuoteRows, type QuoteRowsProps } from "./QuoteRows";
-export { quoteRows, rowsFor, short, RANGES, LADDER, type QRow, type MapSort } from "./model";
+export { quoteRows, rowsFor, short, mapCounts, sidesOf, widthOf, RANGES, LADDER, SORTS, type QRow, type MapSort } from "./model";
 
 /** The desktop map (ECharts), its own chunk: `QuoteMapEC.preload()` fetches it ahead. */
 export const QuoteMapEC = lazyPage<Parameters<typeof import("../QuoteMap").QuoteMap>[0]>(() =>
@@ -25,29 +25,31 @@ export const QuoteMapEC = lazyPage<Parameters<typeof import("../QuoteMap").Quote
 
 type OnSelect = (symbol: string, venue: Venue) => void;
 
-/** The map's legend, one line, on top of the map: Market bid–ask ▬ · Our bid ● · Our ask ● · Through fair ◯ ·
- *  Beyond range ▸. `short` keeps the first three (the phone). */
+/** The map's legend on top of the map: Market Bid–Ask ▬ · Our Bid ● · Our Ask ● · Size = order size ·● ·
+ *  Through fair ◎ · Beyond range ▸. `short` (the phone) leaves out Beyond range and wraps to two lines. */
 export function QuoteLegend({ short = false, className }: { short?: boolean; className?: string }) {
   return (
-    <div className={"q-legend" + (className ? " " + className : "")}>
+    <div className={"q-legend" + (short ? " short" : "") + (className ? " " + className : "")}>
       <span>
-        <i className="q-lg-band" /> Market bid–ask
+        <i className="q-lg-band" /> Market Bid–Ask
       </span>
       <span>
-        <i className="q-lg-dot up" /> Our bid
+        <i className="q-lg-dot up" /> Our Bid
       </span>
       <span>
-        <i className="q-lg-dot down" /> Our ask
+        <i className="q-lg-dot down" /> Our Ask
+      </span>
+      <span title="A dot's area is the order's size (notional)">
+        <i className="q-lg-dot sm" />
+        <i className="q-lg-dot lg" /> Size = order size
+      </span>
+      <span title="An order priced through fair: a bid above it or an ask below it">
+        <i className="q-lg-dot ring" /> Through fair
       </span>
       {!short && (
-        <>
-          <span>
-            <i className="q-lg-dot ring" /> Through fair
-          </span>
-          <span>
-            <i className="q-lg-tri" /> Beyond range
-          </span>
-        </>
+        <span>
+          <i className="q-lg-tri" /> Beyond range
+        </span>
       )}
     </div>
   );
@@ -65,9 +67,16 @@ export interface QuoteMapState {
 /** The map's choices (account, sort, range), remembered on this browser under `ex.qmap.*`. */
 export function useQuoteMapState(): QuoteMapState {
   const [account, setAccount] = useExPref<string | null>("qmap", "account", null);
-  const [sort, setSort] = useExPref<MapSort>("qmap", "sort", "activity", ["activity", "inventory", "name"]);
+  const [sort, setSort] = useExPref<MapSort>("qmap", "sort", "activity", SORTS);
   const [range, setRange] = useExPref<number>("qmap", "range", 25);
   return { account, setAccount, sort, setSort, range, setRange };
+}
+
+/** The map's counts for an account (null: all): rows, orders, rows quoted on one side, wide rows, through fair. */
+export function useMapCounts(account: string | null = null) {
+  const symbols = useStore((s) => s.snap?.symbols);
+  const orders = useStore((s) => s.snap?.orders);
+  return useMemo(() => mapCounts(quoteRows(symbols ?? [], orders ?? [], "name", account)), [symbols, orders, account]);
 }
 
 /** Labelled control groups: `Account All sub-a sub-b · Sort Busiest Inventory A–Z · Range ±10 ±25 ±50 ±100`.
@@ -99,6 +108,8 @@ export function QuoteControls({ st, accounts, compact = false }: { st: QuoteMapS
           onChange={st.setSort}
           options={[
             { value: "activity", label: "Busiest", title: "Most fills today first" },
+            { value: "wide", label: "Widest", title: "Our widest bid–ask first" },
+            { value: "oneside", label: "One side", title: "Instruments quoted on one side only first" },
             { value: "inventory", label: "Inventory" },
             { value: "name", label: "A–Z" },
           ]}
