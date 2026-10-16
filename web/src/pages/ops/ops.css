@@ -535,6 +535,11 @@
 .ops-hedge {
   min-height: 0;
 }
+/* the last column keeps the panel's inset from the right edge */
+.ops-legs .ag-cell:last-child,
+.ops-legs .ag-header-cell:last-child {
+  padding-right: 16px;
+}
 .ops-legs {
   min-height: 90px;
 }

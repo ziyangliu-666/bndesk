@@ -759,7 +759,7 @@ function ExposureChart() {
         intervals={IVS}
         interval={iv}
         onInterval={setIv}
-        toolbarLeft={<span className="ops-chart-title">Exposure (USDT)</span>}
+        toolbarLeft={<span className="ops-chart-title">Exposure today</span>}
         fill
         fullscreen
         emptyText="No series yet"
