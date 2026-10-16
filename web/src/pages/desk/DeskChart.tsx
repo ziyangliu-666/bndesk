@@ -1,13 +1,12 @@
 // The Desk's centre chart with nothing picked: tabs P&L | Equity | Exposure on ExChart, today's minute bars
 // (5 s on Line), intervals, Today | 24h, and legends that show each line's value.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { IChartApi } from "lightweight-charts";
+import { useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, HEDGE_COLOR, INV_COLOR, INVPNL_COLOR, MM_COLOR, S1 } from "../../theme";
-import { ExChart, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
-import { MIN, Stable, accountRows, bucket, dayRows, sameOhlc, sameValue, type Row } from "./model";
-import { MASK, useHide } from "./mask";
+import { ExChart, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries, type ExView } from "../../components/ex";
+import { MIN, Stable, accountRows, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
+import { maskFormat, maskText, useHide } from "../../mask";
 
 type Tab = "pnl" | "equity" | "exposure";
 const TABS: { value: Tab; label: string; title: string }[] = [
@@ -46,8 +45,7 @@ export function DeskChart({ head }: { head?: ReactNode }) {
         <Tabs items={TABS} value={tab} onChange={setTab} />
         {head}
       </div>
-      {/* a new chart when Hide amounts flips: the axis, tags and legend take the masked format */}
-      <DeskSeriesChart key={tab + (hide ? ":h" : "")} tab={tab} hide={hide} />
+      <DeskSeriesChart key={tab} tab={tab} hide={hide} />
     </section>
   );
 }
@@ -67,12 +65,13 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const stable = useRef(new Stable()).current;
 
   // minute rows (the volume pane at every interval), and the 5 s rows for Line
-  const minRows = useMemo(() => dayRows(bars, series, fills, dayStart, MIN), [bars, series, fills, dayStart]);
-  const rows = useMemo(() => (step === 0 ? dayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)), [step, minRows, bars, series, fills, dayStart]);
+  const minRows = useMemo(() => todayRows(bars, series, fills, dayStart, MIN), [bars, series, fills, dayStart]);
+  const rows = useMemo(() => (step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)), [step, minRows, bars, series, fills, dayStart]);
   const volRows = step === 0 ? minRows : rows;
   const volByT = useMemo(() => new Map(volRows.map((r) => [r.t, r])), [volRows]);
 
-  const money = (f: (v: number) => string) => (hide ? () => MASK : f);
+  // the axis, tags and legend read ••• with Hide amounts (ExChart re-reads a format that prints otherwise)
+  const money = (f: (v: number) => string) => maskFormat(hide, f);
   const fPnl = money(pnl);
   const fBig = money((v) => compact(v));
   const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
@@ -115,7 +114,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     const has = (k: "mm" | "hedge") => rows.some((r) => r[k] != null);
     list = [
       day,
-      { key: "trading", kind: "line", label: "Π", color: S1, width: 1, format: fPnl, signColor: false, data: pts("trading", (r) => r.trading) },
+      { key: "trading", kind: "line", label: "Trading", color: S1, width: 1, format: fPnl, signColor: false, data: pts("trading", (r) => r.trading) },
       ...(has("mm")
         ? [
             { key: "mm", kind: "line", label: "MM", color: MM_COLOR, width: 1, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
@@ -164,28 +163,19 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         {
           label: "Gap now",
           title: "Exposure gap: the hedge target minus the hedge symbols' futures notional; the band is its allowed size",
-          value: () => [hide ? MASK : `${pnl(x.gap)} / ±${compact(x.band, 2)}`, x.band != null && Math.abs(x.gap!) > x.band ? C.warn : C.ink2],
+          value: () => [maskText(hide, `${pnl(x.gap)} / ±${compact(x.band, 2)}`), x.band != null && Math.abs(x.gap!) > x.band ? C.warn : C.ink2],
         },
       ];
   }
 
-  // 24h: the whole day on the axis, start to end; Today: the part so far (ExChart's fit)
-  const chart = useRef<IChartApi | null>(null);
+  // 24h: the whole day on the axis, start to end (ExChart holds it as bars come); Today: the part so far (its fit)
   const first = rows[0]?.t;
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const c = chart.current;
-    if (!c || !ready || first == null || !dayStart) return;
-    c.timeScale().applyOptions({ shiftVisibleRangeOnNewBar: range !== "24h" });
-    if (range !== "24h") {
-      c.timeScale().fitContent();
-      return;
-    }
+  const view = useMemo<ExView | null>(() => {
+    if (range !== "24h" || first == null || !dayStart) return null;
     const s = step || 5_000;
     const lead = (first - dayStart) / s;
-    c.timeScale().setVisibleLogicalRange({ from: -lead - 0.5, to: 86_400_000 / s - lead });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, iv, ready, first == null, dayStart]);
+    return { logical: { from: -lead - 0.5, to: 86_400_000 / s - lead } };
+  }, [range, first, dayStart, step]);
 
   return (
     <ExChart
@@ -204,10 +194,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       ]}
       legendExtra={extra}
       fullscreen
-      chartRef={(c) => {
-        chart.current = c;
-        setReady(c != null);
-      }}
+      view={view}
       emptyText="No data yet today"
       style={{ flex: 1, minHeight: 0 }}
     />

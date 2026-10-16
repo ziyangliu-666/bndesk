@@ -9,6 +9,7 @@ import { ExChart, useExPref, type ExSeries } from "../../../components/ex";
 import { C, HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
 import { useLoad } from "../shared";
+import { maskFormat } from "../../../mask";
 import { PNL_STEP, histBars, todayBars, toChart, type PnlData, type PnlIv } from "./pnl";
 
 const IVS: { value: PnlIv; label: string }[] = [
@@ -24,7 +25,6 @@ const RANGES = [
 // bars in view after a load: the whole day for Line and 15m, the last two hours or so otherwise
 const VIEW: Record<PnlIv, number | undefined> = { line: undefined, "1m": 90, "5m": 96, "15m": undefined };
 const VOL = rgba(C.ink2, 0.38);
-const MASK = "•••";
 
 /** The Desk chart. `ms`: how often it takes the store's figures (the page's own pace). */
 export function DeskChart({ ms }: { ms: number }) {
@@ -57,14 +57,15 @@ export function DeskChart({ ms }: { ms: number }) {
     return d;
   }, [day, dayStart, bars, series, fills, step, hist, iv, k]);
 
-  const money = (v: number) => (hide ? MASK : pnl(v));
-  const vol = (v: number) => (hide ? MASK : compact(v));
+  // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
+  const money = maskFormat(hide, (v: number) => pnl(v));
+  const vol = maskFormat(hide, (v: number) => compact(v));
   const label = day ? "Day PnL" : "PnL 24h";
   const s: ExSeries[] = [
     iv === "line"
       ? { key: "day", kind: "baseline", label, data: data.main, format: money, signColor: true, toggle: false }
       : { key: "day", kind: "candles", label, data: data.main, format: money, toggle: false },
-    { key: "trading", kind: "line", label: "Π", color: C.ink2, width: 1, data: data.trading, format: money, signColor: false, lastValue: false },
+    { key: "trading", kind: "line", label: "Trading", color: C.ink2, width: 1, data: data.trading, format: money, signColor: false, lastValue: false },
     { key: "mm", kind: "line", label: "MM", color: MM_COLOR, data: data.mm, format: money, lastValue: false },
     { key: "inv", kind: "line", label: "Inv", color: INVPNL_COLOR, data: data.inv, format: money, lastValue: false },
     { key: "hedge", kind: "line", label: "Hedge", color: HEDGE_COLOR, data: data.hedge, format: money, lastValue: false, lineStyle: "dotted", width: 2 },
@@ -78,8 +79,6 @@ export function DeskChart({ ms }: { ms: number }) {
 
   return (
     <ExChart
-      // a remount when amounts hide or show: the axis takes its formatter at creation
-      key={hide ? "masked" : "shown"}
       id="m-desk"
       title="Desk P&L"
       className="dk-chart"
@@ -98,7 +97,7 @@ export function DeskChart({ ms }: { ms: number }) {
       fullscreen
       touch
       chips={[
-        { key: "trading", label: "Π", color: C.ink2 },
+        { key: "trading", label: "Trading", color: C.ink2 },
         { key: "mm", label: "MM", color: MM_COLOR },
         { key: "inv", label: "Inv", color: INVPNL_COLOR },
         { key: "hedge", label: "Hedge", color: HEDGE_COLOR },

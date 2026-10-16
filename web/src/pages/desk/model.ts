@@ -1,4 +1,4 @@
-// The desk's day as rows for ExChart: today's minute bars (in the snapshot, then one `bars` message a minute),
+// The desk's day as rows for ExChart (the desktop Desk chart and the phone Desk chart alike): today's minute bars (in the snapshot, then one `bars` message a minute),
 // the 5 s series over the minutes they cover, and the fills tape for the volume and fill counts after the last
 // bar. Bucketed to the chart's interval, and kept as the same objects where nothing changed, so ExChart only
 // updates the forming bar.
@@ -29,7 +29,7 @@ export interface Row {
 const minute = (ms: number) => Math.floor(ms / MIN) * MIN;
 
 /** Today's rows at one minute (`step` 60 000) or at the 5 s grid (`step` 0: the series' own points). */
-export function dayRows(bars: DayBars | undefined, series: readonly SeriesPoint[] | undefined, fills: readonly Fill[] | undefined, dayStart: number, step: number): Row[] {
+export function todayRows(bars: DayBars | undefined, series: readonly SeriesPoint[] | undefined, fills: readonly Fill[] | undefined, dayStart: number, step: number): Row[] {
   const rows = new Map<number, Row>();
   const b = bars;
   // the minute bars

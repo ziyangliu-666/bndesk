@@ -4,11 +4,11 @@
 import type { HistBar } from "../../../api";
 import type { DayBars, Fill, SeriesPoint } from "../../../protocol";
 import type { ExOhlc, ExPoint } from "../../../components/ex";
+import { MIN, bucket, todayRows } from "../../desk/model";
 
 export type PnlIv = "line" | "1m" | "5m" | "15m";
 export const PNL_STEP: Record<PnlIv, number> = { line: 60_000, "1m": 60_000, "5m": 300_000, "15m": 900_000 };
 
-const MIN = 60_000;
 
 /** One bar of the chart: Day PnL as OHLC, the parts at the bar's close, the notional filled in it. */
 export interface PnlBar {
@@ -39,79 +39,25 @@ export interface PnlData {
 
 const EMPTY: PnlData = { main: [], trading: [], mm: [], inv: [], hedge: [], rebates: [], vol: [], bars: [] };
 
-/** Today's bars of `step` from the minute bars, the live 5 s series over them, and the fills after the last bar. */
+/**
+ * Today's bars of `step` from the minute bars, the live 5 s series over them, and the fills after the last bar:
+ * the desktop Desk chart's rows (desk/model.ts), so both layouts draw the same bars and the forming minute
+ * follows the 5 s series.
+ */
 export function todayBars(dayStart: number, bars: DayBars | undefined, series: readonly SeriesPoint[] | undefined, fills: readonly Fill[] | undefined, step: number): PnlBar[] {
-  const out = new Map<number, PnlBar>();
-  const at = (t: number, v: number): PnlBar => {
-    const k = Math.floor(t / step) * step;
-    let b = out.get(k);
-    if (!b) out.set(k, (b = { time: k, open: v, high: v, low: v, close: v, trading: null, mm: null, inv: null, hedge: null, rebates: null, vol: 0 }));
-    return b;
-  };
-  const move = (b: PnlBar, v: number) => {
-    b.high = Math.max(b.high, v);
-    b.low = Math.min(b.low, v);
-    b.close = v;
-  };
-  let lastBar = dayStart - MIN;
-  if (bars) {
-    for (let i = 0; i < bars.t.length; i++) {
-      const t = bars.t[i]!;
-      if (t < dayStart) continue;
-      const v = bars.pnl_day[i]!;
-      const b = at(t, v);
-      move(b, v);
-      const pi = bars.trading[i] ?? null;
-      const mm = bars.mm[i] ?? null;
-      if (pi != null) b.trading = pi;
-      if (mm != null) b.mm = mm;
-      if (pi != null && mm != null) b.inv = pi - mm;
-      if (bars.hedge[i] != null) b.hedge = bars.hedge[i]!;
-      b.vol += bars.volume[i] ?? 0;
-      lastBar = t;
-    }
-  }
-  // the 5 s series moves the minutes the bars have not closed yet (and gives the minutes their highs and lows)
-  for (const p of series ?? []) {
-    if (p.t < dayStart) continue;
-    const b = at(p.t, p.pnl_day);
-    if (p.t >= lastBar + MIN) {
-      move(b, p.pnl_day);
-      if (p.trading != null) {
-        b.trading = p.trading;
-        if (b.mm != null) b.inv = p.trading - b.mm;
-      }
-    } else {
-      b.high = Math.max(b.high, p.pnl_day);
-      b.low = Math.min(b.low, p.pnl_day);
-    }
-  }
-  // the notional of the minutes the bars have not closed, from the tape (the last bar's minute may be partial:
-  // the tape's sum when it is the larger)
-  const tape = new Map<number, number>();
-  for (const f of fills ?? []) {
-    if (f.ts < lastBar) break; // newest first
-    const m = Math.floor(f.ts / MIN) * MIN;
-    tape.set(m, (tape.get(m) ?? 0) + f.notional);
-  }
-  const lastVol = bars && bars.t.length && bars.t[bars.t.length - 1] === lastBar ? (bars.volume[bars.volume.length - 1] ?? 0) : 0;
-  for (const [m, v] of tape) {
-    const b = out.get(Math.floor(m / step) * step);
-    if (b) b.vol += m === lastBar ? Math.max(0, v - lastVol) : v;
-  }
-  const list = [...out.values()].sort((a, b) => a.time - b.time);
-  // a bar opens where the last one closed; the parts carry forward over minutes without them
-  for (let i = 1; i < list.length; i++) {
-    const p = list[i - 1]!;
-    const b = list[i]!;
-    b.open = p.close;
-    b.high = Math.max(b.high, b.open);
-    b.low = Math.min(b.low, b.open);
-    b.mm ??= p.mm;
-    b.hedge ??= p.hedge;
-    if (b.inv == null && b.trading != null && b.mm != null) b.inv = b.trading - b.mm;
-  }
-  return list;
+  return bucket(todayRows(bars, series, fills, dayStart, MIN), step).map((r) => ({
+    time: r.t,
+    open: r.o,
+    high: r.h,
+    low: r.l,
+    close: r.c,
+    trading: r.trading,
+    mm: r.mm,
+    inv: r.trading != null && r.mm != null ? r.trading - r.mm : null,
+    hedge: r.hedge,
+    rebates: null,
+    vol: r.vol,
+  }));
 }
 
 /** The last 24 h from /api/history (already bars of the step). */
