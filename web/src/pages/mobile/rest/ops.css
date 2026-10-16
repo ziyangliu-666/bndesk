@@ -61,21 +61,6 @@
   margin-left: auto;
 }
 
-/* a short trend line under a figure */
-.o-trend {
-  padding: 4px 0 10px;
-}
-.o-trend-head {
-  display: flex;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-  padding-bottom: 4px;
-}
-.o-trend-head span:last-child {
-  margin-left: auto;
-}
-
 /* More: grouped rows */
 .o-set {
   display: flex;

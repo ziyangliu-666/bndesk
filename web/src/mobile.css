@@ -124,16 +124,6 @@ html.is-phone body {
   font-weight: 400;
   color: var(--muted);
 }
-.m-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.m-brand-mark {
-  width: 20px;
-  height: 20px;
-  flex: none;
-}
 
 /* stale: the figures dim and the bar says how old they are */
 .m-asof {
@@ -362,13 +352,17 @@ html.is-phone body {
   display: grid;
   place-items: center;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  background: var(--warn);
-  color: #1a1102;
+  /* warnings only: a quiet count in ink on a raised disc with a muted ring (amber read as an exchange's
+     yellow); a critical alert makes it red */
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--muted);
 }
 .m-badge.crit {
+  box-shadow: none;
   background: var(--crit);
   color: #fff;
 }
@@ -435,30 +429,24 @@ html.is-phone body {
 }
 /* the body is a grid with the figure-row columns (label · bar · value): figure rows take them as a subgrid so
    bars and values line up down the section; every other child spans the full width */
-.m-body,
-.m-card {
+.m-body {
   margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
   display: grid;
   grid-template-columns: var(--m-lab) minmax(0, 1fr) minmax(var(--m-val), max-content);
   column-gap: 12px;
 }
-.m-body > *,
-.m-card > * {
+.m-body > * {
   grid-column: 1 / -1;
   min-width: 0;
 }
 .m-body > .m-split,
-.m-body > .m-lim:not(.compact),
-.m-card > .m-split,
-.m-card > .m-lim:not(.compact) {
+.m-body > .m-lim:not(.compact) {
   grid-template-columns: subgrid;
 }
 .m-section > .m-body:last-child {
   margin-bottom: 4px;
 }
-.m-pad {
-  padding: 12px var(--m-pad-r) 12px var(--m-pad-l);
-}
+
 .m-empty {
   padding: 12px var(--m-pad-r) 14px var(--m-pad-l);
   color: var(--muted);
@@ -485,7 +473,6 @@ html.is-phone body {
 .m-split-row + .m-split-row::before,
 .m-row + .m-row::before,
 .m-lim + .m-lim::before,
-.m-set + .m-set::before,
 .m-body > * + .m-row::before,
 .m-body > * + .m-lim::before,
 .m-body > * + .m-split > .m-split-row:first-child::before {
@@ -932,12 +919,6 @@ a.m-row:active,
 .m-tag.crit {
   color: var(--crit);
 }
-.m-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-}
 
 /* ---- key / value grid ---- */
 .m-kv {
@@ -1132,51 +1113,6 @@ a.m-row:active,
   visibility: hidden;
 }
 
-/* ---- settings rows (More) ---- */
-.m-set {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 52px;
-  padding: 6px var(--m-pad-r) 6px var(--m-pad-l);
-  font-size: 15px;
-  color: var(--ink);
-  text-align: left;
-}
-.m-set-label {
-  flex: 1;
-  min-width: 0;
-}
-.m-set-label small {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-}
-button.m-set:active {
-  background: var(--raised);
-}
-.m-set.danger {
-  color: var(--down);
-}
-.m-version {
-  position: relative;
-  margin-top: 8px;
-  padding-top: 12px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-.m-version::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: calc(-1 * var(--m-pad-l));
-  right: calc(-1 * var(--m-pad-r));
-  border-top: 1px solid var(--rule);
-}
-
 /* ---- sheet (Mantine Drawer at the bottom) ---- */
 .m-sheet {
   flex: 0 0 100%;
@@ -1187,8 +1123,7 @@ button.m-set:active {
   flex-direction: column;
   background: var(--m-sheet);
   border-top: 1px solid var(--rule);
-  border-radius: 14px 14px 0 0;
-  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.6);
+  border-radius: 6px 6px 0 0;
   color: var(--ink);
   font-size: var(--m-font);
 }

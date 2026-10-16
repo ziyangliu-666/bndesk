@@ -1,16 +1,12 @@
 // Pieces more than one phone page shows (an instrument row, a fill, the account and alert definitions, the
 // engine's figures, the history loader). Kept here so each page stays its own chunk.
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
-  DefinedLabel,
   InfoLabel,
   defineProps,
   KV,
   LimitBar,
   ListRow,
-  Money,
-  RateMeter,
-  Section,
   Sheet,
   showInfo,
   Side,
@@ -20,11 +16,10 @@ import {
   useMoney,
 } from "../../components/mobile";
 import { Dot } from "../../components/ui";
-import { bps, hms, int, num, price } from "../../format";
+import { bps, hms, int, num, price, stepName } from "../../format";
 import { useQty } from "../../mask";
-import { instPnl as instPnlOf } from "../../selectors";
 import { usePageVisible } from "../../hooks";
-import type { Account, Alert, Engine, Feed, Fill, Markouts, Position, SymbolRow } from "../../protocol";
+import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../protocol";
 import { useStore } from "../../store";
 import { HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
 import "./ops.css";
@@ -74,12 +69,6 @@ export function useLoad<T>(key: string | null, run: (signal: AbortSignal) => Pro
   return st;
 }
 
-/** Empty, error and first-load states over a chart. */
-export function ChartState({ load, empty }: { load: Load<unknown>; empty: boolean }) {
-  const text = load.err && load.data == null ? "Could not load history" : load.loading && load.data == null ? "Loading" : empty ? "No data in this range" : null;
-  return text ? <div className="m-hist-state">{text}</div> : null;
-}
-
 // the parts of a day, in the desk's series colors (the chart's legend uses the same)
 export const PARTS = [
   { key: "mm", label: "Market making", short: "MM", color: MM_COLOR },
@@ -100,8 +89,6 @@ export const PART_INFO: Record<PartKey, string> = {
 
 // ---- instruments and fills (Desk, Instruments, Instrument) ----
 
-/** An instrument's spot PnL today: market making plus inventory (selectors.instPnl). */
-const instPnl = (r: SymbolRow) => instPnlOf(r, null);
 
 /** "BTCUSDT perp", with "dust" when the balance is below the minimum notional. */
 export function InstName({ r }: { r: Pick<SymbolRow, "symbol" | "venue" | "dust"> }) {
@@ -132,21 +119,6 @@ export { useQty };
 export function useAccountLabel(id: string): string {
   return useStore((s) => s.snap?.accounts.find((a) => a.id === id)?.label ?? id);
 }
-
-/** One instrument: name / "inventory 4.2k · 10 s +0.8 bps"; PnL / a second figure (`side`, default the fills). */
-// memoized: a patch keeps the rows that did not change, so a list re-renders the rows that did
-export const InstrumentRow = memo(function InstrumentRow({ r, pnl, sub, side }: { r: SymbolRow; pnl?: number | null; sub?: ReactNode; side?: ReactNode }) {
-  const money = useMoney();
-  return (
-    <ListRow
-      title={<InstName r={r} />}
-      subtitle={sub ?? `inventory ${money(r.inv_value, "short")} · 10 s ${bps(r.mk10_bps)} bps`}
-      primary={<Money v={pnl === undefined ? instPnl(r) : pnl} />}
-      secondary={side ?? `${int(r.fills_day)} fills`}
-      to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
-    />
-  );
-});
 
 /** The figure a fill row shows at the right of its second line: the edge, or one markout horizon. */
 export type FillFig = "edge" | keyof Markouts;
@@ -353,111 +325,6 @@ export function pctDigits(shares: number[]): number {
   return new Set(r).size < r.length ? 1 : 0;
 }
 
-/** Each account's order rate against Binance's limits, one row per account under the measure's heading: Orders
- *  10 s as "17 / 100", Orders 1 d as a percentage. The headings carry the definitions; the rows only read. */
-export function RateSections({ accounts }: { accounts: Account[] }) {
-  if (!accounts.length) return null;
-  const lim1d = accounts.find((a) => a.orders_1d_limit > 0)?.orders_1d_limit;
-  const digits = pctDigits(accounts.filter((a) => a.orders_1d_limit > 0).map((a) => a.orders_1d / a.orders_1d_limit));
-  return (
-    <>
-      <Section title="Orders 10 s" info={`${TIP.o10} Amber from 80 %, red at the limit.`}>
-        {accounts.map((a) => (
-          <RateMeter key={a.id} label={a.label} value={a.orders_10s} limit={a.orders_10s_limit} />
-        ))}
-      </Section>
-      <Section
-        title="Orders 1 d"
-        info={`${TIP.o1d}${lim1d ? ` The limit is ${lim1d >= 10_000 ? `${int(lim1d / 1000)}k` : int(lim1d)} orders a day.` : ""} Amber from 80 %, red at the limit.`}
-      >
-        {accounts.map((a) => (
-          <RateMeter key={a.id} label={a.label} value={a.orders_1d} limit={a.orders_1d_limit} pct digits={digits} />
-        ))}
-      </Section>
-    </>
-  );
-}
-
-// ---- figure table: a name column and up to three right-aligned figure columns, a second line per row ----
-
-export interface FigCol {
-  label: string;
-  info?: string;
-}
-export interface FigRow {
-  key: string;
-  title: ReactNode;
-  cells: ReactNode[];
-  /** A muted line under the row, across the full width. */
-  sub?: ReactNode;
-  tone?: "warn";
-}
-
-/** Columns line up from row to row (one grid); the header labels open their definitions. */
-export function FigTable({ head, cols, rows }: { head?: ReactNode; cols: FigCol[]; rows: FigRow[] }) {
-  return (
-    <div className="m-ftab" style={{ ["--ft-n" as string]: cols.length }}>
-      <div className="m-ftab-head">
-        <span>{head}</span>
-        {cols.map((c) => (
-          <span key={c.label} className={"m-ftab-h" + (c.info ? " m-tap" : "")} {...defineProps(c.label, c.info)}>
-            <DefinedLabel label={c.label} info={c.info} />
-          </span>
-        ))}
-      </div>
-      {rows.map((r) => (
-        <div key={r.key} className={"m-ftab-row" + (r.sub ? " two" : "") + (r.tone ? " " + r.tone : "")}>
-          <span className="m-ftab-title">{r.title}</span>
-          {r.cells.map((c, i) => (
-            <span key={i} className="m-ftab-cell m-fig">
-              {c}
-            </span>
-          ))}
-          {r.sub != null && <span className="m-ftab-sub m-fig">{r.sub}</span>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export type PosRow = Position & { account: string };
-
-export function PositionsTable({ rows, showAccount }: { rows: PosRow[]; showAccount: boolean }) {
-  const q = useQty();
-  return (
-    <FigTable
-      cols={[
-        { label: "Notional", info: TIP.notional },
-        { label: "uPnL", info: TIP.upnl },
-        { label: "Today", info: TIP.today },
-      ]}
-      rows={rows.map((p) => ({
-        key: p.account + ":" + p.symbol,
-        title: (
-          <>
-            {p.symbol}
-            <Tag>
-              <Side side={p.amt >= 0 ? "buy" : "sell"} words={["long", "short"]} />
-            </Tag>
-          </>
-        ),
-        cells: [
-          <Money v={p.notional} kind="pnlShort" color={false} />,
-          <Money v={p.upnl} kind="pnlShort" />,
-          <Money v={p.pnl_day} kind="pnlShort" />,
-        ],
-        sub: (
-          <>
-            {showAccount && <span className="m-ftab-acc">{p.account}</span>}
-            {q(p.amt, true)} · entry {price(p.entry)} · mark {price(p.mark)}
-          </>
-        ),
-      }))}
-    />
-  );
-}
-
-
 // ---- engine figures (Engine, Alert) ----
 
 /** Microseconds as "11.4 µs" or "7.90 ms". */
@@ -606,11 +473,6 @@ export function EngineFacts({ e, spike }: { e: Engine; spike?: boolean }) {
 const ENGINE_BOOKS =
   "The engine's own books, since it started: they differ from the Desk's Day PnL, which is the accounts' equity change since the day start, net of transfers, and includes the hedge and rebates.";
 
-// the engine's step names, in words
-const STEP: Record<string, string> = {
-  "md to decision": "market data to decision",
-  "decision to send": "decision to send",
-};
 
 /** True while an active engine alert on this engine says its venue rejects spiked. */
 export function useRejectSpike(name: string): boolean {
@@ -638,7 +500,7 @@ export function LatencyTable({ e, p99Limit }: { e: Engine; p99Limit?: number | n
       </div>
       {e.latency.map((l) => (
         <div className="m-ops-tr" role="row" key={l.name}>
-          <span role="cell">{STEP[l.name] ?? l.name}</span>
+          <span role="cell">{stepName(l.name)}</span>
           <span role="cell" className="m-fig">{us(l.p50_us)}</span>
           <span
             role="cell"

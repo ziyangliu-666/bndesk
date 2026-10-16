@@ -13,10 +13,6 @@
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
-.r-bleed {
-  margin-left: calc(-1 * var(--m-pad-l));
-  margin-right: calc(-1 * var(--m-pad-r));
-}
 
 /* ---- page tabs: 44 px, the accent underline under the active one ---- */
 .r-tabs {
@@ -55,22 +51,6 @@
   font-size: 14px;
 }
 
-/* ---- a control row under the tabs: text toggles left and right (7D 30D … | Daily Cumulative) ---- */
-.r-ctl {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  margin: 0 calc(-1 * var(--m-pad-r) + 4px) 0 calc(-1 * var(--m-pad-l) + 6px);
-}
-.r-ctl .ex-tt button {
-  font-size: 14px;
-  padding: 10px 10px;
-  min-width: 40px;
-}
-.r-ctl > :last-child:not(:first-child) {
-  margin-left: auto;
-}
-
 /* ---- section ---- */
 .r-sec {
   position: relative;
@@ -80,7 +60,6 @@
 }
 .r-sec:first-child,
 .r-tabs + .r-sec,
-.r-tabs + .r-ctl + .r-sec,
 .r-sec.flush {
   border-top: 0;
 }
@@ -119,8 +98,7 @@ button.r-head-t {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.r-head-r a,
-.r-head-r button.r-link {
+.r-head-r a {
   color: var(--accent);
 }
 

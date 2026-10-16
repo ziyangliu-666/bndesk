@@ -1,8 +1,6 @@
-import { useRef, type MouseEvent, type ReactNode } from "react";
-import { useStore } from "../store";
+import { type ReactNode } from "react";
 import { IconAlertTriangle, IconInfoCircle, IconAlertOctagon } from "@tabler/icons-react";
 import { C } from "../theme";
-import { signClass } from "../format";
 
 export function Panel({
   title,
@@ -46,11 +44,6 @@ export function Legend({ items }: { items: { color: string; label: string; kind?
   );
 }
 
-/** A signed figure: sign is always in the text; color agrees. */
-export function Num({ v, text, className }: { v: number | null | undefined; text: string; className?: string }) {
-  return <span className={"num " + signClass(v) + " " + (className ?? "")}>{text}</span>;
-}
-
 /** Thin meter. Fill goes amber above 80 %, red at or above 100 %. */
 export function Meter({ value, limit, width }: { value: number; limit: number; width?: number | string }) {
   const r = limit > 0 ? value / limit : 0;
@@ -92,65 +85,4 @@ export function refLabel(ref: string | null | undefined): string {
   if (!ref) return "none";
   const [venue, sym] = ref.includes(":") ? ref.split(":", 2) : ["usdm", ref];
   return `${sym} ${venue === "usdm" ? "perp" : "spot"}`;
-}
-
-/** Instrument name with a muted perp suffix, so a spot pair and its perp never read the same. */
-export function InstrumentName({ symbol, venue }: { symbol: string; venue: string }) {
-  return (
-    <span className="sym">
-      {symbol}
-      {venue === "usdm" && <span className="sym-suffix">perp</span>}
-    </span>
-  );
-}
-
-const NONE: string[] = [];
-
-/**
- * Show / hide a chart's series from its legend words, kept per chart in the store.
- * Click toggles one; Alt-click or double-click shows only that one, and again shows all.
- */
-export function useSeriesToggle(chart: string, names: string[], initial: string[] = NONE) {
-  const hidden = useStore((s) => s.hidden[chart] ?? initial);
-  const before = useRef<string[]>(hidden);
-  const set = (h: string[]) => useStore.getState().setHidden(chart, h);
-  const solo = (name: string, from: string[]) => {
-    const others = names.filter((n) => n !== name);
-    const isSolo = !from.includes(name) && others.every((n) => from.includes(n));
-    set(isSolo ? [] : others);
-  };
-  const click = (name: string, e: MouseEvent) => {
-    e.preventDefault();
-    if (e.altKey) return solo(name, hidden);
-    if (e.detail === 2) return solo(name, before.current);
-    before.current = hidden;
-    set(hidden.includes(name) ? hidden.filter((n) => n !== name) : [...hidden, name]);
-  };
-  const off = (name: string) => hidden.includes(name);
-  return { hidden, off, click };
-}
-
-/** A series name in its line color; click to show or hide the series. */
-export function SeriesWord({
-  name,
-  label,
-  color,
-  t,
-}: {
-  name: string;
-  label?: string;
-  color?: string;
-  t: ReturnType<typeof useSeriesToggle>;
-}) {
-  return (
-    <span
-      className={"sw" + (t.off(name) ? " off" : "")}
-      style={color ? { color } : undefined}
-      onClick={(e) => t.click(name, e)}
-      onMouseDown={(e) => e.detail > 1 && e.preventDefault()}
-      title="Click to show or hide; Alt-click or double-click to show only this one"
-    >
-      {label ?? name}
-    </span>
-  );
 }

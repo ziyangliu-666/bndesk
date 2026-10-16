@@ -3,7 +3,6 @@ import {
   ModuleRegistry,
   provideGlobalGridOptions,
   type CellClassParams,
-  type GridOptions,
   type ValueFormatterParams,
 } from "ag-grid-community";
 import { DASH, age, bps, hms, int, pnl, price, qty, usd, signClass } from "./format";
@@ -26,7 +25,6 @@ export const fBps: VF = (p) => bps(v(p));
 export const fBpsU: VF = (p) => bps(v(p), false);
 export const fInt: VF = (p) => int(v(p));
 export const fPrice: VF = (p) => price(v(p));
-export const fQty: VF = (p) => qty(v(p));
 export const fQtyS: VF = (p) => qty(v(p), true);
 export const fTime: VF = (p) => hms(v(p), useStore.getState().tz);
 export const fAge: VF = (p) => {
@@ -79,18 +77,6 @@ export const DEFAULT_COL_PHONE = {
   suppressMovable: true,
   suppressHeaderContextMenu: true,
 } as const;
-
-/** Spread on a phone's AgGridReact with `theme={gridThemePhone}` and `defaultColDef={DEFAULT_COL_PHONE}`. Hover
- *  tooltips never show on touch: put the headerTooltip text behind an Info label instead. */
-export const PHONE_GRID_PROPS = {
-  suppressMovableColumns: true,
-  suppressColumnMoveAnimation: true,
-  suppressDragLeaveHidesColumns: true,
-  suppressCellFocus: true,
-  enableCellTextSelection: false,
-} as const satisfies GridOptions;
-
-export const numCol = { type: "rightAligned", cellClass: "num" } as const;
 
 /** Turn fixed widths into minimum widths that share leftover space, so grids fill their panel. */
 export function flexCols<T extends object>(cols: T[]): T[] {

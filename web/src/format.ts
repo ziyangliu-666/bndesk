@@ -109,6 +109,9 @@ export function pct(v: number | null | undefined, d = 0): string {
   return fmtFixed(v * 100, d) + "%";
 }
 
+/** An engine latency step's name in words ("md to decision" → "market data to decision"), the same on every page. */
+export const stepName = (name: string) => (name === "md to decision" ? "market data to decision" : name);
+
 // ---- time ----
 
 export type TzMode = "utc" | "local";

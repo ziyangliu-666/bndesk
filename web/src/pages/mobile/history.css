@@ -1,11 +1,4 @@
-.m-hist-state {
-  position: absolute;
-  left: 0;
-  top: 64px;
-  padding: 0 4px;
-  font-size: 13px;
-  color: var(--muted);
-}
+
 /* a day: date / bar + fills left, day PnL right */
 .m-hist-day .m-row-main {
   gap: 6px;

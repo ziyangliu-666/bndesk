@@ -322,14 +322,7 @@
   line-height: 20px;
   color: var(--ink);
 }
-.ops-hero-sub {
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--muted);
-}
-.ops-hero-sub .fig {
-  margin-left: 4px;
-}
+
 .ops-hero .ops-pairs {
   padding-bottom: 2px;
 }
@@ -396,9 +389,7 @@
 .ops-bridge {
   padding: 4px 4px 4px 4px;
 }
-.ops-acc-grid {
-  flex: none;
-}
+
 .ops-target {
   font-size: 12px;
   color: var(--muted);
@@ -493,9 +484,6 @@
 }
 .ops-legs {
   min-height: 90px;
-}
-.ops-funding {
-  margin-top: 12px;
 }
 
 /* narrow or short windows: the page scrolls (styles.css), so the regions that fill a box get a height */
