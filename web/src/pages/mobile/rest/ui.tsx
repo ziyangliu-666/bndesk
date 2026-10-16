@@ -212,3 +212,25 @@ export function Empty({ children }: { children: ReactNode }) {
 
 /** The figure tone of a limit use: ok, warn ≥ 80 %, crit ≥ 100 %. */
 export const limitCls = (u: number | null | undefined): "" | "warn" | "crit" => (u == null ? "" : u >= 1 ? "crit" : u >= 0.8 ? "warn" : "");
+
+/**
+ * A use against its limit on one line: label, value (`17 / 100` or `37.0%`) and a thin bar under them;
+ * neutral grey, amber from 80 %, red at the limit.
+ */
+export function Meter({ label, value, limit, pct, digits = 1, sub }: { label: ReactNode; value: number; limit: number; pct?: boolean; digits?: number; sub?: ReactNode }) {
+  const u = limit > 0 ? value / limit : null;
+  const tone = limitCls(u);
+  const text = u == null ? NA : pct ? `${(u * 100).toFixed(digits)}%` : `${num(value)} / ${num(limit)}`;
+  return (
+    <div className={"r-meter " + tone}>
+      <div className="r-meter-line">
+        <span className="r-meter-l">{label}</span>
+        {sub != null && <span className="r-meter-s">{sub}</span>}
+        <span className="r-meter-v r-fig">{text}</span>
+      </div>
+      <div className="r-meter-track" aria-hidden>
+        <span style={{ width: `${Math.min(1, u ?? 0) * 100}%` }} />
+      </div>
+    </div>
+  );
+}

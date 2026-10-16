@@ -373,6 +373,64 @@ button.r-stat-l::after {
   background: var(--ground);
 }
 
+/* ---- a use against its limit ---- */
+.r-meter {
+  position: relative;
+  padding: 8px 0 10px;
+}
+.r-meter + .r-meter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: calc(-1 * var(--m-pad-r));
+  border-top: 1px solid var(--rule);
+}
+.r-meter-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 22px;
+}
+.r-meter-l {
+  font-size: 14px;
+  color: var(--ink);
+}
+.r-meter-s {
+  font-size: 12px;
+  color: var(--muted);
+}
+.r-meter-v {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--ink);
+}
+.r-meter.warn .r-meter-v {
+  color: var(--warn);
+}
+.r-meter.crit .r-meter-v {
+  color: var(--crit);
+}
+.r-meter-track {
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--m-track);
+  overflow: hidden;
+}
+.r-meter-track span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--muted);
+}
+.r-meter.warn .r-meter-track span {
+  background: var(--warn);
+}
+.r-meter.crit .r-meter-track span {
+  background: var(--crit);
+}
+
 /* ---- a text action at the right of a line (Hide / Show) ---- */
 .r-act {
   min-width: 44px;

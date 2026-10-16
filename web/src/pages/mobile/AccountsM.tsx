@@ -1,432 +1,297 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import type uPlot from "uplot";
-import { useStore } from "../../store";
+import { useMemo } from "react";
+import { navigate, useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { DASH, bps, hm, hms, int, num, pct, price } from "../../format";
-import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, S1 } from "../../theme";
-import { UPlot, axis, tooltipPlugin, touchCursorPlugin } from "../../components/UPlot";
-import { timeAxis, usdTicks } from "../../components/uplotAxes";
-import { Dot } from "../../components/ui";
-import {
-  Chips,
-  Hero,
-  KV,
-  LazyMount,
-  LimitBar,
-  ListRow,
-  Money,
-  Section,
-  SplitRows,
-  Tag,
-  defineProps,
-  limitTone,
-  span,
-  useLive,
-  useMoney,
-  type KVItem,
-} from "../../components/mobile";
-import type { Account, Exposure, HedgeLeg } from "../../protocol";
-import { bandDef, FigTable, PositionsTable, type PosRow, RateSections, TIP, useQty } from "./shared";
+import { bps, hms, int, num, pct, price } from "../../format";
+import { showInfo, span, useLive } from "../../components/mobile";
+import type { Account, Exposure } from "../../protocol";
+import { TIP, bandDef, useQty } from "./shared";
+import { Amt, Big, Empty, PageTabs, Row, Sec, Stats, limitCls, pctSigned, useAmt } from "./rest/ui";
+import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
+import { useExPref } from "../../components/ex";
 import "./accounts.css";
+
+type Tab = "accounts" | "spot" | "futures" | "exposure";
+const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: the desk's own estimate, may differ from the engine's." : "β: configured per market.";
 
-// ---- an account: name and day PnL, equity and bid use; its order rates are in the sections below ----
+/** Assets: the desk's total value and today's PnL, then Accounts | Spot | Futures | Exposure. */
+export function AccountsM() {
+  const sm = useStore((s) => s.snap?.summary);
+  const accounts = useLive((s) => s.snap?.accounts, 250);
+  const [tab, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
+  const money = useAmt();
+  const open = sm ? sm.equity - sm.pnl_day : null;
+  const nPos = (accounts ?? []).reduce((n, a) => n + a.positions.length, 0);
+
+  return (
+    <>
+      <Big
+        label={
+          <>
+            Est. total value (USDT)
+            <Eye />
+          </>
+        }
+        value={money(sm?.equity, "full")}
+        sub={
+          <button type="button" className="a-today" onClick={() => navigate({ page: "history" })}>
+            Today's PnL <Amt v={sm?.pnl_day} />
+            <span className={"r-fig " + (sm && open ? (sm.pnl_day > 0 ? "up" : sm.pnl_day < 0 ? "down" : "") : "")}>
+              ({sm && open ? pctSigned(sm.pnl_day / open) : "--"})
+            </span>
+          </button>
+        }
+      />
+      <PageTabs
+        items={[
+          { value: "accounts", label: "Accounts" },
+          { value: "spot", label: "Spot" },
+          { value: "futures", label: "Futures", count: nPos || null },
+          { value: "exposure", label: "Exposure" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {accounts &&
+        (tab === "accounts" ? <AccountsTab accounts={accounts} /> : tab === "spot" ? <SpotTab accounts={accounts} /> : tab === "futures" ? <FuturesTab accounts={accounts} /> : <ExposureTab accounts={accounts} />)}
+    </>
+  );
+}
+
+// ---- Accounts ----
+
+function AccountsTab({ accounts }: { accounts: Account[] }) {
+  const now = useNow(1000) + useStore.getState().skew;
+  return (
+    <>
+      <Sec flush>
+        {accounts.map((a) => (
+          <AccountRow key={a.id} a={a} now={now} />
+        ))}
+      </Sec>
+      <Sec>
+        <AccountsChart accounts={accounts} />
+      </Sec>
+      <Sec>
+        <DeskChart what="equity" />
+      </Sec>
+    </>
+  );
+}
 
 function AccountRow({ a, now }: { a: Account; now: number }) {
-  const money = useMoney();
-  const old = now - a.updated > 30_000;
+  const money = useAmt();
   const util = a.utilization != null && Number.isFinite(a.utilization) ? a.utilization : null;
-  const ut = util != null ? limitTone(util, 1) : "ok";
+  const ut = limitCls(util);
+  const old = now - a.updated > 30_000;
   return (
-    <ListRow
-      dot={<Dot ok={a.user_stream !== "down"} />}
+    <Row
       title={
         <>
           {a.label}
-          {a.role === "master" && <Tag>master</Tag>}
+          {a.role === "master" && <span className="r-tag">Master</span>}
+          {a.user_stream === "down" && <span className="r-tag crit">Stream down</span>}
         </>
       }
-      subtitle={
+      sub={
         <>
-          equity {money(a.equity, "short")}
-          {util != null && (
-            <span className={ut === "ok" ? "" : ut === "warn" ? "warn-text" : "m-acc-crit"}> · bid use {pct(util, 0)}</span>
-          )}
-          {a.user_stream === "down" && <span className="warn-text"> · stream down</span>}
-          {old && <span className="warn-text"> · updated {span(now - a.updated)} ago</span>}
+          Equity {money(a.equity, "full")}
+          {old && <span className="warn-text"> · {span(now - a.updated)} old</span>}
         </>
       }
-      primary={<Money v={a.pnl_day} />}
+      value={<Amt v={a.pnl_day} />}
+      valueSub={util != null ? <span className={ut === "crit" ? "crit-text" : ut === "warn" ? "warn-text" : ""}>Bid use {pct(util, 0)}</span> : undefined}
       to={{ page: "assets", detail: { kind: "account", id: a.id } }}
     />
   );
 }
 
-// ---- charts: one at a time ----
+// ---- Spot: USDT and the inventory, by asset ----
 
-type ChartKey = "equity" | "accounts" | "inventory";
-
-const CHART_H = 220;
-
-/** A zero line on signed charts. */
-const zeroLine: uPlot.Plugin = {
-  hooks: {
-    draw: (u) => {
-      const y = Math.round(u.valToPos(0, "y", true)) + 0.5;
-      const { top, height, left, width } = u.bbox;
-      if (y <= top || y >= top + height) return;
-      const ctx = u.ctx;
-      ctx.save();
-      ctx.strokeStyle = "#4a5870";
-      ctx.lineWidth = devicePixelRatio;
-      ctx.beginPath();
-      ctx.moveTo(left, y);
-      ctx.lineTo(left + width, y);
-      ctx.stroke();
-      ctx.restore();
-    },
-  },
-};
-
-interface Line {
-  label: string;
-  color: string;
-}
-
-/** `rest`: what the readout line shows while no finger reads a time: the latest point, a key of the lines with
- *  their latest values (several lines), or nothing (the latest value is on the page already). */
-function Plot({
-  lines,
-  data,
-  signed,
-  wrap,
-  rest = "latest",
-}: {
-  lines: Line[];
-  data: uPlot.AlignedData;
-  signed: boolean;
-  wrap?: boolean;
-  rest?: "latest" | "key" | "none";
-}) {
-  const tz = useStore((s) => s.tz);
-  const hide = useStore((s) => s.hideAmounts);
-  const money = useMoney();
-  const read = useRef<HTMLDivElement>(null);
-  const key = lines.map((l) => l.label).join("|");
-  const options = useCallback(
-    (width: number, height: number): uPlot.Options => {
-      const ticks = usdTicks(signed);
-      return {
-        width,
-        height,
-        padding: [8, 4, 0, 0],
-        legend: { show: false },
-        cursor: { y: false, points: { size: 7, width: 2, stroke: C.panel }, drag: { x: false, y: false } },
-        scales: {
-          x: { time: false },
-          y: {
-            range: (_u, min, max) => {
-              const pad = Math.max(1, (max - min) * 0.08);
-              return signed ? [Math.min(0, min) - pad, Math.max(0, max) + pad] : [min - pad, max + pad];
-            },
-          },
-        },
-        axes: [
-          timeAxis(tz, { space: 64 }),
-          axis({ size: 48, values: (u, s, a, sp, inc) => (hide ? s.map(() => "") : ticks(u, s, a, sp, inc)) }),
-        ],
-        series: [{}, ...lines.map((l) => ({ label: l.label, stroke: l.color, width: 1.75, spanGaps: true, points: { show: false } }))],
-        plugins: [
-          ...(signed ? [zeroLine] : []),
-          touchCursorPlugin(),
-          tooltipPlugin(
-            (u, i) => {
-              const t = u.data[0][i];
-              if (t == null) return null;
-              return {
-                title: hm(t * 1000, tz) + (tz === "utc" ? " UTC" : ""),
-                rows: lines.map((l, k) => ({
-                  color: l.color,
-                  label: l.label,
-                  value: money(u.data[k + 1]![i] ?? null, signed ? "pnl" : "usd"),
-                })),
-              };
-            },
-            { mode: "strip", strip: read.current, rest },
-          ),
-        ],
-      };
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tz, hide, money, key, signed, rest],
+function SpotTab({ accounts }: { accounts: Account[] }) {
+  const symbols = useLive((s) => s.snap?.symbols, 1000);
+  const money = useAmt();
+  const q = useQty();
+  const t = accounts.reduce((m, a) => ({ free: m.free + a.quote_free, locked: m.locked + a.quote_locked, inv: m.inv + a.inventory_value }), { free: 0, locked: 0, inv: 0 });
+  const held = useMemo(
+    () => (symbols ?? []).filter((r) => r.venue === "spot" && Math.abs(r.inv_value) >= 1).sort((a, b) => Math.abs(b.inv_value) - Math.abs(a.inv_value)),
+    [symbols],
   );
-  return (
-    <div className="m-acc-chart">
-      <div ref={read} className={"m-acc-read m-fig" + (wrap ? " wrap" : "")} />
-      <div className="m-acc-plot m-dim" style={{ height: CHART_H }}>
-        <UPlot options={options} data={data} />
-      </div>
-    </div>
-  );
-}
-
-function SeriesPlot({ k }: { k: ChartKey }) {
-  const series = useStore((s) => s.snap?.series);
-  const all = useStore((s) => s.snap?.account_series);
-  const accounts = useStore((s) => s.snap?.accounts);
-  const desk = useMemo<uPlot.AlignedData>(() => {
-    const pts = series ?? [];
-    return k === "equity"
-      ? [pts.map((p) => p.t / 1000), pts.map((p) => p.equity)]
-      : [pts.map((p) => p.t / 1000), pts.map((p) => p.inventory), pts.map((p) => p.futures_notional)];
-  }, [series, k]);
-  // the accounts in list order, at most six lines, on one time grid
-  const shown = useMemo(() => {
-    const by = new Map((all ?? []).map((a) => [a.account, a]));
-    return (accounts ?? []).filter((a) => by.has(a.id)).slice(0, ACCOUNT_SERIES.length).map((a) => ({ label: a.label, s: by.get(a.id)! }));
-  }, [all, accounts]);
-  const perAccount = useMemo<uPlot.AlignedData>(() => {
-    const ts = Array.from(new Set(shown.flatMap((x) => x.s.t))).sort((a, b) => a - b);
-    const idx = new Map(ts.map((t, i) => [t, i]));
-    const cols = shown.map((x) => {
-      const col = new Array<number | null>(ts.length).fill(null);
-      x.s.t.forEach((t, i) => (col[idx.get(t)!] = x.s.pnl_day[i]!));
-      return col;
-    });
-    return [ts.map((t) => t / 1000), ...cols];
-  }, [shown]);
-  const accLines = useMemo(() => shown.map((x, i) => ({ label: x.label, color: ACCOUNT_SERIES[i]! })), [shown]);
-  if (k === "accounts") {
-    if (!shown.length) return <div className="m-empty">No account series yet</div>;
-    return <Plot lines={accLines} data={perAccount} signed wrap rest="key" />;
-  }
-  if (!series?.length) return <div className="m-empty">No series yet</div>;
-  return k === "equity" ? <Plot lines={EQ} data={desk} signed={false} rest="none" /> : <Plot lines={INV} data={desk} signed />;
-}
-
-const EQ: Line[] = [{ label: "Equity", color: S1 }];
-const INV: Line[] = [
-  { label: "Inventory", color: INV_COLOR },
-  { label: "Futures", color: FUT_COLOR },
-];
-
-const CHART_INFO: Record<ChartKey, string> = {
-  equity: "Desk equity since the day start, all accounts, USDT.",
-  accounts:
-    "Each account's day PnL: equity minus equity at the day start, minus net transfers in. Points every 45 s. USDT.",
-  inventory: "Spot inventory value at mid and futures net notional, all accounts, USDT.",
-};
-
-function Charts() {
-  const [k, setK] = useState<ChartKey>("equity");
-  return (
-    <Section
-      // the chips name the chart; the heading only says the scope
-      title="Charts"
-      info={`Equity: ${CHART_INFO.equity}\n\nDay PnL by account: ${CHART_INFO.accounts}\n\nInventory: ${CHART_INFO.inventory}`}
-      right="today, USDT"
-      card={false}
-    >
-      <Chips
-        label="Chart"
-        value={k}
-        onChange={setK}
-        data={[
-          { value: "equity", label: "Equity" },
-          { value: "accounts", label: "Day PnL by account" },
-          { value: "inventory", label: "Inventory" },
-        ]}
-      />
-      <LazyMount height={CHART_H + 48}>
-        <SeriesPlot key={k} k={k} />
-      </LazyMount>
-    </Section>
-  );
-}
-
-// ---- the page ----
-
-export function AccountsM() {
-  const sm = useStore((s) => s.snap?.summary);
-  const x = useStore((s) => s.snap?.exposure);
-  const accounts = useLive((s) => s.snap?.accounts, 250);
-  const tz = useStore((s) => s.tz);
-  const now = useNow(1000) + useStore.getState().skew;
-  const money = useMoney();
-  const positions = useMemo<PosRow[]>(
-    () => (accounts ?? []).flatMap((a) => a.positions.map((p) => ({ ...p, account: a.label }))),
-    [accounts],
-  );
-  if (!sm || !x || !accounts) return null;
-  const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? id;
-  const hasGap = x.gap != null && x.band != null;
-  // the account with the largest net exposure, either way
-  const top = x.by_account.reduce<(typeof x.by_account)[number] | null>((m, r) => (!m || Math.abs(r.net) > Math.abs(m.net) ? r : m), null);
-
-  // the next funding of any held perp
-  const nextF = x.funding.reduce<number | null>((m, f) => (f.next != null && (m == null || f.next < m) ? f.next : m), null);
-  const fundingInfo =
-    "Funding on the perps held, per interval.\n\n" +
-    (x.funding.length
-      ? x.funding
-          .map(
-            (f) =>
-              `${f.symbol}: rate ${f.rate == null ? DASH : bps(f.rate * 1e4) + " bps"}, position ${num(f.position, 4, true)}, ` +
-              `next ${f.next == null ? DASH : `${hms(f.next, tz)} (${span(f.next - now)})`}`,
-          )
-          .join("\n\n")
-      : "No perps held.");
-
-  const totals: KVItem[] = [
-    {
-      label: "Net exposure",
-      info: `Spot inventory value plus futures net notional, all accounts: spot ${money(x.spot_value, "usd")} + futures ${money(x.futures_notional)}. USDT.`,
-      value: <Money v={x.net} color={false} />,
-    },
-  ];
-  if (x.target != null)
-    totals.push({
-      label: "Hedge target",
-      info:
-        `Hedge target: −${num(x.ratio, 2)} × beta-weighted spot value (${money(x.beta_value, "usd")}). ${betaNote(x)} ` +
-        `The hedge symbols' futures notional now: ${money(x.hedge_notional)}. USDT.`,
-      value: <Money v={x.target} color={false} />,
-    });
-  totals.push({
-    label: "Funding in",
-    info: fundingInfo,
-    value: nextF != null ? span(nextF - now) : DASH,
-  });
-
-  const hd = x.hedge_day;
-  const inv = sm.pnl.inventory;
-  const offset = hd && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
-
   return (
     <>
-      <Section>
-        <Hero
-          label="Desk equity"
-          info={`${TIP.equity} All accounts. Day: ${TIP.dayPnl}`}
-          v={sm.equity}
-          kind="usd"
-          sub={
-            <>
-              day <Money v={sm.pnl_day} />
-            </>
-          }
-        />
-        {hasGap && x.paused ? (
-          <LimitBar
-            label={x.paused}
-            info={
-              `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed` +
-              `${x.paused_until != null ? `, until ${hm(x.paused_until, tz)}` : ""}. Band: ±${money(x.band, "usd")}. USDT.`
-            }
-            value={x.hedge_notional}
-            limit={x.band!}
-            centered
-          />
-        ) : hasGap ? (
-          <LimitBar
-            label="Exposure gap"
-            info={
-              `Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is ` +
-              `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "usd"))} USDT.`
-            }
-            value={x.gap!}
-            limit={x.band!}
-            centered
-          />
-        ) : null}
-        <KV cols={totals.length as 2 | 3} items={totals} />
-      </Section>
-
-      <Section
-        title="Accounts"
-        info={`Day PnL: ${TIP.dayPnl}\n\nEquity: ${TIP.equity}\n\nBid use: ${TIP.bid} Near 100 %, there is little USDT left to bid with.`}
-        right="day PnL"
-      >
-        {accounts.map((a) => (
-          <AccountRow key={a.id} a={a} now={now} />
-        ))}
-      </Section>
-
-      <RateSections accounts={accounts.filter((a) => a.orders_10s_limit > 0 || a.orders_1d_limit > 0)} />
-
-      {positions.length > 0 && (
-        <Section title="Futures positions">
-          <PositionsTable rows={positions} showAccount />
-        </Section>
-      )}
-
-      <Section
-        title="Exposure"
-        info="Spot inventory value and futures net notional per account, USDT. The account with the largest net exposure either way is named at the right."
-        right={top ? <>largest net: {labelOf(top.account)}</> : undefined}
-      >
-        <FigTable
-          head="Account"
-          cols={[
-            { label: "Spot", info: "Spot inventory value at mid, USDT." },
-            { label: "Futures", info: "Futures net notional, signed, USDT." },
-            { label: "Net", info: "Spot value + futures notional, USDT." },
+      <Sec flush>
+        <Stats
+          cols={3}
+          items={[
+            { label: "Inventory", info: "Non-quote spot assets, free + locked, at mid, all accounts, USDT.", value: money(t.inv, "full") },
+            { label: "USDT free", value: money(t.free, "full") },
+            { label: "USDT locked", info: "Spot quote balance locked in open orders, USDT.", value: money(t.locked, "full") },
           ]}
-          rows={x.by_account.map((r) => ({
-            key: r.account,
-            title: r === top ? <b>{labelOf(r.account)}</b> : labelOf(r.account),
-            cells: [
-              <Money v={r.spot_value} kind="short" />,
-              <Money v={r.futures_notional} kind="pnlShort" color={false} />,
-              <Money v={r.net} kind="pnlShort" color={false} />,
-            ],
-          }))}
         />
-      </Section>
-
-      {hd && (
-        <Section
-          title="Inventory and hedge, today"
-          info="Since the day start: the Inventory PnL of the Desk, against what the futures legs made."
-          right={offset != null ? <span {...defineProps("Hedge offset", "How much of the Inventory PnL the hedge offset: −Hedge ÷ Inventory PnL. 100 % cancels it exactly; over 100 %, the hedge made more than the inventory lost (or lost more than it made).")} className="m-tap m-acc-offset"><span className="m-defined">hedge offset {pct(offset, 0)}</span></span> : undefined}
-        >
-          <SplitRows
-            waterfall
-            rows={[
-              { key: "inv", label: "Inventory PnL", info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill.", v: inv },
-              { key: "hedge", label: "Hedge", info: "The futures legs since the day start: price at mark, minus fees, plus funding.", v: hd.hedge_pnl },
-            ]}
-            total={{ label: "Net", info: "Inventory PnL plus the hedge.", v: inv + (hd.hedge_pnl ?? 0) }}
-          />
-          {hd.legs.length > 0 && <Legs legs={hd.legs} />}
-        </Section>
-      )}
-
-      <Charts />
+      </Sec>
+      <Sec title="Holdings" right="value · today">
+        {held.map((r) => {
+          const base = r.symbol.replace(/USDT$/, "");
+          return (
+            <Row
+              key={r.symbol}
+              title={
+                <>
+                  {base}
+                  {r.dust && <span className="r-tag">Dust</span>}
+                </>
+              }
+              sub={`${q(r.inv_qty)} ${base}${r.avg_cost ? ` · avg ${price(r.avg_cost)}` : ""}`}
+              value={<Amt v={r.inv_value} kind="full" />}
+              valueSub={<Amt v={r.trading_pnl} />}
+              to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: "spot" } }}
+            />
+          );
+        })}
+        {!held.length && <Empty>No spot inventory</Empty>}
+      </Sec>
     </>
   );
 }
 
-/** The hedge legs: only what the positions above don't show (the day start's size, today's fills, fees and the
- *  day start's mark); size now, mark now and today's P&L are in the positions. */
-function Legs({ legs }: { legs: HedgeLeg[] }) {
+// ---- Futures: margin, positions, today's hedge legs, funding ----
+
+function FuturesTab({ accounts }: { accounts: Account[] }) {
+  const x = useStore((s) => s.snap?.exposure);
+  const tz = useStore((s) => s.tz);
+  const now = useNow(1000) + useStore.getState().skew;
+  const money = useAmt();
   const q = useQty();
+  const t = accounts.reduce((m, a) => ({ w: m.w + a.fut_wallet, u: m.u + a.fut_upnl, av: m.av + a.fut_available }), { w: 0, u: 0, av: 0 });
+  const pos = accounts.flatMap((a) => a.positions.map((p) => ({ p, a })));
+  const hd = x?.hedge_day;
   return (
-    <FigTable
-      head="Leg"
-      cols={[
-        { label: "Start", info: "Position at the day start, base-asset units." },
-        { label: "Fills", info: "Futures fills today." },
-        { label: "Fees", info: "Fees today, a cost, USDT." },
-      ]}
-      rows={legs.map((l) => ({
-        key: l.symbol,
-        title: l.symbol,
-        cells: [q(l.qty0, true), int(l.fills), <Money v={-l.fees} kind="pnlShort" />],
-        sub: <>mark at the day start {price(l.mark0)}</>,
-      }))}
-    />
+    <>
+      <Sec flush>
+        <Stats
+          cols={3}
+          items={[
+            { label: "Wallet", info: "USD-M futures wallet balance, all accounts, USDT.", value: money(t.w, "full") },
+            { label: "uPnL", info: TIP.upnl, value: <Amt v={t.u} /> },
+            { label: "Available", value: money(t.av, "full") },
+          ]}
+        />
+      </Sec>
+      <Sec title="Positions" info={`uPnL: ${TIP.upnl}\n\nToday: ${TIP.today}`} right="uPnL · today">
+        {pos.map(({ p, a }) => (
+          <PositionRow key={a.id + p.symbol} p={p} account={a.label} />
+        ))}
+        {!pos.length && <Empty>No open positions</Empty>}
+      </Sec>
+      {hd && hd.legs.length > 0 && (
+        <Sec title="Hedge legs today" info="Since the day start: the position at the day start, today's fills and fees, and the day start's mark." right="fills · fees">
+          {hd.legs.map((l) => (
+            <Row
+              key={l.symbol}
+              dense
+              title={l.symbol}
+              sub={`start ${q(l.qty0, true)} · mark then ${price(l.mark0)}`}
+              value={<span className="r-fig">{int(l.fills)}</span>}
+              valueSub={<Amt v={-l.fees} />}
+            />
+          ))}
+        </Sec>
+      )}
+      {x && x.funding.length > 0 && (
+        <Sec title="Funding" right="rate · next">
+          {x.funding.map((f) => (
+            <Row
+              key={f.symbol}
+              dense
+              title={f.symbol}
+              sub={`position ${q(f.position, true)}`}
+              value={<span className="r-fig">{f.rate == null ? "--" : `${bps(f.rate * 1e4)} bps`}</span>}
+              valueSub={f.next == null ? "--" : `${hms(f.next, tz)} · in ${span(f.next - now)}`}
+            />
+          ))}
+        </Sec>
+      )}
+    </>
+  );
+}
+
+// ---- Exposure: the gap against its band, the hedge, by account ----
+
+function ExposureTab({ accounts }: { accounts: Account[] }) {
+  const x = useStore((s) => s.snap?.exposure);
+  const sm = useStore((s) => s.snap?.summary);
+  const tz = useStore((s) => s.tz);
+  const money = useAmt();
+  if (!x || !sm) return null;
+  const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? id;
+  const hd = x.hedge_day;
+  const inv = sm.pnl.inventory;
+  const offset = hd && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
+  const gapInfo = x.paused
+    ? `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed` +
+      `${x.paused_until != null ? `, until ${hms(x.paused_until, tz)}` : ""}. USDT.`
+    : `Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is ` +
+      `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "full"))} USDT.`;
+  return (
+    <>
+      <Sec flush>
+        {x.band != null && (x.gap != null || x.paused) && (
+          <GapBar
+            label={x.paused ? `Hedge to close (${x.paused})` : "Exposure gap"}
+            value={x.paused ? x.hedge_notional : x.gap}
+            band={x.band}
+            onLabel={() => showInfo(x.paused ? "Hedge to close" : "Exposure gap", gapInfo)}
+          />
+        )}
+        <Stats
+          cols={3}
+          items={[
+            { label: "Net exposure", info: `Spot inventory value plus futures net notional, all accounts. USDT.`, value: <Amt v={x.net} plain /> },
+            {
+              label: "Hedge target",
+              info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} USDT.`,
+              value: <Amt v={x.target} plain />,
+            },
+            { label: "Hedge", info: "Futures notional of the hedge symbols, USDT.", value: <Amt v={x.hedge_notional} plain /> },
+            { label: "Spot value", value: money(x.spot_value, "full") },
+            { label: "Futures", value: <Amt v={x.futures_notional} plain /> },
+            { label: "Spot × beta", info: "The spot inventory's value with each market weighted by its beta to the hedge instrument. USDT.", value: money(x.beta_value, "full") },
+          ]}
+        />
+      </Sec>
+      {hd && (
+        <Sec
+          title="Inventory and hedge today"
+          info="Since the day start: the Inventory PnL of the Desk against what the futures legs made. Offset: −Hedge ÷ Inventory PnL; 100 % cancels it exactly."
+        >
+          <Stats
+            cols={4}
+            items={[
+              { label: "Inventory", value: <Amt v={inv} /> },
+              { label: "Hedge", value: <Amt v={hd.hedge_pnl} /> },
+              { label: "Net", value: <Amt v={inv + (hd.hedge_pnl ?? 0)} /> },
+              { label: "Offset", value: offset != null ? pct(offset, 0) : "--" },
+            ]}
+          />
+        </Sec>
+      )}
+      <Sec title="By account" right="spot · futures · net">
+        {x.by_account.map((r) => (
+          <Row
+            key={r.account}
+            dense
+            title={labelOf(r.account)}
+            sub={`Spot ${money(r.spot_value, "k")} · Futures ${money(r.futures_notional, "pnlK")}`}
+            value={<Amt v={r.net} kind="pnlK" plain />}
+            to={{ page: "assets", detail: { kind: "account", id: r.account } }}
+          />
+        ))}
+      </Sec>
+      <Sec>
+        <DeskChart what="exposure" />
+      </Sec>
+    </>
   );
 }
