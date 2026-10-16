@@ -8,7 +8,7 @@ import { C, S1 } from "../theme";
 import type { SymbolRow } from "../protocol";
 import { Tabs, useExHidden, useExPref } from "../components/ex";
 import { refLabel } from "../components/ui";
-import { maskText } from "../mask";
+import { maskFormat, maskText } from "../mask";
 import { Curve, type CurveSeries } from "./analysis/Curve";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
@@ -28,6 +28,7 @@ const TOX_DEF =
 const bp = (v: number | null | undefined) => (v == null ? "--" : bps(v));
 const fb = (v: number) => bp(v);
 const hz = (h: number) => (h === 0 ? "fill" : `${h} s`);
+const MK_HIDDEN = ["fast", "raw"];
 
 export function Markouts() {
   const [tab, setTab] = useExPref<Tab>("analysis", "tab", "markouts", TABS);
@@ -56,7 +57,8 @@ export function Markouts() {
 
 function MarkoutsTab() {
   const mk = useStore((s) => s.snap?.markouts);
-  const mkHidden = useExHidden("an-mk");
+  // Net 0.2 s and Raw run on top of Net 1 s most days: off until asked for, so the lines read apart
+  const mkHidden = useExHidden("an-mk", MK_HIDDEN);
   const toxHidden = useExHidden("an-tox");
   const cats = useMemo(() => (mk?.horizons ?? [1, 10, 60, 300]).map(hz), [mk?.horizons]);
   const series = useMemo<CurveSeries[]>(
@@ -87,7 +89,7 @@ function MarkoutsTab() {
   type TRow = { key: string; label: string; v: (number | null)[]; fills?: boolean };
   const toxRows: TRow[] = tox ? [{ key: "d", label: "D(h)", v: tox.bps }, { key: "n", label: "Fills", v: tox.fills, fills: true }] : [];
   const toxCols: SCol<TRow>[] = [
-    { key: "l", label: "", left: true, cell: (r) => (r.fills ? r.label : <span className="dotted" title={TOX_DEF}>{r.label}</span>) },
+    { key: "l", label: "", left: true, cell: (r) => (r.fills ? r.label : <span title={TOX_DEF}>{r.label}</span>) },
     ...toxCats.map((c, i): SCol<TRow> => ({
       key: c,
       label: c,
@@ -104,7 +106,7 @@ function MarkoutsTab() {
             Markout by horizon
           </span>
         </div>
-        <Curve categories={cats} series={series} hidden={mkHidden.hidden} onToggle={mkHidden.toggle} axisFormat={(v) => num(v, 1)} heading={(c) => `At ${c}`} />
+        <Curve categories={cats} series={series} hidden={mkHidden.hidden} onToggle={mkHidden.toggle} axisFormat={(v) => num(v, 1, true)} unit="bps" heading={(c) => `At ${c}`} />
       </div>
       <div className="an-cell an-tox-chart">
         <div className="an-sub">
@@ -117,7 +119,8 @@ function MarkoutsTab() {
           series={toxSeries}
           hidden={toxHidden.hidden}
           onToggle={toxHidden.toggle}
-          axisFormat={(v) => num(v, 1)}
+          axisFormat={(v) => num(v, 1, true)}
+          unit="bps"
           heading={(c) => (c === "fill" ? "At the fill" : `At ${c}`)}
         />
       </div>
@@ -138,6 +141,7 @@ type Hour = { hour: number; fills: number; mk10: number | null; mk60: number | n
 function HourTab() {
   const mk = useStore((s) => s.snap?.markouts);
   const hidden = useExHidden("an-hour");
+  const hide = useStore((s) => s.hideAmounts);
   // the hours so far today, empty ones included (a gap in the bars reads as a quiet hour)
   const hours = useMemo<Hour[]>(() => {
     const by = new Map((mk?.by_hour ?? []).map((h) => [h.hour, h]));
@@ -149,17 +153,17 @@ function HourTab() {
   const cats = hours.map((h) => `${String(h.hour).padStart(2, "0")}:00`);
   const series = useMemo<CurveSeries[]>(
     () => [
-      { key: "pnl", label: "PnL 60 s", kind: "bar", signBars: true, signValue: true, color: C.up, data: hours.map((h) => (h.fills ? h.pnl : null)), format: (v) => num(v, 2, true), title: "60 s markout × notional, USDT: a diagnostic, not PnL" },
+      { key: "pnl", label: "PnL 60 s", kind: "bar", signBars: !hide, signValue: !hide, color: hide ? C.muted : C.up, data: hours.map((h) => (h.fills ? h.pnl : null)), format: maskFormat(hide, (v) => num(v, 2, true)), title: "60 s markout × notional, USDT: a diagnostic, not PnL" },
       { key: "fills", label: "Fills", color: S1, data: hours.map((h) => h.fills), format: (v) => int(v), axis: 1, title: "Fills in the hour, on the left axis" },
     ],
-    [hours],
+    [hours, hide],
   );
   const cols: SCol<Hour>[] = [
     { key: "h", label: "Hour", title: "UTC hour", left: true, cell: (h) => `${String(h.hour).padStart(2, "0")}:00`, sort: (h) => h.hour },
     { key: "f", label: "Fills", cell: (h) => int(h.fills), cls: () => "fig", sort: (h) => h.fills },
     { key: "m10", label: "10 s", title: "Markout at 10 s, net 1 s, bps", cell: (h) => bp(h.mk10), cls: (h) => "fig " + signClass(h.mk10), sort: (h) => h.mk10 },
     { key: "m60", label: "60 s", title: "Markout at 60 s, net 1 s, bps", cell: (h) => bp(h.mk60), cls: (h) => "fig " + signClass(h.mk60), sort: (h) => h.mk60 },
-    { key: "p", label: "PnL 60 s", dot: true, title: "60 s markout × notional, USDT: a diagnostic, not PnL", cell: (h) => (h.fills ? num(h.pnl, 2, true) : "--"), cls: (h) => "fig " + signClass(h.pnl), sort: (h) => (h.fills ? h.pnl : null) },
+    { key: "p", label: "PnL 60 s", dot: true, title: "60 s markout × notional, USDT: a diagnostic, not PnL", cell: (h) => (h.fills ? maskText(hide, num(h.pnl, 2, true)) : "--"), cls: (h) => "fig " + (hide ? "masked" : signClass(h.pnl)), sort: hide ? undefined : (h) => (h.fills ? h.pnl : null) },
   ];
   const rows = hours.filter((h) => h.fills > 0);
   return (
@@ -178,7 +182,9 @@ function HourTab() {
           series={series}
           hidden={hidden.hidden}
           onToggle={hidden.toggle}
-          axisFormat={(v) => num(v, 2)}
+          axisFormat={maskFormat(hide, (v) => num(v, 2, true))}
+          unit="USDT"
+          unit2="Fills"
           axis2Format={(v) => compact(v, 1)}
           heading={(c) => `${c} UTC`}
         />
