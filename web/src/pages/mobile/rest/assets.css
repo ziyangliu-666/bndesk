@@ -9,17 +9,17 @@
   border: 0;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 .a-today::after {
   content: "›";
   margin-left: 2px;
-  font-size: 16px;
+  font-size: 14px;
   color: var(--muted);
 }
 .a-today .r-fig {
-  font-size: 13px;
+  font-size: 14px;
 }
 .a-side {
   flex: none;
@@ -28,7 +28,7 @@
 }
 .a-chart-t {
   padding-left: 16px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink-2);
   white-space: nowrap;
@@ -53,12 +53,12 @@
   border: 0;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .a-gap-v {
   margin-left: auto;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
 }
 .a-gap-v .of {

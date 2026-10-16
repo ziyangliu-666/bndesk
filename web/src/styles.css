@@ -25,7 +25,7 @@ body,
 }
 body {
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: 12px;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -214,7 +214,7 @@ kbd {
   outline-offset: -1px;
 }
 kbd {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   border: 1px solid var(--rule);
   border-radius: 3px;
@@ -278,7 +278,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-2);
   min-width: 0;
 }
@@ -312,7 +312,7 @@ kbd {
 .legend {
   display: inline-flex;
   gap: 14px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-2);
 }
 .legend-item {
@@ -330,14 +330,6 @@ kbd {
   width: 10px;
   height: 10px;
   border-radius: 2px;
-}
-
-/* uPlot host + tooltip */
-.uplot-host {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  position: relative;
 }
 
 /* grid cell content */
@@ -407,7 +399,7 @@ kbd {
   min-width: 30px;
 }
 .meter-num {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-2);
   min-width: 38px;
   text-align: right;
@@ -486,7 +478,7 @@ kbd {
 }
 .alert-act {
   justify-self: end;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 16px;
   color: var(--muted);
 }
@@ -495,7 +487,7 @@ kbd {
 }
 .alert-age {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* quick filter */
@@ -526,15 +518,15 @@ kbd {
 }
 .bridge-label {
   fill: var(--ink-2);
-  font-size: 13px;
+  font-size: 12px;
 }
 .bridge-unit {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .bridge-value {
   fill: var(--ink);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .kill {
@@ -680,65 +672,6 @@ kbd {
   .ag-cell {
     -webkit-tap-highlight-color: transparent;
   }
-}
-
-/* the phone's one toggle look (mobile.css .m-seg): a dark track, the active segment raised, no frames */
-.lwc-chips {
-  position: relative;
-  isolation: isolate;
-  display: inline-flex;
-  flex: none;
-  gap: 2px;
-  padding: 0 3px;
-}
-.lwc-chips::before {
-  content: "";
-  position: absolute;
-  inset: 3px 0;
-  z-index: -1;
-  border-radius: 6px;
-  background: #10141a;
-}
-.lwc-chips button {
-  position: relative;
-  isolation: isolate;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  min-width: 48px;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  white-space: nowrap;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.lwc-chips button::before {
-  content: "";
-  position: absolute;
-  inset: 6px 0;
-  z-index: -1;
-  border-radius: 4px;
-}
-.lwc-chips button:active::before {
-  background: var(--raised);
-}
-.lwc-chips button.on {
-  color: var(--ink);
-}
-.lwc-chips button.on::before {
-  background: #232a35;
-}
-.lwc-chips button:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.lwc-host {
-  position: absolute;
-  inset: 0;
 }
 
 .qmap.qmap-phone {

@@ -132,7 +132,7 @@ function useEdgeBack() {
       const el = e.target instanceof Element ? e.target : null;
       from =
         e.touches.length === 1 && t && t.clientX <= 24 && isSub(useStore.getState().route) &&
-        !el?.closest(".m-sheet, .lwc-host, .uplot-host, .m-chips, .lwc-chips, " + TEXT_FIELD)
+        !el?.closest(".m-sheet, .ex-host, .m-chips, .ex-chips, " + TEXT_FIELD)
           ? { x: t.clientX, y: t.clientY }
           : null;
     };

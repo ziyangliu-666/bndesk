@@ -61,7 +61,7 @@
   min-height: 36px;
   padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
   border-top: 1px solid var(--rule);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink);
 }
 .m-pin svg {

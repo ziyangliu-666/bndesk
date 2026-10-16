@@ -111,8 +111,8 @@ html.is-phone body {
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 500;
   letter-spacing: -0.005em;
   white-space: nowrap;
   overflow: hidden;
@@ -120,7 +120,7 @@ html.is-phone body {
 }
 .m-title .m-title-sub {
   margin-left: 6px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -198,7 +198,7 @@ html.is-phone body {
   height: 44px;
   padding: 0 4px 0 8px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--ink-2);
   white-space: nowrap;
@@ -345,7 +345,7 @@ html.is-phone body {
   box-sizing: content-box;
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -392,8 +392,8 @@ html.is-phone body {
 .m-section-title {
   display: flex;
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
 }
@@ -417,7 +417,7 @@ html.is-phone body {
   height: 44px;
   margin: 0 calc(-1 * var(--m-pad-r)) 0 0;
   padding: 0 var(--m-pad-r) 0 12px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--accent);
 }
@@ -447,7 +447,7 @@ html.is-phone body {
 .m-empty {
   padding: 12px var(--m-pad-r) 14px var(--m-pad-l);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 .m-coming {
   display: flex;
@@ -455,7 +455,7 @@ html.is-phone body {
   gap: 4px;
   padding: 16px var(--m-pad-r) 16px var(--m-pad-l);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 .m-coming b {
   color: var(--ink-2);
@@ -535,7 +535,7 @@ a.m-row:active,
   margin-bottom: -4px;
 }
 .m-def {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--ink-2);
 }
@@ -552,7 +552,7 @@ a.m-row:active,
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .m-hero-label .m-info {
@@ -569,8 +569,8 @@ a.m-row:active,
   column-gap: 12px;
 }
 .m-hero-value {
-  font-size: 34px;
-  font-weight: 600;
+  font-size: 32px;
+  font-weight: 500;
   line-height: 1.15;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
@@ -578,7 +578,7 @@ a.m-row:active,
 }
 .m-hero-value .m-unit {
   margin-left: 6px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   letter-spacing: 0;
   color: var(--muted);
@@ -589,7 +589,7 @@ a.m-row:active,
 }
 /* Hide amounts: the hero's "•••" at body size, muted, on the figure's line height */
 .m-hero-value.m-hero-hidden {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 24px;
   letter-spacing: 0;
@@ -600,7 +600,7 @@ a.m-row:active,
 }
 .m-hero-sub {
   margin-left: auto;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -642,17 +642,17 @@ a.m-row:active,
 }
 .m-split-value {
   text-align: right;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .m-split-row.total .m-split-label {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 500;
 }
 .m-split-row.total .m-split-value {
-  font-weight: 600;
+  font-weight: 500;
 }
 .m-dbar {
   position: relative;
@@ -705,7 +705,7 @@ a.m-row:active,
 }
 .m-lim-value {
   text-align: right;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -850,7 +850,7 @@ a.m-row:active,
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
@@ -859,7 +859,7 @@ a.m-row:active,
 }
 .m-row-sub,
 .m-row-sec {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -873,7 +873,7 @@ a.m-row:active,
   -webkit-box-orient: vertical;
 }
 .m-row-pri {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -943,7 +943,7 @@ a.m-row:active,
   text-overflow: ellipsis;
 }
 .m-kv-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -971,10 +971,8 @@ a.m-row:active,
   color: var(--muted);
 }
 
-/* ---- toggles: one look, the desk's flat segments ----
-   A dark track, the active segment raised, no frame around each option. Buttons are 44 px tall for the thumb;
-   the track (.m-seg::before) and the active segment (button::before) are drawn inside them. Chip rows are the
-   same segments on a horizontal scroller that bleeds to the screen edges. */
+/* ---- toggles: one look, text toggles ----
+   Chip rows are the same toggles on a horizontal scroller that bleeds to the screen edges. */
 .m-chips {
   display: flex;
   overflow-x: auto;
@@ -1000,58 +998,50 @@ a.m-row:active,
 .m-chips > .m-seg {
   flex: none;
 }
+/* the text-toggle grammar of the chart toolbars and tabs: no track, no plate; the chosen one ink with a short
+   accent underline, the rest muted. 44 px tall for the thumb. */
 .m-seg {
-  --m-seg-h: 32px;
-  --m-seg-track: #10141a;
-  --m-seg-on: #232a35;
   position: relative;
-  isolation: isolate;
   display: inline-flex;
-  padding: 0 3px;
-  gap: 2px;
-}
-.m-seg::before {
-  content: "";
-  position: absolute;
-  inset: calc((44px - var(--m-seg-h)) / 2 - 3px) 0;
-  z-index: -1;
-  border-radius: 6px;
-  background: var(--m-seg-track);
+  gap: 4px;
 }
 .m-seg.full {
   display: flex;
 }
 .m-seg button {
   position: relative;
-  isolation: isolate;
-  flex: 1 0 auto;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 48px;
+  min-width: 44px;
   height: 44px;
-  padding: 0 12px;
+  padding: 0 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
 }
-.m-seg button::before {
-  content: "";
-  position: absolute;
-  inset: calc((44px - var(--m-seg-h)) / 2) 0;
-  z-index: -1;
-  border-radius: 4px;
+.m-seg.full button {
+  flex: 1 0 auto;
 }
-.m-seg button:active::before {
-  background: var(--raised);
+.m-seg button:active {
+  color: var(--ink-2);
 }
 .m-seg button[aria-pressed="true"] {
   color: var(--ink);
 }
-.m-seg button[aria-pressed="true"]::before {
-  background: var(--m-seg-on);
+.m-seg button[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 16px;
+  height: 2px;
+  margin-left: -8px;
+  border-radius: 1px;
+  background: var(--accent);
 }
 .m-chip-n {
   color: var(--muted);
@@ -1152,8 +1142,8 @@ a.m-row:active,
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 500;
 }
 /* a 32 px disc in a 44 px target */
 .m-sheet-close {
@@ -1193,7 +1183,7 @@ a.m-row:active,
   background: var(--raised);
   border: 1px solid var(--rule);
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
 }
 .m-btn.primary {
@@ -1215,11 +1205,11 @@ a.m-row:active,
   height: 12px;
 }
 .m-status-word {
-  font-size: 22px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 500;
 }
 .m-status-why {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 
@@ -1284,7 +1274,7 @@ a.m-row:active,
   padding: 0 6px 0 0;
   text-align: left;
   background: var(--ground);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--ink-2);
 }
@@ -1302,7 +1292,7 @@ a.m-row:active,
   padding: 0;
 }
 .m-mk tr.sub td {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--muted);
 }

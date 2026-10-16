@@ -30,7 +30,7 @@
   gap: 24px;
 }
 .r-tabs .ex-tab {
-  font-size: 15px;
+  font-size: 14px;
   min-width: 44px;
   justify-content: center;
 }
@@ -166,7 +166,7 @@ button.r-row:active {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 20px;
   color: var(--ink);
@@ -175,7 +175,7 @@ button.r-row:active {
   text-overflow: ellipsis;
 }
 .r-row-v {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 20px;
   font-variant-numeric: tabular-nums;
@@ -256,14 +256,21 @@ button.r-row:active {
   max-width: 100%;
   text-align: left;
 }
-button.r-stat-l {
-  /* a 44 px target around a 16 px label */
-  position: relative;
+/* a defined term's whole cell is the target: label and figure, 44 px tall at least */
+button.r-stat-tap {
+  min-height: 44px;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-button.r-stat-l::after {
-  content: "";
-  position: absolute;
-  inset: -14px -6px;
+button.r-stat-tap:active {
+  opacity: 0.6;
 }
 .r-stat-v {
   font-size: 14px;
@@ -295,7 +302,7 @@ button.r-stat-l::after {
   align-items: center;
   gap: 4px;
   min-height: 20px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .r-big-line {
@@ -304,7 +311,7 @@ button.r-stat-l::after {
   gap: 10px;
 }
 .r-big-v {
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 500;
   line-height: 38px;
   letter-spacing: -0.01em;
@@ -312,14 +319,14 @@ button.r-stat-l::after {
 }
 .r-big-v.masked,
 .r-big-v .masked {
-  font-size: 22px;
+  font-size: 20px;
 }
 .r-big-s {
   display: flex;
   align-items: center;
   gap: 6px;
   min-height: 20px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -340,7 +347,7 @@ button.r-stat-l::after {
 .r-empty {
   padding: 20px 0 24px;
   text-align: center;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 .r-note {
@@ -370,7 +377,7 @@ button.r-stat-l::after {
 .r-head-r .ex-tt button {
   min-height: 44px;
   padding: 0 8px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* ---- a use against its limit ---- */

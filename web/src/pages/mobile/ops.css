@@ -8,14 +8,14 @@
   min-height: 44px;
   padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
   color: var(--crit);
-  font-weight: 600;
+  font-weight: 500;
 }
 /* engine state word in a section head */
 .m-ops-state {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .m-ops-state .dot {
@@ -51,7 +51,7 @@
 }
 .m-ops-tr > :not(:first-child) {
   text-align: right;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink);
 }

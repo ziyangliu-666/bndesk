@@ -139,6 +139,8 @@ export interface Stat {
   tone?: "up" | "down" | "warn" | "crit" | "";
   /** A definition: the label is dotted and a tap opens it. */
   info?: string;
+  /** A tap opens something (a day): the whole cell is the target. */
+  onClick?: () => void;
   /** Columns it spans. */
   span?: number;
 }
@@ -148,17 +150,18 @@ export function Stats({ items, cols = 3, className }: { items: Stat[]; cols?: 2 
   return (
     <div className={"r-stats c" + cols + (className ? " " + className : "")}>
       {items.map((it, i) => {
-        const label = it.info ? (
-          <button type="button" className="r-stat-l r-dotted" onClick={() => showInfo(it.label, it.info)}>
-            {it.label}
+        const style = it.span ? { gridColumn: `span ${it.span}` } : undefined;
+        const value = <span className={"r-stat-v r-fig " + (it.tone ?? "")}>{it.value}</span>;
+        // a defined term: the whole cell (label and figure, 44 px and more) opens its definition
+        return it.info || it.onClick ? (
+          <button key={i} type="button" className="r-stat r-stat-tap" style={style} onClick={it.onClick ?? (() => showInfo(it.label, it.info))}>
+            <span className={"r-stat-l" + (it.info && !it.onClick ? " r-dotted" : "")}>{it.label}</span>
+            {value}
           </button>
         ) : (
-          <span className="r-stat-l">{it.label}</span>
-        );
-        return (
-          <div key={i} className="r-stat" style={it.span ? { gridColumn: `span ${it.span}` } : undefined}>
-            {label}
-            <span className={"r-stat-v r-fig " + (it.tone ?? "")}>{it.value}</span>
+          <div key={i} className="r-stat" style={style}>
+            <span className="r-stat-l">{it.label}</span>
+            {value}
           </div>
         );
       })}

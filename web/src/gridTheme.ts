@@ -8,7 +8,7 @@ export const gridTheme = themeQuartz.withParams({
   headerBackgroundColor: C.panel,
   headerTextColor: C.ink2,
   headerFontWeight: 500,
-  headerFontSize: 11,
+  headerFontSize: 12,
   borderColor: C.rule,
   rowBorder: { color: "#11151b", width: 1, style: "solid" },
   columnBorder: false,
@@ -34,7 +34,7 @@ export const gridTheme = themeQuartz.withParams({
   chromeBackgroundColor: C.panel,
   valueChangeValueHighlightBackgroundColor: "rgba(126,166,246,0.18)",
   pinnedRowBackgroundColor: C.raised,
-  pinnedRowFontWeight: 600,
+  pinnedRowFontWeight: 500,
   headerCellHoverBackgroundColor: C.raised,
   rangeSelectionBorderColor: "transparent",
   headerColumnResizeHandleColor: C.rule,
@@ -44,7 +44,7 @@ export const gridTheme = themeQuartz.withParams({
 export const gridThemePhone = gridTheme.withParams({
   rowHeight: 34,
   headerHeight: 32,
-  fontSize: 13,
+  fontSize: 14,
   headerFontSize: 12,
   cellHorizontalPadding: 8,
 });

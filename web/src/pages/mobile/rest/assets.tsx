@@ -5,7 +5,7 @@ import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useStore } from "../../../store";
 import { useThrottled } from "../../../hooks";
 import { compact, price, qty as fmtQty } from "../../../format";
-import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, S1 } from "../../../theme";
+import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR } from "../../../theme";
 import { ExChart, type ExSeries } from "../../../components/ex";
 import type { Account, Position } from "../../../protocol";
 import { Amt, Row, amt } from "./ui";
@@ -86,7 +86,7 @@ export function DeskChart({ what }: { what: "equity" | "exposure" }) {
   const series = useMemo<ExSeries[]>(() => {
     const k = (v: number) => (hide ? MASK : compact(v, 2));
     if (what === "equity")
-      return [{ key: "eq", kind: "area", label: "Equity", color: S1, toggle: false, format: hide ? () => MASK : (v) => amt(v, "full"), data: raw.map((p) => ({ time: p.t, value: p.equity })) }];
+      return [{ key: "eq", kind: "area", label: "Equity", color: C.ink2, toggle: false, format: hide ? () => MASK : (v) => amt(v, "full"), data: raw.map((p) => ({ time: p.t, value: p.equity })) }];
     return [
       { key: "net", kind: "line", label: "Net", color: C.ink, format: k, data: raw.map((p) => ({ time: p.t, value: p.inventory + p.futures_notional })) },
       { key: "inv", kind: "line", label: "Spot", color: INV_COLOR, format: k, lastValue: false, data: raw.map((p) => ({ time: p.t, value: p.inventory })) },

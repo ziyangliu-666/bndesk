@@ -8,7 +8,7 @@
   padding-top: 1px;
 }
 .o-alert-t {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--ink-2);
 }
@@ -36,7 +36,7 @@
 }
 .o-text p {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 21px;
   color: var(--ink);
 }
@@ -54,7 +54,7 @@
   align-items: center;
   gap: 12px;
   min-height: 48px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 .o-act-line .r-act {
@@ -67,7 +67,7 @@
   align-items: center;
   gap: 12px;
   min-height: 52px;
-  font-size: 15px;
+  font-size: 14px;
 }
 .o-set + .o-set,
 .r-row + .o-set,
@@ -87,7 +87,7 @@
 .o-set .o-logout {
   margin: 0 -8px;
   font-weight: 400;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--down);
 }
 .o-set-sub {
@@ -109,7 +109,7 @@
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* a search box */
@@ -175,7 +175,7 @@
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
 }
 .o-pill.on {
@@ -192,7 +192,7 @@
   flex: none;
 }
 .o-filters .ex-tt button {
-  font-size: 13px;
+  font-size: 14px;
   min-height: 40px;
   padding: 0 8px;
 }
@@ -221,7 +221,7 @@
 .o-page button.m-row:not(:has(.m-row-side))::after {
   content: "Open";
   margin-left: auto;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--accent);
 }
 .o-page .m-section {
@@ -229,7 +229,7 @@
 }
 .o-page .m-link {
   color: var(--accent);
-  font-size: 13px;
+  font-size: 14px;
 }
 .o-page .m-link svg {
   display: none;
@@ -237,11 +237,11 @@
 
 .o-side {
   flex: none;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
 }
 .o-open-l {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--accent);
 }
