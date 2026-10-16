@@ -1,22 +1,28 @@
+import { useSyncExternalStore } from "react";
 import { create } from "zustand";
 import type { AccountSeries, Alert, DayBars, Diff, Fill, Msg, Older, SeriesPoint, Snapshot, Venue } from "./protocol";
 import type { TzMode } from "./format";
 import { isPhoneLayout } from "./responsive";
 
 export type Conn = "connecting" | "live" | "reconnecting";
-/** The desktop's six pages, then the phone-only ones. */
+/** The desktop's six pages, then the phone-only ones. Markets is the phone's instruments list. */
 export type Page =
   | "desk"
   | "history"
-  | "markouts"
+  | "analysis"
   | "orders"
-  | "accounts"
-  | "engine"
+  | "assets"
+  | "system"
   | "alerts"
   | "more"
   | "fills"
-  | "instruments";
-export type DeskPage = "desk" | "history" | "markouts" | "orders" | "accounts" | "engine";
+  | "markets";
+export type DeskPage = "desk" | "history" | "analysis" | "orders" | "assets" | "system";
+/** An instrument: `{ symbol, venue }`. */
+export interface Instrument {
+  symbol: string;
+  venue: Venue;
+}
 
 /** A single thing a page drills into; on the phone each is a full page with a back button. */
 export type Detail =
@@ -37,7 +43,8 @@ export interface Route {
   detail?: Detail;
   /** Fills only: one account's fills (`#/fills/<account>`). */
   account?: string;
-  /** Orders only: one instrument's orders (`#/orders/<SYMBOL>/<venue>`). */
+  /** Orders: one instrument's orders (`#/orders/<SYMBOL>/<venue>`). Desktop Desk: the selected instrument
+   *  (`#/desk/<SYMBOL>/<venue>`; the store's `deskSymbol`). */
   symbol?: string;
   venue?: Venue;
 }
@@ -75,6 +82,12 @@ interface State {
   hiddenAlerts: string[];
   /** Exposure samples since this page opened (last hour). */
   ring: RingPoint[];
+  /** Desktop Desk: the instrument picked in the instruments list (null: the desk as a whole). Kept across page
+   *  switches and reloads; the Desk's hash carries it (`#/desk/<SYMBOL>/<venue>`). Set it with selectInstrument. */
+  deskSymbol: Instrument | null;
+  /** The chart shown fullscreen (ExChart's `id`), or null. Its own history entry, `#/chart/<id>`: Back closes it.
+   *  Open and close with openChart / closeChart. */
+  chart: string | null;
   hideAlert: (a: Alert) => void;
   showAlert: (a: Alert) => void;
   showAllAlerts: () => void;
@@ -299,15 +312,78 @@ function pruneHidden(keys: string[], alerts: Alert[]): { hiddenAlerts: string[] 
   return { hiddenAlerts: keep };
 }
 
+const DESK_SYMBOL_KEY = "desk.deskSymbol";
+function savedDeskSymbol(): Instrument | null {
+  try {
+    const v = JSON.parse((typeof localStorage !== "undefined" && localStorage.getItem(DESK_SYMBOL_KEY)) || "null") as Instrument | null;
+    return v && typeof v.symbol === "string" && (v.venue === "spot" || v.venue === "usdm") ? { symbol: v.symbol, venue: v.venue } : null;
+  } catch {
+    return null;
+  }
+}
+
 const savedTz = (typeof localStorage !== "undefined" && localStorage.getItem("desk.tz")) as TzMode | null;
 const savedHide = typeof localStorage !== "undefined" && localStorage.getItem("desk.hideAmounts") === "1";
 
+// ---- Markets (phone): List | Quotes, remembered on this browser ----
+
+export type MarketsView = "list" | "quotes";
+const MARKETS_VIEW_KEY = "desk.marketsView";
+let marketsView: MarketsView = (() => {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(MARKETS_VIEW_KEY) === "quotes" ? "quotes" : "list";
+  } catch {
+    return "list";
+  }
+})();
+const marketsViewSubs = new Set<() => void>();
+function setMarketsView(v: MarketsView) {
+  if (v === marketsView) return;
+  marketsView = v;
+  try {
+    localStorage.setItem(MARKETS_VIEW_KEY, v);
+  } catch {
+    /* private mode */
+  }
+  marketsViewSubs.forEach((f) => f());
+}
+
+/** Markets' top toggle, `List | Quotes`: `[view, setView]`, remembered on this browser. `#/markets/quotes` sets it. */
+export function useMarketsView(): [MarketsView, (v: MarketsView) => void] {
+  const v = useSyncExternalStore(
+    (f) => (marketsViewSubs.add(f), () => void marketsViewSubs.delete(f)),
+    () => marketsView,
+    () => marketsView,
+  );
+  return [v, setMarketsView];
+}
+
+// ---- a chart fullscreen: #/chart/<id> (openChart, below) ----
+
+const CHART_OWNER_KEY = "desk.chartOwner";
+const chartSheet = (id: string) => "chart:" + id;
+const chartOf = (st: NavState): string | null => (st?.sheet?.startsWith("chart:") ? st.sheet.slice(6) : null);
+
+/** The page a `#/chart/<id>` link (a reload) opens on: the one the chart was opened from on this tab, else the
+ *  Desk. */
+function chartOwner(): Route {
+  try {
+    const h = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(CHART_OWNER_KEY) : null;
+    if (h && !h.startsWith("#/chart")) return routeFromHash(h);
+  } catch {
+    /* private mode */
+  }
+  return { page: "desk" };
+}
+
 // ---- routes: the page lives in the URL hash, so a reload, a shared link or the back button keeps it ----
 
-const PAGES: Page[] = ["desk", "history", "markouts", "orders", "accounts", "engine", "alerts", "more", "fills", "instruments"];
+const PAGES: Page[] = ["desk", "history", "analysis", "orders", "assets", "system", "alerts", "more", "fills", "markets"];
+/** The pages' former names: old links and bookmarks still land. */
+const ALIAS: Record<string, Page> = { markouts: "analysis", accounts: "assets", engine: "system", instruments: "markets" };
 const DETAIL_PAGE: Record<Detail["kind"], Page> = {
   instrument: "desk",
-  account: "accounts",
+  account: "assets",
   day: "history",
   alert: "alerts",
   "history-instrument": "history",
@@ -316,26 +392,27 @@ const DETAIL_PAGE: Record<Detail["kind"], Page> = {
 const ON_DESKTOP: Record<Page, DeskPage> = {
   desk: "desk",
   history: "history",
-  markouts: "markouts",
+  analysis: "analysis",
   orders: "orders",
-  accounts: "accounts",
-  engine: "engine",
-  alerts: "engine",
+  assets: "assets",
+  system: "system",
+  alerts: "system",
   more: "desk",
   fills: "desk",
-  instruments: "desk",
+  markets: "desk",
 };
 export const deskPage = (p: Page): DeskPage => ON_DESKTOP[p];
 
-/** The bottom-bar tab a route belongs to. */
-export type Tab = "desk" | "alerts" | "accounts" | "history" | "more";
+/** The bottom-bar tab a route belongs to (opened on its own: a link, a reload). Alerts have no tab: the bell
+ *  pushes them on the current tab; a link to one opens on the Desk's. */
+export type Tab = "desk" | "markets" | "history" | "assets" | "more";
 export function tabOf(r: Route): Tab {
   switch (r.page) {
     case "desk":
-    case "instruments":
-      return "desk";
     case "alerts":
-    case "accounts":
+      return "desk";
+    case "markets":
+    case "assets":
     case "history":
       return r.page;
     default:
@@ -344,7 +421,7 @@ export function tabOf(r: Route): Tab {
 }
 
 /** A route below a tab's own page: it gets a back button, and opening it pushes a history entry. */
-export const isSub = (r: Route) => r.detail != null || !["desk", "alerts", "accounts", "history", "more"].includes(r.page);
+export const isSub = (r: Route) => r.detail != null || !["desk", "markets", "assets", "history", "more"].includes(r.page);
 
 const venueOf = (v: string | undefined): Venue => (v === "usdm" || v === "perp" ? "usdm" : "spot");
 const enc = encodeURIComponent;
@@ -361,20 +438,26 @@ export function routeFromHash(hash: string): Route {
       }
     });
   const detail = (d: Detail): Route => ({ page: DETAIL_PAGE[d.kind], detail: d });
-  if (head === "instrument" && a) return detail({ kind: "instrument", symbol: a, venue: venueOf(b) });
+  const phone = isPhoneLayout();
+  // an instrument is a page of its own on the phone, the Desk's selection on the desktop
+  if ((head === "instrument" || head === "desk") && a)
+    return phone ? detail({ kind: "instrument", symbol: a, venue: venueOf(b) }) : { page: "desk", symbol: a, venue: venueOf(b) };
+  if (head === "chart") return chartOwner();
+  if (head === "markets" && (a === "quotes" || a === "list")) setMarketsView(a);
   if (head === "account" && a) return detail({ kind: "account", id: a });
   if (head === "day" && a && /^\d{4}-\d{2}-\d{2}$/.test(a)) return detail({ kind: "day", date: a });
   if (head === "alert" && a) return detail({ kind: "alert", id: a });
   if (head === "history" && a) return detail({ kind: "history-instrument", symbol: a, venue: venueOf(b) });
   if (head === "fills" && a) return { page: "fills", account: a };
   if (head === "orders" && a) return { page: "orders", symbol: a, venue: venueOf(b) };
-  return { page: PAGES.includes(head as Page) ? (head as Page) : "desk" };
+  const page = ALIAS[head] ?? head;
+  return { page: PAGES.includes(page as Page) ? (page as Page) : "desk" };
 }
 
 export function hashOf(r: Route): string {
   const d = r.detail;
   if (!d) {
-    if (r.page === "orders" && r.symbol) return `#/orders/${enc(r.symbol)}/${r.venue ?? "spot"}`;
+    if ((r.page === "orders" || r.page === "desk") && r.symbol) return `#/${r.page}/${enc(r.symbol)}/${r.venue ?? "spot"}`;
     return "#/" + r.page + (r.page === "fills" && r.account ? "/" + enc(r.account) : "");
   }
   switch (d.kind) {
@@ -397,11 +480,12 @@ export const sameRoute = (a: Route, b: Route) => hashOf(a) === hashOf(b);
 /** Where back goes when there is no entry of ours to go back to (a deep link opened cold). */
 export function parentOf(r: Route): Route {
   if (r.detail) return { page: r.page };
-  if (r.page === "instruments") return { page: "desk" };
+  if (r.page === "alerts") return { page: "desk" };
   if (isSub(r)) return { page: "more" };
   return r;
 }
 
+const initialChart = typeof location !== "undefined" && location.hash.startsWith("#/chart/") ? decodeURIComponent(location.hash.slice(8)) : null;
 const initialRoute: Route = typeof location !== "undefined" ? routeFromHash(location.hash) : { page: "desk" };
 
 export const useStore = create<State>((set, get) => ({
@@ -418,6 +502,8 @@ export const useStore = create<State>((set, get) => ({
   hidden: savedHidden(),
   hiddenAlerts: savedHiddenAlerts(),
   ring: [],
+  deskSymbol: initialRoute.page === "desk" && initialRoute.symbol ? { symbol: initialRoute.symbol, venue: initialRoute.venue ?? "spot" } : savedDeskSymbol(),
+  chart: null,
   hideAlert: (a) => {
     const keys = get().hiddenAlerts;
     const k = alertKey(a);
@@ -446,7 +532,8 @@ export const useStore = create<State>((set, get) => ({
     localStorage.setItem("desk.tz", tz);
     set({ tz });
   },
-  setPage: (page) => navigate({ page }, { push: false }),
+  // the Desk comes back with its instrument picked (Binance keeps the pair)
+  setPage: (page) => navigate(page === "desk" && !isPhoneLayout() && get().deskSymbol ? { page, ...get().deskSymbol! } : { page }, { push: false }),
   setHideAmounts: (hideAmounts) => {
     localStorage.setItem("desk.hideAmounts", hideAmounts ? "1" : "0");
     set({ hideAmounts });
@@ -563,7 +650,7 @@ export type NavState = { bn?: number; sheet?: string; tab?: Tab } | null;
 const navState = () => history.state as NavState;
 const depth = () => navState()?.bn ?? 0;
 
-const TABS: Tab[] = ["desk", "alerts", "accounts", "history", "more"];
+const TABS: Tab[] = ["desk", "markets", "history", "assets", "more"];
 const rootOf = (tab: Tab): Route => ({ page: tab });
 const isRoot = (r: Route, tab: Tab) => sameRoute(r, rootOf(tab));
 
@@ -612,6 +699,16 @@ useStore.setState({ tab: initialStacks.tab, stacks: initialStacks.stacks });
 if (typeof window !== "undefined") {
   // tag the entry the app opened on (a cold link has nothing of ours below it)
   if (navState()?.bn == null) history.replaceState({ ...(history.state ?? {}), bn: 0, tab: initialStacks.tab } satisfies NavState, "", location.href);
+  // an old page name (#/markouts) or a layout's other form of an instrument: the hash says where we are
+  if (!initialChart && location.hash && location.hash !== hashOf(initialRoute)) history.replaceState(history.state, "", hashOf(initialRoute));
+  // a fullscreen chart's link (a reload): its page below, the chart's entry over it (its ExChart opens on mount)
+  if (initialChart && chartOf(navState()) === initialChart) useStore.setState({ chart: initialChart });
+  else if (initialChart) {
+    const st = navState();
+    history.replaceState({ ...st, sheet: undefined } satisfies NavState, "", hashOf(initialRoute));
+    history.pushState({ ...st, sheet: chartSheet(initialChart) } satisfies NavState, "", "#/chart/" + enc(initialChart));
+    useStore.setState({ chart: initialChart });
+  }
   useStore.subscribe((s, prev) => {
     if (s.stacks === prev.stacks) return;
     try {
@@ -644,7 +741,73 @@ export function arrival(r: Route) {
 function show(tab: Tab, stack: NavEntry[]) {
   const s = useStore.getState();
   const to = stack[stack.length - 1]!.route;
-  useStore.setState({ tab, stacks: { ...s.stacks, [tab]: stack }, route: to, page: to.page });
+  const sel = to.page === "desk" && !to.detail && !isPhoneLayout() ? deskSymbolOf(to) : undefined;
+  useStore.setState({ tab, stacks: { ...s.stacks, [tab]: stack }, route: to, page: to.page, ...(sel !== undefined && keepDeskSymbol(sel)) });
+}
+
+const deskSymbolOf = (r: Route): Instrument | null => (r.symbol ? { symbol: r.symbol, venue: r.venue ?? "spot" } : null);
+
+function keepDeskSymbol(v: Instrument | null): { deskSymbol: Instrument | null } | null {
+  const cur = useStore.getState().deskSymbol;
+  if (cur?.symbol === v?.symbol && cur?.venue === v?.venue) return null;
+  try {
+    localStorage.setItem(DESK_SYMBOL_KEY, JSON.stringify(v));
+  } catch {
+    /* private mode */
+  }
+  return { deskSymbol: v };
+}
+
+/** The same place on this layout: an instrument is the Desk's selection on the desktop and a page of its own on
+ *  the phone. */
+function forLayout(r: Route): Route {
+  const d = r.detail;
+  if (!isPhoneLayout()) return d?.kind === "instrument" ? { page: "desk", symbol: d.symbol, venue: d.venue } : r;
+  return r.page === "desk" && !d && r.symbol ? { page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue ?? "spot" } } : r;
+}
+
+/**
+ * Open an instrument from any row: on the desktop the Desk with it picked (its chart, ladder and ticker), on the
+ * phone its own page (pushed on the current tab). `null` (desktop): back to the desk as a whole.
+ */
+export function selectInstrument(i: Instrument | null) {
+  if (!i) return navigate({ page: "desk" }, { push: false });
+  navigate({ page: "desk", detail: { kind: "instrument", symbol: i.symbol, venue: i.venue } });
+}
+
+/** Go to the Markets tab showing `view` (the phone Desk's quotes block: "All" opens the full map). */
+export function openMarkets(view: MarketsView) {
+  setMarketsView(view);
+  switchTab("markets", { page: "markets" });
+}
+
+// ---- a chart fullscreen: #/chart/<id> ----
+
+/**
+ * Show the chart `id` (ExChart's id) fullscreen: a history entry of its own, `#/chart/<id>`, over the page it
+ * was opened from, so Back closes it and a reload comes back to it. ExChart calls this from its ⤢ (after
+ * goFullscreen, inside the click); an ExChart whose id is `chart` shows its fullscreen copy.
+ */
+export function openChart(id: string) {
+  const s = useStore.getState();
+  if (s.chart === id) return;
+  try {
+    sessionStorage.setItem(CHART_OWNER_KEY, hashOf(s.route));
+  } catch {
+    /* private mode */
+  }
+  const st = navState();
+  if (chartOf(st)) history.replaceState({ ...st, sheet: chartSheet(id) } satisfies NavState, "", "#/chart/" + enc(id));
+  else history.pushState({ ...(st ?? {}), sheet: chartSheet(id) } satisfies NavState, "", "#/chart/" + enc(id));
+  useStore.setState({ chart: id });
+}
+
+/** Close the fullscreen chart: back off its history entry. */
+export function closeChart() {
+  const id = useStore.getState().chart;
+  if (id == null) return;
+  if (chartOf(navState()) === id) history.back();
+  else useStore.setState({ chart: null });
 }
 
 /**
@@ -654,6 +817,7 @@ function show(tab: Tab, stack: NavEntry[]) {
  * never adds entries: its pages are tabs.
  */
 export function navigate(to: Route, opts: { push?: boolean } = {}) {
+  to = forLayout(to);
   const hash = hashOf(to);
   const overSheet = navState()?.sheet != null;
   if (!isPhoneLayout()) {
@@ -745,7 +909,11 @@ export function back() {
 if (typeof window !== "undefined") {
   history.scrollRestoration = "manual";
   window.addEventListener("popstate", () => {
+    // a fullscreen chart's entry: the chart shows while it is the current entry
+    const fs = chartOf(navState());
+    if (useStore.getState().chart !== fs) useStore.setState({ chart: fs });
     const p = pending;
+    if (fs && !p) return;
     if (p) {
       // the drop for a tab switch has landed (or, under a sheet, not yet all the way)
       const at = depth() + (navState()?.sheet != null ? 1 : 0);
@@ -766,7 +934,7 @@ if (typeof window !== "undefined") {
       if (sameRoute(r, s.route)) return;
       const bn = s.stacks[s.tab].length - (s.tab === "desk" ? 1 : 0) + 1;
       const tab = tabOf(r);
-      history.replaceState({ bn, tab } satisfies NavState, "", location.href);
+      history.replaceState({ bn, tab } satisfies NavState, "", hashOf(r));
       leave();
       lastNav = "push";
       return show(tab, tab === s.tab && isSub(r) ? s.stacks[tab].concat({ route: r, scroll: 0 }) : chainOf(r, tab));

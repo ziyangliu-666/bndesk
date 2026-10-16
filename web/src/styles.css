@@ -66,31 +66,25 @@ kbd {
 .app-main {
   flex: 1;
   min-height: 0;
-  border-top: 1px solid var(--rule);
-}
-.session {
-  font-size: 13px;
-  color: var(--ink);
-}
-.session .muted {
-  color: var(--ink-2);
 }
 
-/* active warnings, under the header */
+/* active warnings, under the nav: one quiet line each */
 .alert-banner {
   flex: none;
-  border-top: 1px solid var(--rule);
-  background: var(--panel);
-  padding: 3px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--ground);
+  padding: 0 12px;
   font-size: 12px;
-  line-height: 20px;
 }
 .ab-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, max-content) auto auto;
-  justify-content: start;
+  grid-template-columns: 16px minmax(0, 1fr) auto 32px;
   gap: 8px;
   align-items: center;
+  height: 28px;
+}
+.ab-row + .ab-row {
+  border-top: 1px solid var(--rule);
 }
 .ab-row svg {
   display: block;
@@ -99,32 +93,28 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.ab-row.warn .ab-text {
-  color: var(--warn);
+  color: var(--ink-2);
 }
 .ab-row.crit .ab-text {
-  color: var(--crit);
-  font-weight: 600;
+  color: var(--ink);
 }
 .ab-age {
-  margin-left: 8px;
   color: var(--muted);
-  font-size: 11px;
 }
 .ab-foot {
   display: flex;
   gap: 16px;
+  height: 24px;
+  align-items: center;
   margin-left: 24px;
 }
 .ab-more,
 .ab-hide {
-  font-size: 11px;
-  color: var(--ink-2);
+  font-size: 12px;
+  color: var(--muted);
 }
 .ab-hide {
-  margin-left: 8px;
-  color: var(--muted);
+  text-align: right;
 }
 .ab-more:hover,
 .ab-hide:hover {
@@ -163,40 +153,58 @@ kbd {
 }
 .app-head {
   flex: none;
-  height: 38px;
+  height: 44px;
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 12px;
+  align-items: stretch;
+  gap: 28px;
+  padding: 0 16px;
   background: var(--ground);
+  border-bottom: 1px solid var(--rule);
 }
 .brand {
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  align-self: center;
+  font-weight: 500;
   color: var(--ink);
   font-size: 14px;
 }
-.tabs-root {
-  background: transparent;
+.app-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+}
+.app-nav-tab {
+  position: relative;
   padding: 0;
-  gap: 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.tabs-ind {
-  background: var(--raised);
-  box-shadow: none;
-}
-.tabs-lab {
+.app-nav-tab:hover {
   color: var(--ink-2);
-  padding: 3px 10px;
-  font-size: 12px;
 }
-.tabs-lab[data-active] {
+.app-nav-tab.on {
   color: var(--ink);
 }
-.tab-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.app-nav-tab.on::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 16px;
+  height: 2px;
+  margin-left: -8px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.app-nav-tab:focus-visible,
+.head-icon:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 kbd {
   font-size: 10px;
@@ -211,42 +219,22 @@ kbd {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
-.clock {
+.head-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.head-icon:hover,
+.head-icon.on {
   color: var(--ink);
-  font-size: 13px;
-}
-.tz-toggle {
-  display: inline-flex;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  overflow: hidden;
-  font-size: 11px;
-}
-.tz-toggle span {
-  padding: 1px 6px;
-  color: var(--ink-2);
-}
-.tz-toggle:focus {
-  outline: none;
-}
-.tz-toggle:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
-}
-.tz-toggle span.on {
-  background: var(--raised);
-  color: var(--ink);
-}
-.conn {
-  font-size: 12px;
-}
-.conn.warn {
-  color: var(--warn);
-}
-.conn.bad {
-  color: var(--crit);
 }
 @keyframes pulse {
   50% {
@@ -973,7 +961,7 @@ kbd {
 .qmap-body {
   position: relative;
   min-height: 0;
-  padding: 2px 10px 6px;
+  padding: 0 10px 6px;
 }
 .qmap {
   position: absolute;
@@ -1085,17 +1073,15 @@ kbd {
 }
 .logout button {
   background: none;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  color: var(--ink-2);
+  border: 0;
+  color: var(--muted);
   font: inherit;
-  font-size: 11px;
-  padding: 1px 7px;
+  font-size: 12px;
+  padding: 4px 0;
   cursor: pointer;
 }
 .logout button:hover {
   color: var(--ink);
-  border-color: var(--accent);
 }
 
 /* ---- history ---- */
@@ -1235,20 +1221,11 @@ kbd {
 /* 48em-75em keeps the desktop pages, reflowed; 75em (1200 px) and up is unchanged. Under 62em the two-column
    pages fall to one column and the page scrolls instead of fitting the window. */
 @media (max-width: 74.99em) {
-  .tab-label kbd {
-    display: none;
-  }
   .app-head {
-    flex-wrap: wrap;
-    height: auto;
-    min-height: 38px;
-    row-gap: 4px;
-    padding-block: 4px;
+    gap: 20px;
   }
-  .head-right {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    row-gap: 4px;
+  .app-nav {
+    gap: 18px;
   }
   .keystrip {
     flex-wrap: wrap;
@@ -1389,11 +1366,8 @@ kbd {
 
 /* touch screens: bigger targets for the small controls */
 @media (pointer: coarse) {
-  .tabs-lab {
-    padding: 6px 12px;
-  }
-  .tz-toggle span {
-    padding: 4px 9px;
+  .ex-foot-tz button {
+    padding: 0 8px;
   }
   .mini-seg .mantine-SegmentedControl-label {
     padding: 0 11px;

@@ -22,15 +22,15 @@ const detail = <K extends Detail["kind"], N extends string>(
 
 export const PAGES: Record<Page, { title: string; C: Lazy<object> }> = {
   desk: { title: "Desk", C: page(() => import("./DeskM"), "DeskM") },
+  markets: { title: "Markets", C: page(() => import("./InstrumentsM"), "InstrumentsM") },
   alerts: { title: "Alerts", C: page(() => import("./AlertsM"), "AlertsM") },
-  accounts: { title: "Accounts", C: page(() => import("./AccountsM"), "AccountsM") },
+  assets: { title: "Assets", C: page(() => import("./AccountsM"), "AccountsM") },
   history: { title: "History", C: page(() => import("./HistoryM"), "HistoryM") },
   more: { title: "More", C: page(() => import("./MoreM"), "MoreM") },
-  markouts: { title: "Markouts", C: page(() => import("./MarkoutsM"), "MarkoutsM") },
+  analysis: { title: "Analysis", C: page(() => import("./MarkoutsM"), "MarkoutsM") },
   orders: { title: "Orders", C: page(() => import("./OrdersM"), "OrdersM") },
-  engine: { title: "Engine", C: page(() => import("./EngineM"), "EngineM") },
+  system: { title: "System", C: page(() => import("./EngineM"), "EngineM") },
   fills: { title: "Fills", C: page(() => import("./FillsM"), "FillsM") },
-  instruments: { title: "Instruments", C: page(() => import("./InstrumentsM"), "InstrumentsM") },
 };
 
 export const DETAILS: { [K in Detail["kind"]]: Lazy<DetailProps<K>> } = {

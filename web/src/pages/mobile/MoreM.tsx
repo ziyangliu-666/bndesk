@@ -4,6 +4,7 @@ import { useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { int } from "../../format";
 import { ListRow, Section, Segmented } from "../../components/mobile";
+import { TvAttribution } from "../../components/ex/controls";
 import { Bps, feedSummary } from "./shared";
 
 /** More: the pages a phone needs less often, then the settings. */
@@ -33,19 +34,19 @@ export function MoreM() {
       <Section>
         <ListRow
           dense
-          title="Markouts"
+          title="Analysis"
           subtitle="10 s, last hour"
           primary={markout != null ? <Bps v={markout} /> : undefined}
-          to={{ page: "markouts" }}
+          to={{ page: "analysis" }}
         />
         <ListRow dense title="Orders" primary={<>{int(nOrders)} open</>} to={{ page: "orders" }} />
         <ListRow
           dense
-          title="Engine"
+          title="System"
           tone={healthTone}
           subtitle={feedsLine}
           primary={<span className={healthTone ? "warn-text" : ""}>{enginesLine}</span>}
-          to={{ page: "engine" }}
+          to={{ page: "system" }}
         />
         <ListRow dense title="All fills" primary={<>{int(fillsDay)} today</>} to={{ page: "fills" }} />
       </Section>
@@ -93,6 +94,8 @@ export function MoreM() {
       <div className="m-version">
         bndesk web {__APP_VERSION__} · built {__BUILT__} UTC
         {mock && " · simulated data"}
+        <br />
+        <TvAttribution />
       </div>
     </>
   );

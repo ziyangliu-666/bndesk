@@ -8,8 +8,9 @@ import { sortAlerts } from "./AlertsList";
 
 const SHOWN = 3;
 
-/** Active warnings and critical alerts, under the header; absent when there are none. A warning can be hidden
- *  on this browser until it clears; the hidden ones leave the banner and the title's count. */
+/** Active warnings and critical alerts, under the nav, one quiet 28 px line each (the level's icon in its colour,
+ *  the text, its age and Hide at the right); absent when there are none. A warning can be hidden on this browser
+ *  until it clears; the hidden ones leave the banner and the title's count. */
 export function AlertBanner() {
   const alerts = useStore((s) => s.snap?.alerts);
   const keys = useStore((s) => s.hiddenAlerts);
@@ -40,10 +41,12 @@ export function AlertBanner() {
           <LevelIcon level={a.level} />
           <span className="ab-text">{a.text}</span>
           <span className="ab-age fig">{dur(now - a.since)}</span>
-          {a.level !== "crit" && (
+          {a.level !== "crit" ? (
             <UnstyledButton className="ab-hide" onClick={() => hideAlert(a)} title="Hide on this browser until it clears">
               Hide
             </UnstyledButton>
+          ) : (
+            <span />
           )}
         </div>
       ))}

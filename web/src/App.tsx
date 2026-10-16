@@ -2,7 +2,9 @@ import { Suspense, useDeferredValue, useEffect } from "react";
 import { Header, PAGE_KEYS } from "./components/Header";
 import { AlertBanner } from "./components/AlertBanner";
 import { DemoNotice } from "./components/DemoNotice";
-import { deskPage, useStore } from "./store";
+import { deskPage, selectInstrument, useStore } from "./store";
+import { StatusFooter } from "./components/ex/StatusFooter";
+import type { Venue } from "./protocol";
 import { useIsMobile } from "./hooks";
 import { MobileShell } from "./components/mobile/MobileShell";
 import { LoadBoundary } from "./components/LoadBoundary";
@@ -15,13 +17,13 @@ import { routePage } from "./pages/mobile";
 // page switch finds its chunk there and shows at once. A switch to a page still loading keeps the page shown
 // until the next one is ready, so a slow load never blanks the frame.
 const Desk = lazyPage(() => import("./pages/Desk").then((m) => ({ default: m.Desk })));
-const Markouts = lazyPage(() => import("./pages/Markouts").then((m) => ({ default: m.Markouts })));
-const Accounts = lazyPage(() => import("./pages/Accounts").then((m) => ({ default: m.Accounts })));
-const Engine = lazyPage(() => import("./pages/Engine").then((m) => ({ default: m.Engine })));
+const Analysis = lazyPage(() => import("./pages/Markouts").then((m) => ({ default: m.Markouts })));
+const Assets = lazyPage(() => import("./pages/Accounts").then((m) => ({ default: m.Accounts })));
+const System = lazyPage(() => import("./pages/Engine").then((m) => ({ default: m.Engine })));
 const Orders = lazyPage(() => import("./pages/Orders").then((m) => ({ default: m.Orders })));
 const History = lazyPage(() => import("./pages/History").then((m) => ({ default: m.History })));
-const LOAD = [Desk, Markouts, Accounts, Engine, Orders, History, { preload: () => import("./pages/Orders").then((m) => m.QuoteMap.preload()) }];
-const PAGE = { desk: Desk, markouts: Markouts, accounts: Accounts, engine: Engine, orders: Orders, history: History };
+const LOAD = [Desk, Analysis, Assets, System, Orders, History, { preload: () => import("./pages/Orders").then((m) => m.QuoteMap.preload()) }];
+const PAGE = { desk: Desk, analysis: Analysis, assets: Assets, system: System, orders: Orders, history: History };
 
 /** The layout's Desk, fetched at once (index.html has already asked for its files): it is ready to draw when the
  *  first snapshot lands, instead of being asked for only then. */
@@ -79,19 +81,22 @@ function DesktopApp() {
                 <Desk />
               ) : page === "history" ? (
                 <History />
-              ) : page === "markouts" ? (
-                <Markouts />
+              ) : page === "analysis" ? (
+                <Analysis />
               ) : page === "orders" ? (
                 <Orders />
-              ) : page === "accounts" ? (
-                <Accounts />
+              ) : page === "assets" ? (
+                <Assets />
               ) : (
-                <Engine />
+                <System />
               )}
             </Suspense>
           </LoadBoundary>
         )}
       </main>
+      <StatusFooter onInstrument={openFromFooter} />
     </div>
   );
 }
+
+const openFromFooter = (symbol: string, venue: Venue) => selectInstrument({ symbol, venue });

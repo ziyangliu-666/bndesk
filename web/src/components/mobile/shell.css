@@ -30,6 +30,59 @@
   background: var(--raised);
 }
 
+/* the alerts bell, left of the status pill; its badge on the bell's corner */
+.m-bell {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  border-radius: 6px;
+}
+.m-bell.on {
+  color: var(--ink);
+}
+.m-bell:active {
+  background: var(--raised);
+}
+.m-bell .m-badge {
+  top: 4px;
+  left: 22px;
+}
+
+/* a critical alert, one line under the bar on every page */
+.m-pin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--ink);
+}
+.m-pin svg {
+  flex: none;
+}
+.m-pin-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-pin-age {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.m-pin:active {
+  background: var(--raised);
+}
+
 /* a sheet's body drags it down when scrolled to the top */
 .m-sheet-body.dragging {
   overflow: hidden;
@@ -48,11 +101,6 @@
   html.is-phone .m-tab-icon {
     width: 30px;
     height: 24px;
-  }
-  /* on the icon's corner, clear of the label beside it */
-  html.is-phone .m-badge {
-    top: -6px;
-    left: 13px;
   }
   html.is-phone .m-bar-row,
   html.is-phone .m-asof,

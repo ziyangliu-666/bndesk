@@ -33,10 +33,21 @@ export function goFullscreen() {
  * viewport in whichever orientation the phone is held. Escape, leaving the browser fullscreen and the phone's
  * back all call `onClose`.
  *
- * (The spec's `#/chart/<id>` route needs a route in store.ts; until then this overlay is history-aware the way
- * the phone's sheets are: one Back closes it.)
+ * ExChart with an `id` opens it through the store's `#/chart/<id>` route (`routed`); without one, this overlay
+ * keeps a history entry of its own, the way the phone's sheets do: one Back closes it.
  */
-export function ChartFullscreen({ title, onClose, children }: { title?: ReactNode; onClose: () => void; children: ReactNode }) {
+export function ChartFullscreen({
+  title,
+  onClose,
+  children,
+  routed = false,
+}: {
+  title?: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  /** The store's chart route (`#/chart/<id>`, openChart) holds the history entry: no entry of its own. */
+  routed?: boolean;
+}) {
   const el = useRef<HTMLDivElement>(null);
   const id = "chart-" + useId();
   const close = useRef(onClose);
@@ -74,6 +85,7 @@ export function ChartFullscreen({ title, onClose, children }: { title?: ReactNod
   // back closes it: an entry of its own while open (the store's navigation treats it like a sheet's)
   useEffect(() => {
     alive.current = true;
+    if (routed) return () => void (alive.current = false);
     if ((history.state as NavState)?.sheet !== id) history.pushState({ ...(history.state ?? {}), sheet: id }, "", location.href);
     const onPop = () => (history.state as NavState)?.sheet !== id && close.current();
     window.addEventListener("popstate", onPop);
@@ -85,7 +97,7 @@ export function ChartFullscreen({ title, onClose, children }: { title?: ReactNod
         if (!alive.current && (history.state as NavState)?.sheet === id) history.back();
       });
     };
-  }, [id]);
+  }, [id, routed]);
 
   // the page under it does not scroll
   useEffect(() => {

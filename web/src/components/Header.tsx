@@ -1,57 +1,49 @@
-import { SegmentedControl, UnstyledButton } from "@mantine/core";
+import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { deskPage, useStore, type DeskPage } from "../store";
-import { useNow } from "../hooks";
-import { countdown, dur, hm, hms } from "../format";
 
 const PAGES: { value: DeskPage; label: string }[] = [
   { value: "desk", label: "Desk" },
   { value: "history", label: "History" },
-  { value: "markouts", label: "Markouts" },
+  { value: "analysis", label: "Analysis" },
   { value: "orders", label: "Orders" },
-  { value: "accounts", label: "Accounts" },
-  { value: "engine", label: "Engine" },
+  { value: "assets", label: "Assets" },
+  { value: "system", label: "System" },
 ];
 
+/** Keys 1–6 switch the desktop's pages (App.tsx); the nav's tooltips say which. */
 export const PAGE_KEYS: Record<string, DeskPage> = Object.fromEntries(PAGES.map((p, i) => [String(i + 1), p.value]));
 
+/**
+ * The desktop's top nav, 44 px: the name, the pages as text tabs (ink with a short accent underline when
+ * active), then Hide amounts and Log out at the right. Connection, clock and time zone are in the footer.
+ */
 export function Header() {
-  const page = useStore((s) => s.page);
+  const page = deskPage(useStore((s) => s.page));
   const setPage = useStore((s) => s.setPage);
-  const tz = useStore((s) => s.tz);
-  const setTz = useStore((s) => s.setTz);
   return (
     <header className="app-head">
       <div className="brand">bndesk</div>
-      <SegmentedControl
-        size="xs"
-        value={deskPage(page)}
-        onChange={(v) => setPage(v as DeskPage)}
-        data={PAGES.map((p, i) => ({
-          value: p.value,
-          label: (
-            <span className="tab-label">
-              {p.label}
-              <kbd>{i + 1}</kbd>
-            </span>
-          ),
-        }))}
-        classNames={{ root: "tabs-root", indicator: "tabs-ind", label: "tabs-lab" }}
-      />
+      <nav className="app-nav" aria-label="Pages">
+        {PAGES.map((p, i) => (
+          <button
+            key={p.value}
+            type="button"
+            className={"app-nav-tab" + (p.value === page ? " on" : "")}
+            aria-current={p.value === page ? "page" : undefined}
+            title={`${p.label} (key ${i + 1})`}
+            onClick={() => setPage(p.value)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </nav>
       <div className="head-right">
-        <Session />
-        <Clock />
-        <UnstyledButton
-          className="tz-toggle"
-          onClick={() => setTz(tz === "utc" ? "local" : "utc")}
-          title="Toggle UTC / local time (t)"
-        >
-          <span className={tz === "utc" ? "on" : ""}>UTC</span>
-          <span className={tz === "local" ? "on" : ""}>local</span>
-        </UnstyledButton>
-        <ConnPill />
+        <HideAmounts />
         {import.meta.env.VITE_MOCK !== "1" && (
           <form method="post" action="/logout" className="logout">
-            <button type="submit" title="End this browser's session">Log out</button>
+            <button type="submit" title="End this browser's session">
+              Log out
+            </button>
           </form>
         )}
       </div>
@@ -59,56 +51,23 @@ export function Header() {
   );
 }
 
-function Clock() {
-  const tz = useStore((s) => s.tz);
-  const skew = useStore((s) => s.skew);
-  const now = useNow(1000);
-  return <span className="clock fig">{hms(now + skew, tz)}</span>;
+function HideAmounts() {
+  const hide = useStore((s) => s.hideAmounts);
+  const set = useStore((s) => s.setHideAmounts);
+  return (
+    <button
+      type="button"
+      className={"head-icon" + (hide ? " on" : "")}
+      aria-pressed={hide}
+      title={hide ? "Amounts hidden. Show amounts" : "Hide amounts"}
+      aria-label={hide ? "Show amounts" : "Hide amounts"}
+      onClick={() => set(!hide)}
+    >
+      {hide ? <IconEyeOff size={18} stroke={1.6} /> : <IconEye size={18} stroke={1.6} />}
+    </button>
+  );
 }
 
 /** "asia closes" after "asia" reads as "closes": the session name is already there. */
 export const nextEvent = (ev: string | null, cur: string | null) =>
   !ev ? "the next event" : cur && ev.startsWith(cur + " ") ? ev.slice(cur.length + 1) : ev;
-
-function Session() {
-  const s = useStore((st) => st.snap?.summary.session);
-  const tz = useStore((st) => st.tz);
-  const skew = useStore((st) => st.skew);
-  const now = useNow(1000) + skew;
-  if (!s || s.next_event_at == null) return null;
-  const name = s.name ?? "next";
-  const tzName = tz === "utc" ? "UTC" : "local time";
-  const tip = s.name
-    ? `Session ${s.name}${s.open ? ", open" : ""}: ${nextEvent(s.next_event, s.name)} at ${hm(s.next_event_at, tz)} ${tzName}; time left h:mm:ss`
-    : `${s.next_event ?? "Next event"} at ${hm(s.next_event_at, tz)} ${tzName}; time left h:mm:ss`;
-  return (
-    <span className="session fig" title={tip}>
-      <span className="muted">{name}</span> {countdown(s.next_event_at - now)}
-    </span>
-  );
-}
-
-function ConnPill() {
-  const conn = useStore((s) => s.conn);
-  const lastMsg = useStore((s) => s.lastMsg);
-  const now = useNow(500);
-  const age = lastMsg ? now - lastMsg : null;
-  let cls = "";
-  let text = "";
-  if (conn === "connecting") {
-    cls = "warn";
-    text = "connecting";
-  } else if (conn === "reconnecting") {
-    cls = "warn";
-    text = age != null ? `reconnecting, last ${dur(age)} ago` : "reconnecting";
-  } else if (age != null && age > 3000) {
-    cls = "bad";
-    text = `stale ${dur(age)}`;
-  }
-  if (!text) return null;
-  return (
-    <span className={"conn fig " + cls} role="status">
-      {text}
-    </span>
-  );
-}

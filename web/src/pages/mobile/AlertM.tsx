@@ -175,13 +175,13 @@ function Subject({ a }: { a: Alert }) {
   const acct = accountOf(a, snap.accounts);
   if (acct) return <Section><AccountLink acct={acct} /></Section>;
   const to: Record<string, [string, Route]> = {
-    stream_down: ["Feeds", { page: "engine" }],
-    stream_silent: ["Feeds", { page: "engine" }],
-    rest_ban: ["Feeds", { page: "engine" }],
-    engine: ["Engine", { page: "engine" }],
-    engine_latency: ["Engine", { page: "engine" }],
-    markout: ["Markouts", { page: "markouts" }],
-    exposure_gap: ["Accounts", { page: "accounts" }],
+    stream_down: ["Feeds", { page: "system" }],
+    stream_silent: ["Feeds", { page: "system" }],
+    rest_ban: ["Feeds", { page: "system" }],
+    engine: ["System", { page: "system" }],
+    engine_latency: ["System", { page: "system" }],
+    markout: ["Analysis", { page: "analysis" }],
+    exposure_gap: ["Assets", { page: "assets" }],
     drawdown: ["Desk", { page: "desk" }],
     pnl_1h: ["Desk", { page: "desk" }],
     reconcile: ["Desk", { page: "desk" }],
@@ -213,7 +213,7 @@ function Subject({ a }: { a: Alert }) {
 function AccountsLink() {
   return (
     <Section>
-      <ListRow dense title="Accounts" to={{ page: "accounts" }} />
+      <ListRow dense title="Assets" to={{ page: "assets" }} />
     </Section>
   );
 }
@@ -229,7 +229,7 @@ function AccountLink({ acct, note }: { acct: Account; note?: ReactNode }) {
         </>
       }
       primary={note}
-      to={{ page: "accounts", detail: { kind: "account", id: acct.id } }}
+      to={{ page: "assets", detail: { kind: "account", id: acct.id } }}
     />
   );
 }
@@ -291,7 +291,7 @@ function ExposureEv({ a }: { a: Alert }) {
   if (!e) return null;
   const band = e.band;
   return (
-    <Section title="Now, USDT" link={{ label: "Accounts", to: { page: "accounts" } }}>
+    <Section title="Now, USDT" link={{ label: "Assets", to: { page: "assets" } }}>
       {e.gap != null && band != null && !e.paused ? (
         <LimitBar
           label="Exposure gap"
@@ -401,7 +401,7 @@ function FeedsEv({ a, now, kind, subject }: { a: Alert; now: number; kind?: "res
     <Section
       title={kind ? "REST pollers, now" : bad ? "Feeds that need a look, now" : "Feeds, now"}
       right={<>{int(feeds.length - bad)} of {int(feeds.length)} up</>}
-      link={{ label: "Health", to: { page: "engine" } }}
+      link={{ label: "Health", to: { page: "system" } }}
     >
       {list.map((f) => (
         <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
@@ -459,7 +459,7 @@ function EngineEv({ name, latency, limitUs }: { name: string; latency: boolean; 
   const spike = useRejectSpike(name);
   if (!e) return null;
   return (
-    <Section title={e.name} right={<EngineState e={e} />} link={{ label: "Health", to: { page: "engine" } }}>
+    <Section title={e.name} right={<EngineState e={e} />} link={{ label: "Health", to: { page: "system" } }}>
       {e.kill && <div className="m-ops-kill">Kill active{e.kill_reason ? `: ${e.kill_reason}` : ""}</div>}
       {latency ? <LatencyTable e={e} p99Limit={limitUs} /> : <KillBar e={e} />}
       <EngineFacts e={e} spike={spike} />
@@ -471,7 +471,7 @@ function EngineEv({ name, latency, limitUs }: { name: string; latency: boolean; 
 function EnginesLink() {
   return (
     <Section>
-      <ListRow dense title="Engine health" to={{ page: "engine" }} />
+      <ListRow dense title="Engine health" to={{ page: "system" }} />
     </Section>
   );
 }
@@ -561,7 +561,7 @@ function MarkoutEv() {
   // one figure when the hour and the day read the same
   const same = f(hour) === f(day);
   return (
-    <Section title="Markout 10 s" link={{ label: "Markouts", to: { page: "markouts" } }}>
+    <Section title="Markout 10 s" link={{ label: "Analysis", to: { page: "analysis" } }}>
       <KV
         cols={same ? 2 : 3}
         items={[
@@ -638,7 +638,7 @@ function FeeExpiryEv() {
   const exp = useStore((s) => s.snap?.summary.fee_expiry);
   if (!exp) return null;
   return (
-    <Section link={{ label: "Accounts", to: { page: "accounts" } }}>
+    <Section link={{ label: "Assets", to: { page: "assets" } }}>
       <KV items={[{ label: "Fee arrangement ends", value: exp, span: 2 }]} />
     </Section>
   );

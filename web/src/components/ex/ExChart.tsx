@@ -39,7 +39,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { num, price as fmtPrice } from "../../format";
-import { useStore } from "../../store";
+import { closeChart, openChart, useStore } from "../../store";
 import type { TzMode } from "../../format";
 import { C, CROSSHAIR, DOWN, GRID, PLOT_BG, SANS, UP, rgba, signColor } from "./palette";
 import { barLabel, boxLabel, tickLabel } from "./time";
@@ -416,7 +416,12 @@ export function ExChart(p: ExChartProps) {
   const [away, setAway] = useState(false); // panned away from the latest bar
   const [dense, setDense] = useState(false); // bars under 5 px apart: no markers
   const [awaiting, setAwaiting] = useState(false);
-  const [fs, setFs] = useState(false);
+  // with an id, the fullscreen is a route (#/chart/<id>: Back closes it, a reload keeps it); else local state
+  const routed = !!p.id && !p.inFullscreen;
+  const [fsLocal, setFsLocal] = useState(false);
+  const routeChart = useStore((s) => (routed ? s.chart : null));
+  const fs = routed ? routeChart === p.id : fsLocal;
+  const setFs = (v: boolean) => (routed ? (v ? openChart(p.id!) : closeChart()) : setFsLocal(v));
   const [closed, setClosed] = useExPref<boolean>(p.id, "legendClosed", false);
 
   // hidden keys: controlled, or per id in the store
@@ -813,7 +818,7 @@ export function ExChart(p: ExChartProps) {
       </div>
       {chipItems && <ChipRow items={chipItems} isOn={(k) => !off(k)} onToggle={toggle} />}
       {fs && !p.inFullscreen && (
-        <ChartFullscreen title={p.title} onClose={() => setFs(false)}>
+        <ChartFullscreen title={p.title} onClose={() => setFs(false)} routed={routed}>
           <ExChart {...p} inFullscreen onCloseFullscreen={() => setFs(false)} fullscreen={false} chartRef={undefined} />
         </ChartFullscreen>
       )}

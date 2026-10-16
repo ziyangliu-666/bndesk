@@ -1,6 +1,6 @@
 // The desktop's 28 px footer: connection state, feeds, session clock, UTC | Local, a marquee of the
 // instruments' day P&L, and the TradingView attribution.
-import { memo, useMemo } from "react";
+import { memo } from "react";
 import { useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { countdown, hms, hm, pnl } from "../../format";
@@ -8,6 +8,7 @@ import { nextEvent } from "../Header";
 import { useFreshness, type Fresh } from "../mobile/StatusPill";
 import type { Venue } from "../../protocol";
 import { TvAttribution } from "./controls";
+import { useDayPnlList } from "../../selectors";
 import "./ex.css";
 
 const CONN: Record<Fresh, [string, string]> = {
@@ -103,16 +104,7 @@ function TzToggle() {
 }
 
 const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol: string, venue: Venue) => void }) {
-  const symbols = useStore((s) => s.snap?.symbols);
-  // the list changes on every patch; the order only matters to the eye, so round the figures for the key
-  const items = useMemo(
-    () =>
-      (symbols ?? [])
-        .filter((r) => !r.dust && (r.fills_day > 0 || Math.abs(r.trading_pnl) >= 0.005))
-        .sort((a, b) => Math.abs(b.trading_pnl) - Math.abs(a.trading_pnl))
-        .slice(0, 24),
-    [symbols],
-  );
+  const items = useDayPnlList(24);
   if (!items.length) return <span className="ex-marq" />;
   const row = (copy: boolean) => items.map((r) => (
     <button
@@ -127,7 +119,7 @@ const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol
         {r.symbol}
         {r.venue === "usdm" ? " perp" : ""}
       </span>{" "}
-      <span className={"fig " + (r.trading_pnl > 0.005 ? "up" : r.trading_pnl < -0.005 ? "down" : "")}>{pnl(r.trading_pnl)}</span>
+      <span className={"fig " + (r.pnl > 0.005 ? "up" : r.pnl < -0.005 ? "down" : "")}>{pnl(r.pnl)}</span>
     </button>
   ));
   // two copies scroll by half their width, so the loop has no seam

@@ -140,7 +140,7 @@ export function AccountM({ id }: { id: string }) {
       </Section>
 
       {a.positions.length > 0 && (
-        <Section title="Futures positions" link={{ label: "All accounts", to: { page: "accounts" } }}>
+        <Section title="Futures positions" link={{ label: "All accounts", to: { page: "assets" } }}>
           <PositionsTable rows={a.positions.map((p) => ({ ...p, account: a.label }))} showAccount={false} />
         </Section>
       )}

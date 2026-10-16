@@ -59,7 +59,7 @@ function AccountRow({ a, now }: { a: Account; now: number }) {
         </>
       }
       primary={<Money v={a.pnl_day} />}
-      to={{ page: "accounts", detail: { kind: "account", id: a.id } }}
+      to={{ page: "assets", detail: { kind: "account", id: a.id } }}
     />
   );
 }

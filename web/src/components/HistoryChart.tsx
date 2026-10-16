@@ -69,7 +69,8 @@ export function chartOptions(tz: TzMode, step: number, phone = false): DeepParti
       textColor: C.muted,
       fontFamily: SANS,
       fontSize: 11,
-      attributionLogo: true,   // Apache-2.0 NOTICE: the TradingView attribution stays on the page
+      // the TradingView attribution is a link in the desktop footer and the phone's More page (TvAttribution)
+      attributionLogo: false,
       panes: { separatorColor: C.rule, separatorHoverColor: "rgba(126,166,246,0.18)", enableResize: true },
     },
     grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },

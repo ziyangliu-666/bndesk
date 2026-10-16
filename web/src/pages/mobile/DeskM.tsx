@@ -172,7 +172,7 @@ export function DeskM() {
         <Section
           title="Best today · spot"
           info={INST_INFO}
-          link={{ label: `All ${symbols?.length ?? 0}`, to: { page: "instruments" } }}
+          link={{ label: `All ${symbols?.length ?? 0}`, to: { page: "markets" } }}
         >
           {best.map((r) => (
             <InstrumentRow key={r.venue + r.symbol} r={r} sub={invSub(r.inv_value)} />
@@ -183,7 +183,7 @@ export function DeskM() {
         <Section
           title="Worst today · spot"
           info={INST_INFO}
-          link={best.length ? undefined : { label: `All ${symbols?.length ?? 0}`, to: { page: "instruments" } }}
+          link={best.length ? undefined : { label: `All ${symbols?.length ?? 0}`, to: { page: "markets" } }}
         >
           {worstSyms.map((r) => (
             <InstrumentRow key={r.venue + r.symbol} r={r} sub={invSub(r.inv_value)} />
@@ -206,7 +206,7 @@ export function DeskM() {
             }
             subtitle={`equity ${money(a.equity, "short")}`}
             primary={<Money v={a.pnl_day} />}
-            to={{ page: "accounts", detail: { kind: "account", id: a.id } }}
+            to={{ page: "assets", detail: { kind: "account", id: a.id } }}
           />
         ))}
       </Section>
