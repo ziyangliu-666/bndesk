@@ -247,7 +247,7 @@ function DeskHistory() {
       </div>
       <div className="r-chart">
         <ExChart
-          key={view}
+          key={view + (hide ? ":h" : "")}
           id={view === "cum" ? "m-hist-cum" : "m-hist-day"}
           title="Desk PnL"
           series={series}

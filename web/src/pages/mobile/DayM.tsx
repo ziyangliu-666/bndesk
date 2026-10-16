@@ -173,6 +173,7 @@ function DayPath({ start, live }: { start: number; live: boolean }) {
   return (
     <div className="r-chart">
       <ExChart
+        key={hide ? "h" : "s"}
         id="m-day"
         title="Day PnL"
         series={series}
