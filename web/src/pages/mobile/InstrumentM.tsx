@@ -2,14 +2,14 @@ import { useMemo, useRef, type ReactNode } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { navigate, serverNow, useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { bps, compact, hm, int, price } from "../../format";
+import { bps, compact, hm, int, price, qtyDecimals } from "../../format";
 import { refLabel } from "../../components/ui";
 import { KV, ListRow, Money, Section, span, tone, useHold, useLive, useMoney, type KVItem } from "../../components/mobile";
 import { Tabs, useExPref, useTicker24h, type Ticker24h } from "../../components/ex";
 import { QuoteRows, type QRow } from "../../components/quotes";
 import type { Fill, OpenOrder, SymbolRow, Venue } from "../../protocol";
 import { FillRow, MkTable, useAccountLabel, useFillSheet, useQty } from "./shared";
-import { useHide } from "../../mask";
+import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
@@ -202,6 +202,8 @@ function QuotesTab({ r }: { r: SymbolRow }) {
   const bids = ours.filter((o) => o.side === "buy").sort((a, b) => b.price - a.price);
   const asks = ours.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price);
   const max = Math.max(1, ...ours.map((o) => o.notional));
+  // one precision down the sizes (fixed: they line up), the largest order's
+  const qd = qtyDecimals(Math.max(0, ...ours.map((o) => o.qty)));
   const n = Math.max(bids.length, asks.length);
   // our distances from fair and the spread are in the band above, the fair in the chart's legend
   const items: KVItem[] = [
@@ -218,8 +220,8 @@ function QuotesTab({ r }: { r: SymbolRow }) {
           </div>
           {Array.from({ length: Math.min(n, 8) }, (_, i) => (
             <div key={i} className="in-ladder-row">
-              <LadderCell o={bids[i]} max={max} side="buy" />
-              <LadderCell o={asks[i]} max={max} side="sell" />
+              <LadderCell o={bids[i]} max={max} side="buy" qd={qd} />
+              <LadderCell o={asks[i]} max={max} side="sell" qd={qd} />
             </div>
           ))}
         </div>
@@ -238,8 +240,9 @@ function QuotesTab({ r }: { r: SymbolRow }) {
   );
 }
 
-function LadderCell({ o, max, side }: { o: OpenOrder | undefined; max: number; side: "buy" | "sell" }) {
-  const q = useQty();
+function LadderCell({ o, max, side, qd }: { o: OpenOrder | undefined; max: number; side: "buy" | "sell"; qd: number }) {
+  const hide = useHide();
+  const q = (v: number) => qtyText(v, hide, false, qd);
   const label = useAccountLabel(o?.account ?? "");
   if (!o) return <span className={"in-lc " + side} />;
   return (

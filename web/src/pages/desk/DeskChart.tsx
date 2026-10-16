@@ -212,7 +212,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         {
           label: "Gap now",
           title: "Exposure gap: the hedge target minus the hedge symbols' futures notional; the band is its allowed size",
-          value: () => [maskText(hide, `${pnl(x.gap)} / ±${compact(x.band, 2)}`), x.band != null && Math.abs(x.gap!) > x.band ? C.warn : C.ink2],
+          value: () => [maskText(hide, `${pnl(x.gap)} / ±${num(x.band, 0)}`), x.band != null && Math.abs(x.gap!) > x.band ? C.warn : C.ink2],
         },
       ];
   }

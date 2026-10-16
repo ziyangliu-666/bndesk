@@ -290,7 +290,7 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
             title={<InstName r={r} />}
             subtitle={
               perp
-                ? `Hedge · ${int(r.fills_day)} fills`
+                ? `Hedge leg · ${int(r.fills_day)} fills`
                 : `Spot · ${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + " USDT"} · ${int(r.fills_day)} fills`
             }
             primary={
@@ -299,7 +299,7 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
                 <Money v={made(r)} />
               </>
             }
-            secondary={perp ? "its leg today" : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
+            secondary={perp ? undefined : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
             to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
           />
         );

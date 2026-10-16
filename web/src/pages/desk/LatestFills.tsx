@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { useInstFills } from "./instFills";
-import { bps, compact, hms, int, price, qty } from "../../format";
+import { bps, compact, hms, int, price, qtyDecimals, qtyFixed } from "../../format";
 import type { Fill } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
 
@@ -66,6 +66,8 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
   const fresh = freshAt.current;
 
   const base = inst?.symbol.replace(/USDT$/, "");
+  // one precision down the quantities (fixed: they line up), the largest one's
+  const qd = qtyDecimals(Math.max(0, ...list.map((f) => f.qty)));
   return (
     <section className="dk-panel dk-tr">
       <div className="dk-head">
@@ -91,7 +93,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
       </div>
       <div className="dk-tr-body">
         {list.map((f) => (
-          <FillRow key={f.id} f={f} inst={!!inst} fresh={fresh.has(f.id)} hide={hide} time={hms(f.ts, tz)} />
+          <FillRow key={f.id} f={f} inst={!!inst} fresh={fresh.has(f.id)} hide={hide} time={hms(f.ts, tz)} qd={qd} />
         ))}
         {fills && !list.length && fillsDay === 0 && <div className="dk-empty">No fills today</div>}
       </div>
@@ -99,7 +101,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
   );
 }
 
-const FillRow = memo(function FillRow({ f, inst, fresh, hide, time }: { f: ShownFill; inst: boolean; fresh: boolean; hide: boolean; time: string }) {
+const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: ShownFill; inst: boolean; fresh: boolean; hide: boolean; time: string; qd: number }) {
   const side = f.side === "buy" ? "up" : "down";
   const tip = `${f.side === "buy" ? "Buy" : "Sell"} ${qtyText(f.qty, hide)} ${f.symbol.replace(/USDT$/, "")} at ${price(f.price)}, ${f.account}${f.maker ? "" : ", taker"}`;
   return (
@@ -111,7 +113,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time }: { f: Shown
       {inst ? (
         <>
           <span className={"fig " + side}>{price(f.price)}</span>
-          <span className="fig">{maskNode(hide, qty(f.qty))}</span>
+          <span className="fig">{maskNode(hide, qtyFixed(f.qty, qd))}</span>
         </>
       ) : (
         <>

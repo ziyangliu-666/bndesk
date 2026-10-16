@@ -277,7 +277,7 @@ export function QuoteMap({
           axisTick: { show: false },
           axisLabel: { show: false },
           splitLine: { show: false },
-          name: "Inventory",
+          name: "Inventory (USDT)",
           nameLocation: "end",
           nameGap: 6,
           nameTextStyle: {
@@ -336,8 +336,10 @@ export function QuoteMap({
             fontFamily: SANS,
             formatter: (_: string, i: number) => {
               const v = rows[i]?.sym.inv_value ?? 0;
+              // hidden: every row reads the same (a blank one would tell it holds nothing)
+              if (hide) return MASK;
               if (Math.abs(v) < 1) return "";
-              return hide ? MASK : (v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US");
+              return (v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US");
             },
           },
         },

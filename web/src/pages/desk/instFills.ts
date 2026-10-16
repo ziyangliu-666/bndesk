@@ -94,14 +94,22 @@ async function pull(e: Entry) {
   notify(e);
 }
 
+/** Held fills stop this far before now or more: still catching up (a page limit cut the last round). */
+const BEHIND_MS = 60_000;
+
 function schedule(e: Entry) {
   if (e.timer) clearTimeout(e.timer);
   e.timer = null;
   if (!e.subs.size) return;
-  e.timer = setTimeout(async () => {
-    if (document.visibilityState !== "hidden") await pull(e);
-    schedule(e);
-  }, TAIL_MS);
+  // a long range is more than one round of pages: the next round at once until the held fills reach now
+  const behind = e.to > e.from && serverNow() - e.to > BEHIND_MS;
+  e.timer = setTimeout(
+    async () => {
+      if (document.visibilityState !== "hidden") await pull(e);
+      schedule(e);
+    },
+    behind ? 50 : TAIL_MS,
+  );
 }
 
 function subscribe(symbol: string, venue: Venue, from: number, cb: () => void): () => void {
@@ -157,6 +165,14 @@ export function useInstFills(symbol: string | null, venue: Venue, from: number |
   const to = e?.to ?? 0;
   const fills = useMemo(() => {
     if (!held || from == null) return NONE;
+    // still catching up (the rounds of pages have not reached the tape yet): the held fills alone, no tape
+    // after a hole
+    const oldest = live?.length ? live[live.length - 1]!.ts : Infinity;
+    if (to < oldest && serverNow() - to > BEHIND_MS) {
+      let i = 0;
+      while (i < held.length && held[i]!.t < from) i++;
+      return i ? held.slice(i) : held;
+    }
     // the tape (newest first) after what the history covers; before that the history has them
     const tail: HistFill[] = [];
     for (const f of live ?? []) {
@@ -170,5 +186,6 @@ export function useInstFills(symbol: string | null, venue: Venue, from: number |
     return tail.length ? base.concat(tail) : base;
   }, [held, to, live, symbol, venue, from]);
   const ready = !!e && e.to > e.from;
-  return { fills: ready ? fills : NONE, complete: ready && e!.from <= (from ?? Infinity), loading: !!symbol && from != null && !ready };
+  const caughtUp = ready && serverNow() - e!.to <= BEHIND_MS + TAIL_MS;
+  return { fills: ready ? fills : NONE, complete: caughtUp && e!.from <= (from ?? Infinity), loading: !!symbol && from != null && !ready };
 }

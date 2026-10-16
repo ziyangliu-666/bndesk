@@ -181,6 +181,8 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
       lastValue: false,
       width: 1.5,
       lineStyle: stroke,
+      // as on the Desk: the legend at rest is Day PnL, then Trading, Hedge and Rebates; the rest a chip away
+      hiddenByDefault: k === "mm" || k === "inv" || k === "other",
       data: pts.map((p) => ({ time: p.time, value: p[k] as number | null })),
     });
     // a day kept without its split: only the lines it has (no chips that switch nothing)
