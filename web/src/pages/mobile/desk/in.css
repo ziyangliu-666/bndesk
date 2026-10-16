@@ -1,0 +1,207 @@
+/* ---- phone instrument (coin) page ---- */
+
+.in-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0 12px;
+}
+.in-head-l {
+  flex: 1;
+  min-width: 0;
+}
+.in-mid {
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.in-mid.up {
+  color: var(--up);
+}
+.in-mid.down {
+  color: var(--down);
+}
+.in-mid-sub {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.in-mid-sub .up {
+  color: var(--up);
+}
+.in-mid-sub .down {
+  color: var(--down);
+}
+.in-venue {
+  color: var(--ink-2);
+}
+.in-24 {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 14px;
+  row-gap: 6px;
+  margin: 2px 0 0;
+  text-align: right;
+}
+.in-24 dt {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.in-24 dd {
+  margin: 1px 0 0;
+  font-size: 12px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* our figures: one row of four, label over value */
+.in-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 8px;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 10px var(--m-pad-r) 10px var(--m-pad-l);
+  border-top: 1px solid var(--rule);
+}
+.in-stats dt {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.in-stats dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.in-stats dd .up {
+  color: var(--up);
+}
+.in-stats dd .down {
+  color: var(--down);
+}
+
+/* the live quote band under the header */
+.in-band {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 6px var(--m-pad-r) 6px var(--m-pad-l);
+  border-top: 1px solid var(--rule);
+}
+.in-band .q-legend.in-band-legend {
+  padding: 0 0 2px;
+}
+
+/* tabs under the chart */
+.in-tabs {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-bottom: 1px solid var(--rule);
+}
+.in-tabs .ex-tabs {
+  height: 44px;
+  gap: 24px;
+}
+.in-tabs .ex-tab {
+  font-size: 15px;
+}
+.in-tab {
+  padding: 8px 0 16px;
+}
+.in-link,
+.in-rows {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+}
+.in-link {
+  border-top: 1px solid var(--rule);
+}
+.in-tab .m-kv {
+  margin-left: calc(-1 * var(--m-pad-l));
+  margin-right: calc(-1 * var(--m-pad-r));
+}
+.in-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* our orders, bids left and asks right, each row's bar its notional */
+.in-ladder {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.in-ladder-h {
+  display: flex;
+  justify-content: space-between;
+  height: 28px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.in-ladder-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 4px;
+}
+.in-lc {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px;
+  overflow: hidden;
+}
+.in-lc-bar {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  opacity: 0.14;
+}
+.in-lc.buy .in-lc-bar {
+  right: 0;
+  background: var(--up);
+}
+.in-lc.sell .in-lc-bar {
+  left: 0;
+  background: var(--down);
+}
+.in-lc-q,
+.in-lc-p {
+  position: relative;
+  white-space: nowrap;
+}
+.in-lc-q {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.in-lc-a {
+  font-size: 11px;
+  color: var(--muted);
+}
+.in-lc-p.up {
+  color: var(--up);
+}
+.in-lc-p.down {
+  color: var(--down);
+}
+.in-kv {
+  margin-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+
+/* the candle legend keeps O H L C on one line at 393 px */
+.in-chart.touch .ex-lg-line {
+  column-gap: 6px;
+}
