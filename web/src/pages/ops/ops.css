@@ -218,8 +218,10 @@
 }
 .ops-limit-pairs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(max-content, 1fr));
-  gap: 12px;
+  /* five figures in a row where they fit; with many accounts on a narrow window they wrap to a second row
+     instead of running past the cell */
+  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+  gap: 6px 12px;
 }
 .ops-limit-pairs > div {
   display: flex;
@@ -633,4 +635,8 @@
 /* the feeds grid continues past its foot: a fade says so */
 .ops-feeds.more .ag-body-viewport {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+.ops-limit-pairs > div > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
