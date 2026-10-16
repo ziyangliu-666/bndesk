@@ -270,6 +270,27 @@
   flex-wrap: nowrap;
   gap: 14px;
 }
+/* Fit: the range follows the quotes (a text toggle, ink while on) */
+.ops-fit {
+  margin-left: -6px;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ops-fit:hover,
+.ops-fit.on {
+  color: var(--ink);
+}
+/* wide screens: the open orders get the room a ±range map does not need */
+@media (min-width: 1800px) {
+  .ops-orders {
+    grid-template-columns: minmax(0, 1fr) 760px;
+  }
+}
 .ops-qmap-plot {
   margin: 0 8px 4px 12px;
 }

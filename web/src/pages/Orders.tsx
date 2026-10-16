@@ -1,6 +1,6 @@
 // Orders ≈ Binance "Open orders" with the book beside it: the accounts' rate limits in one strip on top, the live
 // quote map (every instrument's bids and asks around fair), and the open orders in Binance's column order.
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, ICellRendererParams, RowClickedEvent } from "ag-grid-community";
 import { TextInput } from "@mantine/core";
@@ -10,13 +10,29 @@ import type { Account, OpenOrder } from "../protocol";
 import { gridTheme } from "../gridTheme";
 import { hms, int, pct } from "../format";
 import { fBps, fPrice, DEFAULT_COL } from "../grid";
-import { QuoteControls, QuoteLegend, QuoteMapEC, useQuoteMapState } from "../components/quotes";
-import { TextToggle } from "../components/ex";
+import { QuoteControls, QuoteLegend, QuoteMapEC, RANGES, useQuoteMapState, type QuoteMapState } from "../components/quotes";
+import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
 
 const short = (s: string) => s.replace(/USDT$/, "");
+
+/** The quote map's range for these orders: the smallest of RANGES over 1.05 × the 95th percentile of |distance|.
+ *  It steps down only when the quotes sit well inside the next smaller range, so a live wobble does not flip it. */
+function useFitRange(orders: OpenOrder[]): number {
+  const cur = useRef<number>(RANGES[1]);
+  const d = orders.map((o) => Math.abs(o.dist_bps ?? 0)).sort((a, b) => a - b);
+  if (!d.length) return cur.current;
+  const p95 = d[Math.min(d.length - 1, Math.floor(d.length * 0.95))]! * 1.05;
+  const want: number = RANGES.find((r) => r >= p95) ?? 100;
+  if (want > cur.current) cur.current = want;
+  else if (want < cur.current) {
+    const lower = RANGES[RANGES.indexOf(cur.current as (typeof RANGES)[number]) - 1];
+    if (lower != null && p95 < lower * 0.85) cur.current = want;
+  }
+  return cur.current;
+}
 const tradingAccounts = (accounts: Account[]) => accounts.filter((a) => a.role !== "master" && (a.open_orders > 0 || a.inventory_value > 1));
 
 /** One cell per trading account: name and free USDT, then label-over-value pairs for what can run out (orders per
@@ -205,11 +221,24 @@ export function Orders() {
   const orders = useStore((s) => s.snap?.orders) ?? [];
   const accounts = useStore((s) => s.snap?.accounts) ?? [];
   const desk = useStore((s) => s.deskSymbol);
-  const st = useQuoteMapState();
+  const saved = useQuoteMapState();
   const trading = tradingAccounts(accounts);
-  const acct = st.account != null && trading.some((a) => a.id === st.account) ? st.account : null;
+  const acct = saved.account != null && trading.some((a) => a.id === saved.account) ? saved.account : null;
   const shown = acct == null ? orders : orders.filter((o) => o.account === acct);
   const through = shown.filter((o) => o.dist_bps != null && o.dist_bps < 0).length;
+
+  // the range fits the quotes until a range is picked here (Fit goes back): the smallest of ±10 ±25 ±50 ±100
+  // that holds 95 % of the orders, so dots within ±8 get ±10, not an empty ±25
+  const [picked, setPicked] = useExPref<boolean>("qmap.desk", "rangePicked", false);
+  const fit = useFitRange(shown);
+  const st: QuoteMapState = {
+    ...saved,
+    range: picked ? saved.range : fit,
+    setRange: (r) => {
+      saved.setRange(r);
+      setPicked(true);
+    },
+  };
 
   return (
     <div className="page ops-orders">
@@ -227,13 +256,21 @@ export function Orders() {
             />
           )}
           <span className="ops-head-right fig">
-            <span className="muted">{shown.length} orders</span>
             {through ? <span className="warn-text">{through} through fair</span> : null}
           </span>
         </header>
         <div className="ops-qmap-legend">
           <QuoteLegend />
           <QuoteControls st={st} accounts={[]} />
+          <button
+            type="button"
+            className={"ops-fit" + (picked ? "" : " on")}
+            aria-pressed={!picked}
+            onClick={() => setPicked(false)}
+            title="Fit the range to the quotes (it follows them until a range is picked)"
+          >
+            Fit
+          </button>
         </div>
         <div className="q-ec ops-qmap-plot">
           <Suspense fallback={null}>
