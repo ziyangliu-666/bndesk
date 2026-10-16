@@ -30,12 +30,20 @@ function withGrid(real: Level[], side: "buy" | "sell", fair: number | null, n: n
   if (fair == null || n <= real.length) return real;
   const d = (px: number) => (Math.abs(px - fair) / fair) * 1e4;
   const far = Math.max(2, ...real.map((l) => d(l.price)));
-  const step = STEPS.find((s) => s * n >= far * 1.25) ?? STEPS[STEPS.length - 1]!;
+  // a step is at least the price's last shown digit, so no two rows read the same price
+  const a = Math.abs(fair);
+  const unit = a >= 1000 ? 0.01 : a >= 10 ? 0.001 : a >= 1 ? 0.0001 : a >= 0.01 ? 0.00001 : 0.0000001;
+  const min = (unit / fair) * 1e4;
+  const ok = STEPS.filter((s) => s >= min);
+  const step = ok.find((s) => s * n >= far * 1.25) ?? ok[0] ?? Math.ceil(min);
   const out = real.slice();
+  const shown = new Set(real.map((l) => price(l.price)));
   for (let k = 1; out.length < n && k <= n * 2; k++) {
     const bp = k * step;
     if (real.some((l) => Math.abs(d(l.price) - bp) < step * 0.4)) continue;
     const px = side === "sell" ? fair * (1 + bp / 1e4) : fair * (1 - bp / 1e4);
+    if (shown.has(price(px))) continue;
+    shown.add(price(px));
     out.push({ price: px, side, qty: 0, notional: 0, accounts: [], best: false, through: false, grid: true });
   }
   return out.sort((a, b) => (side === "buy" ? b.price - a.price : a.price - b.price));

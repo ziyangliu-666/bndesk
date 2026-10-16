@@ -1,6 +1,6 @@
 // The Desk's instruments list, the market list's place on an exchange's trade page: search, filter tabs,
 // sortable columns, the Desk pinned on top to go back. A click picks the instrument.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl, usd } from "../../format";
 import type { SymbolRow } from "../../protocol";
@@ -34,6 +34,13 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
     });
     return out;
   }, [rows, q, filter, sort]);
+
+  // a pick from elsewhere (a fill, a grid row, the footer) brings its row into view
+  const body = useRef<HTMLDivElement>(null);
+  const selKey = sel ? sel.venue + sel.symbol : "";
+  useEffect(() => {
+    body.current?.querySelector(".dk-mk-row.sel")?.scrollIntoView({ block: "nearest" });
+  }, [selKey]);
 
   const counts = useMemo(() => {
     const r = rows ?? [];
@@ -85,7 +92,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         {head("value", "Inv value", "Inventory × mid, USDT; sorted by size")}
         {head("pnl", "Day PnL", "Trading PnL today (Π), USDT")}
       </div>
-      <div className="dk-mk-body">
+      <div className="dk-mk-body" ref={body}>
         <button type="button" className={"dk-mk-row pin" + (sel ? "" : " sel")} onClick={() => selectInstrument(null)} title="The desk as a whole (Esc)">
           <span className="dk-mk-sym">Desk</span>
           <span className="muted">All instruments</span>

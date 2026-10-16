@@ -160,7 +160,11 @@ export function SymbolsGrid({ selected, hideDust = false }: { selected?: Instrum
     [selKey],
   );
   useEffect(() => {
-    api.current?.redrawRows();
+    const a = api.current;
+    if (!a) return;
+    a.redrawRows();
+    const node = selKey ? a.getRowNode(selKey) : undefined;
+    if (node) a.ensureNodeVisible(node, "middle");
   }, [selKey]);
 
   return (
