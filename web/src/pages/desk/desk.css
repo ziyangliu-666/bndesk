@@ -1,0 +1,608 @@
+/* The desktop Desk as an exchange trade page, in bndesk's pure-black palette: regions on the black ground split
+   by 1 px rules, each panel scrolls inside itself, the page itself never scrolls. */
+
+.dk {
+  height: 100%;
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+  grid-template-columns: 296px minmax(0, 1fr) 336px;
+  grid-template-rows: 52px minmax(0, 1fr) 252px;
+  grid-template-areas:
+    "tick tick tick"
+    "lad centre right"
+    "bottom bottom right";
+  font-size: 12px;
+}
+@media (min-width: 1800px) {
+  .dk {
+    grid-template-columns: 340px minmax(0, 1fr) 400px;
+    grid-template-rows: 56px minmax(0, 1fr) 300px;
+  }
+}
+.dk-ticker {
+  grid-area: tick;
+}
+.dk-lad-cell {
+  grid-area: lad;
+}
+.dk-centre-cell {
+  grid-area: centre;
+}
+.dk-right {
+  grid-area: right;
+  display: grid;
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 1px;
+  min-height: 0;
+}
+.dk-bottom-cell {
+  grid-area: bottom;
+}
+.dk-lad-cell,
+.dk-centre-cell,
+.dk-bottom-cell {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.dk-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  position: relative;
+}
+
+/* panel head: 14/500 title or tabs, filters at the right */
+.dk-head {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.dk-head > .ex-tabs {
+  flex: 1;
+  min-width: 0;
+}
+.dk-title {
+  align-self: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.dk-head-r {
+  margin-left: auto;
+  align-self: center;
+}
+.dk-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+.dk-empty {
+  padding: 24px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.dk-pill {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #10141a;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dk-pill:hover {
+  color: var(--ink-2);
+}
+.dk-pill.on {
+  background: #232a35;
+  color: var(--ink);
+}
+.dk-x {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dk-x:hover {
+  color: var(--ink);
+}
+.dk-back {
+  align-self: center;
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dk-back:hover {
+  color: var(--ink);
+}
+.dk :is(.dk-mk-row, .dk-sort, .dk-pill, .dk-x, .dk-back, .dk-lad-sym):focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---- ticker strip ---- */
+.dk-ticker {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  background: var(--panel);
+  padding: 0 16px;
+  overflow: hidden;
+}
+.dk-name {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-right: 20px;
+  margin-right: 20px;
+  border-right: 1px solid var(--rule);
+  height: 36px;
+}
+.dk-name-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  line-height: 22px;
+}
+.dk-name-big {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.dk-name-row .dk-x {
+  margin-left: 6px;
+  font-size: 13px;
+}
+.dk-name-sub {
+  font-size: 12px;
+  line-height: 14px;
+  color: var(--muted);
+}
+.dk-tk {
+  flex: 1;
+  min-width: 0;
+}
+.dk-tk .ex-ticker-grp {
+  gap: 20px;
+  padding: 0 16px;
+}
+.dk-tk .ex-ticker-lead {
+  padding-right: 20px;
+}
+.dk-tk-of {
+  color: var(--muted);
+}
+@media (min-width: 1800px) {
+  .dk-tk .ex-ticker-grp {
+    gap: 28px;
+    padding: 0 24px;
+  }
+}
+
+/* ---- centre chart ---- */
+.dk-centre .ex-chart,
+.dk-chart-col {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dk-chart-col > .ex-chart {
+  flex: 1;
+  min-height: 0;
+}
+.dk-chart.ex-chart .ex-tb {
+  padding-left: 12px;
+}
+.dk-info {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px 24px;
+  align-content: start;
+}
+.dk-info-it {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dk-info-it > span {
+  color: var(--muted);
+  align-self: flex-start;
+}
+.dk-info-it > span.dotted {
+  text-decoration: underline dotted rgba(138, 148, 165, 0.6);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.dk-info-it > b {
+  font-weight: 400;
+  color: var(--ink);
+}
+
+/* ---- quote ladder ---- */
+.dk-lad-sym {
+  align-self: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.dk-lad-sym:hover {
+  color: var(--ink);
+}
+.dk-lad-hd,
+.dk-lad-row {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 0.6fr;
+  align-items: center;
+  padding: 0 12px 0 16px;
+}
+.dk-lad-hd {
+  flex: none;
+  height: 26px;
+  color: var(--muted);
+}
+.dk-lad-hd span:not(:first-child),
+.dk-lad-row > span:not(:first-child) {
+  text-align: right;
+}
+.dk-lad-side {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+}
+.dk-lad-fill {
+  flex: 1;
+}
+.dk-lad-row {
+  flex: none;
+  height: 20px;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+}
+.dk-lad-row > span {
+  position: relative;
+  white-space: nowrap;
+}
+.dk-lad-bar {
+  position: absolute !important;
+  right: 0;
+  top: 1px;
+  bottom: 1px;
+  opacity: 0.14;
+  pointer-events: none;
+}
+.dk-lad-bar.b {
+  background: var(--up);
+}
+.dk-lad-bar.a {
+  background: var(--down);
+}
+.dk-lad-row.best .dk-lad-px {
+  font-weight: 500;
+}
+.dk-lad-row.through .dk-lad-px::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--warn);
+  vertical-align: 1px;
+}
+.dk-lad-q {
+  color: var(--ink);
+}
+.dk-lad-acct {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.dk-lad-mkt {
+  color: var(--muted);
+}
+.dk-lad-d {
+  color: var(--muted);
+}
+.dk-lad-mid {
+  flex: none;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px 0 16px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.dk-lad-mid-px {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.dk-lad-mid-sub {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: var(--muted);
+  line-height: 16px;
+}
+.dk-lad-mid-sub b {
+  font-weight: 400;
+  color: var(--ink-2);
+}
+.dk-lad-foot {
+  flex: none;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 16px;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+}
+.dk-lad-none {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 45%;
+}
+
+/* ---- instruments list ---- */
+.dk-mk-search {
+  flex: none;
+  margin: 10px 12px 4px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.dk-mk-search:focus-within {
+  border-color: var(--accent);
+}
+.dk-mk-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+}
+.dk-mk-search input::placeholder {
+  color: var(--muted);
+}
+.dk-mk-tabs {
+  flex: none;
+  padding: 0 12px;
+}
+.dk-mk-hd,
+.dk-mk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 0.85fr);
+  align-items: center;
+  padding: 0 12px;
+}
+.dk-mk-hd {
+  flex: none;
+  height: 26px;
+  border-top: 1px solid var(--rule);
+}
+.dk-sort {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.dk-sort:not(:first-child) {
+  text-align: right;
+}
+.dk-sort:hover,
+.dk-sort.on {
+  color: var(--ink-2);
+}
+.dk-sort-ic {
+  margin-left: 2px;
+  color: #4a5361;
+}
+.dk-sort.on .dk-sort-ic {
+  color: var(--accent);
+}
+.dk-mk-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.dk-mk-row {
+  width: 100%;
+  height: 24px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  text-align: right;
+  cursor: pointer;
+}
+.dk-mk-row > span:first-child {
+  text-align: left;
+}
+.dk-mk-row > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dk-mk-row:hover {
+  background: var(--raised);
+}
+.dk-mk-row.sel {
+  background: #1a2029;
+}
+.dk-mk-row.pin {
+  height: 28px;
+  border-bottom: 1px solid var(--rule);
+}
+.dk-mk-row.dust .dk-mk-sym {
+  color: var(--muted);
+}
+.dk-mk-sym {
+  font-weight: 500;
+}
+
+/* ---- latest fills ---- */
+.dk-tr-hd,
+.dk-tr-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.6fr) minmax(0, 0.9fr);
+  align-items: center;
+  padding: 0 12px;
+}
+.dk-tr-hd.inst,
+.dk-tr-row.inst {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 0.9fr);
+}
+.dk-tr-hd {
+  flex: none;
+  height: 26px;
+  color: var(--muted);
+}
+.dk-tr-hd span:not(:first-child),
+.dk-tr-row > span:not(:first-child) {
+  text-align: right;
+}
+.dk-tr-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.dk-tr-row {
+  height: 20px;
+  white-space: nowrap;
+}
+.dk-tr-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dk-tr-row.click {
+  cursor: pointer;
+}
+.dk-tr-row:hover {
+  background: var(--raised);
+}
+.dk-tr-row.fresh {
+  animation: dk-flash 1s ease-out;
+}
+@keyframes dk-flash {
+  from {
+    background: rgba(126, 166, 246, 0.16);
+  }
+  to {
+    background: transparent;
+  }
+}
+.dk-tr-sym .dk-tag {
+  margin-left: 4px;
+}
+
+/* ---- bottom panel ---- */
+.dk-bottom .dk-head {
+  padding-right: 16px;
+}
+.dk-bottom-tabs .ex-tabs-right {
+  gap: 16px;
+}
+.dk-bottom-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.dk-bottom-body > .ag-theme-quartz,
+.dk-bottom-body > div {
+  position: absolute;
+  inset: 0;
+}
+.dk-bottom-body .ag-row {
+  cursor: pointer;
+}
+.dk-accounts .ag-row {
+  cursor: default;
+}
+.dk-bottom-body .ag-row.dk-sel-row {
+  background: #1a2029;
+}
+/* the alerts list fills the tab: no panel head of its own */
+.dk-alerts > .panel {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+.dk-alerts > .panel > .panel-head {
+  display: none;
+}
+/* Hide amounts: the accounts' money columns (AccountsGrid is shared, so masked here) */
+.dk-hide .dk-accounts .ag-cell:is([col-id="equity"], [col-id="pnl_day"], [col-id="quote_free"], [col-id="quote_locked"], [col-id="inventory_value"], [col-id="fut_wallet"], [col-id="fut_upnl"]) {
+  color: transparent !important;
+}
+.dk-hide .dk-accounts .ag-cell:is([col-id="equity"], [col-id="pnl_day"], [col-id="quote_free"], [col-id="quote_locked"], [col-id="inventory_value"], [col-id="fut_wallet"], [col-id="fut_upnl"])::after {
+  content: "•••";
+  position: absolute;
+  right: 6px;
+  color: var(--muted);
+}
+.dk-lad-row.grid .dk-lad-px,
+.dk-lad-row.grid .dk-lad-d {
+  color: #4f5866;
+}
+.dk-bottom-body .ag-header-cell-resize::after {
+  opacity: 0;
+}
