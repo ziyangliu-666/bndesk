@@ -1,0 +1,4 @@
+/* Hide amounts: a masked figure reads muted, never as a gain, a loss or a loader (money.tsx). */
+.ops-masked {
+  color: var(--muted) !important;
+}

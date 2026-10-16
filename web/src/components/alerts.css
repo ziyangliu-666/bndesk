@@ -1,0 +1,50 @@
+/* AlertsList's `bare` rows (System → Alerts): a notification each, the text over a muted meta line. */
+.alerts-bare .alert {
+  grid-template-columns: 16px minmax(0, 1fr) auto 40px;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 14px;
+  line-height: 20px;
+}
+.alerts-bare .alert svg {
+  margin-top: 3px;
+}
+.alerts-bare .alert-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.alerts-bare .alert-text {
+  color: var(--ink);
+}
+.alerts-bare .alert-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.alerts-bare .alert-level {
+  margin: 0;
+  font-weight: 500;
+}
+.alerts-bare .alert-age,
+.alerts-bare .alert-act {
+  font-size: 12px;
+  line-height: 20px;
+}
+.alerts-bare .alert.cleared,
+.alerts-bare .alert.hidden {
+  opacity: 1;
+}
+.alerts-bare .alert.cleared .alert-text,
+.alerts-bare .alert.hidden .alert-text {
+  color: var(--ink-2);
+}
+.alerts-bare .alert.cleared svg,
+.alerts-bare .alert.hidden svg {
+  opacity: 0.55;
+}
