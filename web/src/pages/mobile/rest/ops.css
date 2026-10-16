@@ -230,6 +230,22 @@
   display: none;
 }
 
+.o-side {
+  flex: none;
+  font-size: 13px;
+  font-weight: 500;
+}
+.o-open-l {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--accent);
+}
+.o-sheet .r-stats {
+  padding-top: 4px;
+}
+.o-qmap {
+  padding-top: 8px;
+}
 .o-buy {
   color: var(--up);
 }

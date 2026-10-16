@@ -7,6 +7,9 @@
 .r-masked {
   color: var(--muted);
 }
+.crit-text {
+  color: var(--crit);
+}
 .r-dotted {
   text-decoration: underline dotted;
   text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
