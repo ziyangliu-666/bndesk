@@ -87,7 +87,12 @@ export function connect(): () => void {
       } catch {
         return;
       }
-      apply(m);
+      try {
+        apply(m);
+      } catch {
+        sock?.close(); // a patch that does not fit what we have: start over from a snapshot
+        return;
+      }
       // the snapshot holds the first screen; the rest of it (older fills, account points) once it is drawn
       if (m.type === "snapshot") afterPaint(() => ws === sock && sock.readyState === WebSocket.OPEN && sock.send("older"));
     };

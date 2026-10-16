@@ -30,6 +30,7 @@ use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use axum::routing::{any, get, post};
 use serde::Serialize;
+use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeFile;
@@ -114,6 +115,24 @@ impl<'a> Patch<'a> {
             days: &s.days,
             hours: &s.hours,
         }
+    }
+
+    /// PATCH_KEYS[i]'s value as JSON values (exact: from the numbers, not their text).
+    fn value(&self, i: usize) -> Value {
+        let v = match i {
+            0 => serde_json::to_value(self.summary),
+            1 => serde_json::to_value(self.accounts),
+            2 => serde_json::to_value(self.symbols),
+            3 => serde_json::to_value(self.exposure),
+            4 => serde_json::to_value(self.engines),
+            5 => serde_json::to_value(self.alerts),
+            6 => serde_json::to_value(self.feeds),
+            7 => serde_json::to_value(self.markouts),
+            8 => serde_json::to_value(self.orders),
+            9 => serde_json::to_value(self.days),
+            _ => serde_json::to_value(self.hours),
+        };
+        v.expect("protocol types always serialize")
     }
 
     /// Each PATCH_KEYS value, encoded.
@@ -247,12 +266,15 @@ pub async fn answer<D: DeskSource>(mut r: Requests, desk: D) {
 }
 
 /// Fans the desk state out to WebSocket clients: a snapshot on connect, then at most one
-/// patch / fills / series / account_series / bars message each per tick; a patch holds only the top-level keys
-/// that changed.
+/// patch / fills / series / account_series / bars message each per tick. A patch holds only the top-level keys
+/// that changed: whole, or under `diff` as the rows and fields that changed when that is shorter (an
+/// instrument's prices, not the 195 rows of the blotter). Every client's state is the last one broadcast (a
+/// snapshot is encoded between ticks from the view the last patch was made of), so the edits fit every client.
 pub struct Hub {
     shared: Arc<Shared>,
     requests: Option<Requests>,
-    last: [Option<Vec<u8>>; 11],
+    /// each PATCH_KEYS value as last sent: its JSON, and as values for the next one's edits
+    last: [Option<(Vec<u8>, Value)>; 11],
     full: bool,
 }
 
@@ -308,19 +330,34 @@ impl Hub {
             return;
         }
         let mut body: Vec<u8> = Vec::new();
+        let mut diff = serde_json::Map::new();
         for (i, b) in v.parts().into_iter().enumerate() {
-            if self.last[i].as_ref() != Some(&b) {
-                body.push(b',');
-                body.push(b'"');
-                body.extend_from_slice(PATCH_KEYS[i].as_bytes());
-                body.extend_from_slice(b"\":");
-                body.extend_from_slice(&b);
-                self.last[i] = Some(b);
+            if self.last[i].as_ref().is_some_and(|l| l.0 == b) {
+                continue;
             }
+            let val = v.value(i);
+            // the rows or fields that changed, when that is shorter than the whole value
+            match self.last[i].as_ref().and_then(|l| edits(&l.1, &val)) {
+                Some(e) if P::encode(&e).len() < b.len() => {
+                    diff.insert(PATCH_KEYS[i].to_string(), e);
+                }
+                _ => {
+                    body.push(b',');
+                    body.push(b'"');
+                    body.extend_from_slice(PATCH_KEYS[i].as_bytes());
+                    body.extend_from_slice(b"\":");
+                    body.extend_from_slice(&b);
+                }
+            }
+            self.last[i] = Some((b, val));
         }
-        if !body.is_empty() {
+        if !body.is_empty() || !diff.is_empty() {
             let mut p = format!("{{\"now\":{}", v.now).into_bytes();
             p.extend_from_slice(&body);
+            if !diff.is_empty() {
+                p.extend_from_slice(b",\"diff\":");
+                p.extend_from_slice(&P::encode(&diff));
+            }
             p.push(b'}');
             self.shared.broadcast(msg("patch", &p));
         }
@@ -340,6 +377,43 @@ impl Hub {
 
     pub fn handle(&self) -> HubHandle {
         HubHandle(self.shared.clone())
+    }
+}
+
+/// What turns `old` into `new` for a patch's `diff`: an object's changed fields, or `[index, changed fields]` for each
+/// changed row of an array of objects that kept its length. None when it must go whole: another shape, a row
+/// count or a field set that changed.
+fn edits(old: &Value, new: &Value) -> Option<Value> {
+    fn fields(a: &serde_json::Map<String, Value>, b: &serde_json::Map<String, Value>) -> Option<Value> {
+        if a.len() != b.len() {
+            return None;
+        }
+        let mut out = serde_json::Map::new();
+        for (k, v) in b {
+            match a.get(k) {
+                Some(x) if x == v => {}
+                Some(_) => {
+                    out.insert(k.clone(), v.clone());
+                }
+                None => return None,
+            }
+        }
+        Some(Value::Object(out))
+    }
+    match (old, new) {
+        (Value::Object(a), Value::Object(b)) => fields(a, b),
+        (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
+            let mut out = vec![];
+            for (i, (x, y)) in a.iter().zip(b).enumerate() {
+                if x == y {
+                    continue;
+                }
+                let (Value::Object(x), Value::Object(y)) = (x, y) else { return None };
+                out.push(Value::Array(vec![i.into(), fields(x, y)?]));
+            }
+            Some(Value::Array(out))
+        }
+        _ => None,
     }
 }
 
@@ -669,7 +743,8 @@ mod tests {
         assert_eq!(m.len(), 2);
         let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
         let keys: Vec<&String> = v["data"].as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["now", "summary"]);
+        assert_eq!(keys, ["diff", "now"]); // the one field that changed
+        assert_eq!(v["data"]["diff"], serde_json::json!({"summary": {"equity": 2.5}}));
         assert_eq!(v["data"]["now"], 5);
         assert!(m[1].starts_with("{\"type\":\"fills\",\"data\":[{\"id\":\"f\""));
         let bars = P::DayBars { t: vec![60_000], volume: vec![2.5], ..Default::default() };
@@ -678,6 +753,41 @@ mod tests {
         hub.reset();
         hub.tick(&Patch::of(&s), &[f], &[], &[], &nb, || (b"{\"x\":1}".to_vec(), b"{\"y\":2}".to_vec()));
         assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}", "{\"type\":\"older\",\"data\":{\"y\":2}}"]);
+    }
+
+    #[test]
+    fn patch_sends_changed_rows_and_fields() {
+        let mut hub = Hub::new();
+        let mut rx = hub.shared.tx.subscribe();
+        hub.shared.clients.store(1, Ordering::Relaxed);
+        let nb = P::DayBars::default();
+        let row = |s: &str, mid: f64| P::SymbolRow { symbol: s.into(), mid: Some(mid), ..Default::default() };
+        let mut s = P::Snapshot { symbols: (0..20).map(|i| row(&format!("S{i}"), i as f64)).collect(), ..Default::default() };
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        drain(&mut rx);
+        s.symbols[3].mid = Some(3.5);
+        s.symbols[3].bid = Some(3.4);
+        s.symbols[7].mid = None;
+        s.summary.equity = 2.5;
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        let m = drain(&mut rx);
+        let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
+        assert_eq!(v["data"]["diff"]["symbols"], serde_json::json!([[3, {"mid": 3.5, "bid": 3.4}], [7, {"mid": null}]]));
+        assert_eq!(v["data"]["diff"]["summary"], serde_json::json!({"equity": 2.5}));
+        assert!(v["data"].get("symbols").is_none());
+        // a row more: the whole list
+        s.symbols.push(row("S20", 20.0));
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        let v: serde_json::Value = serde_json::from_str(&drain(&mut rx)[0]).unwrap();
+        assert_eq!(v["data"]["symbols"].as_array().unwrap().len(), 21);
+        assert!(v["data"].get("diff").is_none());
+        // every row changed: whole again (the edits would be longer)
+        for r in &mut s.symbols {
+            r.mid = Some(-1.0);
+        }
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        let v: serde_json::Value = serde_json::from_str(&drain(&mut rx)[0]).unwrap();
+        assert!(v["data"]["symbols"].is_array() || v["data"]["diff"]["symbols"].is_array());
     }
 
     struct Fake(std::rc::Rc<std::cell::Cell<i64>>);

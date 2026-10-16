@@ -2,12 +2,16 @@
 
 export type Msg =
   | { type: "snapshot"; data: Snapshot }
-  | { type: "patch"; data: Partial<Snapshot> } // top-level keys replaced wholesale
+  | { type: "patch"; data: Partial<Snapshot> & { diff?: Diff } } // top-level keys replaced wholesale, or edited (diff)
   | { type: "fills"; data: Fill[] } // upsert by id
   | { type: "series"; data: SeriesPoint[] } // appended
   | { type: "account_series"; data: AccountSeries[] } // points appended per account
   | { type: "bars"; data: DayBars } // when a minute closes: the last minute bars, replaced by t
   | { type: "older"; data: Older }; // asked for with the text "older": what the WebSocket's snapshot left out
+
+/** A patch's edits to the values the client has: for an object, the fields that changed; for a list, each changed
+ *  row as [index, the fields that changed] (the list kept its length). Unchanged rows keep their objects. */
+export type Diff = { [K in keyof Snapshot]?: Snapshot[K] extends unknown[] ? [number, Record<string, unknown>][] : Record<string, unknown> };
 
 export interface Snapshot {
   now: number;

@@ -240,7 +240,7 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
 ```ts
 type Msg =
   | { type: "snapshot"; data: Snapshot }
-  | { type: "patch"; data: Partial<Snapshot> }      // top-level keys replaced wholesale
+  | { type: "patch"; data: Partial<Snapshot> & { diff?: Diff } }   // top-level keys replaced wholesale, or edited
   | { type: "fills"; data: Fill[] }                 // upsert by id
   | { type: "series"; data: SeriesPoint[] }         // appended
   | { type: "account_series"; data: AccountSeries[] }    // points appended per account
@@ -282,6 +282,10 @@ interface DayBars {
 }
 
 interface Older { fills: Fill[]; account_series: AccountSeries[] }   // newest first; points per account, ascending
+
+// A patch's keys that changed are whole, or under diff, whichever is shorter: an object's changed fields, a list's
+// changed rows as [index, changed fields] when it kept its length. A row's other fields, and the other rows, stay.
+type Diff = { [K in keyof Snapshot]?: [number, Record<string, unknown>][] | Record<string, unknown> };
 
 interface Summary {
   equity: number; pnl_day: number; pnl_1h: number;

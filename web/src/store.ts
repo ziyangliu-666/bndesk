@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AccountSeries, Alert, DayBars, Fill, Msg, Older, SeriesPoint, Snapshot, Venue } from "./protocol";
+import type { AccountSeries, Alert, DayBars, Diff, Fill, Msg, Older, SeriesPoint, Snapshot, Venue } from "./protocol";
 import type { TzMode } from "./format";
 import { isPhoneLayout } from "./responsive";
 
@@ -127,6 +127,18 @@ function appendSeries(cur: SeriesPoint[], pts: SeriesPoint[]): SeriesPoint[] {
   let base = cur;
   if (same) base = cur.slice(0, -1).concat(same);
   return fresh.length ? base.concat(fresh) : base;
+}
+
+/** A value with a patch's edits made: changed rows are new objects, the others stay as they were (a grid or a
+ *  memoized row sees which changed). Edits that do not fit (a row past the end) throw: ws.ts reconnects. */
+function edit<T>(cur: T, e: [number, Record<string, unknown>][] | Record<string, unknown>): T {
+  if (!Array.isArray(cur)) return { ...cur, ...(e as Record<string, unknown>) };
+  const out = cur.slice();
+  for (const [i, f] of e as [number, Record<string, unknown>][]) {
+    if (!(i >= 0 && i < out.length)) throw new Error(`patch: row ${i} of ${out.length}`);
+    out[i] = { ...out[i], ...f };
+  }
+  return out as T;
 }
 
 const MINUTE = 60_000;
@@ -448,13 +460,15 @@ export const useStore = create<State>((set, get) => ({
       }
       case "patch": {
         if (!snap) return;
-        const next = { ...snap, ...m.data };
+        const { diff, ...whole } = m.data;
+        const next = { ...snap, ...whole };
+        if (diff) for (const k of Object.keys(diff) as (keyof Diff)[]) Object.assign(next, { [k]: edit(snap[k], diff[k]!) });
         set({
           snap: next,
           lastMsg: now,
           skew: m.data.now != null ? m.data.now - now : get().skew,
-          ...(m.data.exposure ? sample(get().ring, next) : null),
-          ...(m.data.alerts ? pruneHidden(get().hiddenAlerts, m.data.alerts) : null),
+          ...(m.data.exposure || diff?.exposure ? sample(get().ring, next) : null),
+          ...(m.data.alerts || diff?.alerts ? pruneHidden(get().hiddenAlerts, next.alerts) : null),
         });
         if (m.data.fills) fillListeners.forEach((fn) => fn({ kind: "reset", fills: next.fills }));
         return;
