@@ -476,6 +476,7 @@ export function ExChart(p: ExChartProps) {
       ts.unsubscribeSizeChange(measure);
       c.remove();
       chart.current = null;
+      needFit.current = true; // a chart made again (a remount) fits its data again
       liveMap.clear();
       mk.clear();
       lines.current = [];
@@ -508,8 +509,13 @@ export function ExChart(p: ExChartProps) {
     for (const l of live.current.values()) n = Math.max(n, l.data?.length ?? 0);
     if (!n) return;
     const want = cbs.current.initialBars;
-    if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
-    else c.timeScale().fitContent();
+    const apply = () => {
+      if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
+      else c.timeScale().fitContent();
+    };
+    apply();
+    // the chart takes new data on its next frame and clamps a range set before it to the old bars: again then
+    requestAnimationFrame(() => chart.current === c && apply());
   }, [touch]);
 
   useLayoutEffect(() => {
@@ -615,8 +621,6 @@ export function ExChart(p: ExChartProps) {
       else if (needFit.current && [...map.values()].some((l) => l.data?.length)) {
         needFit.current = false;
         fitView();
-        // lightweight-charts can lay the new bars out after this frame (a change of bar count): fit again then
-        requestAnimationFrame(fitView);
       }
       hov.set({ v: hov.get().v + 1 });
       setDrawn((n) => n + 1);

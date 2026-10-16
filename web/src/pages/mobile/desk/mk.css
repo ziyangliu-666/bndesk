@@ -1,0 +1,187 @@
+/* ---- phone Markets: List | Quotes, search, filters, the sortable header, 56 px rows ---- */
+
+.mk-view {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-bottom: 1px solid var(--rule);
+}
+.mk-view .ex-tabs {
+  height: 44px;
+  gap: 24px;
+}
+.mk-view .ex-tab {
+  justify-content: center;
+  min-width: 48px;
+  font-size: 15px;
+}
+
+.mk-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin: 10px 0 2px;
+  padding: 0 4px 0 12px;
+  background: var(--raised);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.mk-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+.mk-search input::placeholder {
+  color: var(--muted);
+}
+.mk-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.mk-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 40px;
+  color: var(--muted);
+}
+
+/* the filters and the header stay under the top bar while the list scrolls */
+.mk-sticky {
+  position: sticky;
+  top: calc(var(--m-bar-h) + var(--safe-t));
+  z-index: 5;
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+}
+.mk-filters {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mk-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.mk-head,
+.mk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 108px 104px;
+  column-gap: 8px;
+  align-items: center;
+}
+.mk-head {
+  height: 44px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mk-head > button {
+  height: 44px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mk-head .on {
+  color: var(--ink);
+}
+.mk-head i {
+  font-style: normal;
+  margin-left: 2px;
+}
+.mk-h-m,
+.mk-h-r {
+  text-align: right;
+}
+
+.mk-list {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+}
+.mk-row {
+  position: relative;
+  width: 100%;
+  min-height: 56px;
+  padding: 6px var(--m-pad-r) 6px var(--m-pad-l);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.mk-row:active {
+  background: var(--raised);
+}
+.mk-row + .mk-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--m-pad-l);
+  right: var(--m-pad-r);
+  border-top: 1px solid var(--rule);
+  opacity: 0.5;
+}
+.mk-c-l,
+.mk-c-m,
+.mk-c-r {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mk-c-m,
+.mk-c-r {
+  align-items: flex-end;
+  text-align: right;
+}
+.mk-sym {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mk-quote {
+  margin-left: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.mk-px,
+.mk-pnl {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.mk-px {
+  color: var(--ink);
+}
+.mk-sub {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.mk-sub.up {
+  color: var(--up);
+}
+.mk-sub.down {
+  color: var(--down);
+}
+
+/* Quotes: the full live map */
+.mk-quotes {
+  padding-top: 4px;
+}
+.mk-quotes .q-legend {
+  padding: 4px 0;
+}

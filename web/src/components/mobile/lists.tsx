@@ -74,7 +74,7 @@ export function Coming({ what }: { what: ReactNode }) {
 
 /**
  * Two lines on each side: title / subtitle on the left, primary / secondary figure on the right. The whole
- * row is the target when it has `to` (pushes the route, shows a chevron) or `onClick`. Rows inside one card
+ * row is the target when it has `to` (pushes the route; no chevron, as on an exchange app: the whole row is the target) or `onClick`. Rows inside one card
  * are split by inset rules.
  */
 export function ListRow({
@@ -103,7 +103,7 @@ export function ListRow({
   dot?: ReactNode;
   to?: Route;
   onClick?: () => void;
-  /** Defaults to true when the row navigates (`to`). */
+  /** A trailing chevron; off by default (the spec drops them: the whole row is the target). */
   chevron?: boolean;
   /** Tints the title. */
   tone?: "warn" | "crit";
@@ -132,7 +132,7 @@ export function ListRow({
           {secondary != null && <span className="m-row-sec">{secondary}</span>}
         </span>
       )}
-      {(chevron ?? to != null) && <IconChevronRight className="m-row-chev" size={18} stroke={1.75} />}
+      {chevron && <IconChevronRight className="m-row-chev" size={18} stroke={1.75} />}
     </>
   );
   if (to || onClick) {

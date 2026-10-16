@@ -20,8 +20,9 @@ export function span(ms: number | null | undefined): string {
 
 // ---- money: USD figures that "Hide amounts" masks; bps, percentages and counts are never masked ----
 
-/** pnl: signed USD (+1,234.56); usd: unsigned; short: four significant figures (95.0k); pnlShort: signed short. */
-export type MoneyKind = "pnl" | "usd" | "short" | "pnlShort";
+/** pnl: signed USD (+1,234.56); usd: unsigned; short: four significant figures (95.0K); pnlShort: signed short;
+ *  full: the whole figure, never abbreviated (balances: 45,370.12). Suffixes are upper case. */
+export type MoneyKind = "pnl" | "usd" | "short" | "pnlShort" | "full";
 
 const MASK = "•••";
 
@@ -39,16 +40,25 @@ export function tone(v: number | null | undefined, text?: string): "" | "up" | "
   return v > 0 ? "up" : "down";
 }
 
+const FULL = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Exchange style: the K / M suffixes upper case (9.50K, 1.20M), never a lower-case m that reads as minutes. */
+const upper = (s: string) => s.replace(/([0-9])([km])$/, (_, d: string, u: string) => d + u.toUpperCase());
+
 function fmtMoney(v: number | null | undefined, kind: MoneyKind, hide: boolean): string {
   if (v == null || !Number.isFinite(v)) return DASH;
   const signedKind = kind === "pnl" || kind === "pnlShort";
-  const short = kind === "short" || kind === "pnlShort" ? usdShort(v) : usd(v);
+  if (kind === "full") {
+    const s = FULL.format(Math.abs(v));
+    if (readsZero(s)) return hide ? MASK : s;
+    return hide ? (v < 0 ? MINUS : "") + MASK : (v < 0 ? MINUS : "") + s;
+  }
+  const short = upper(kind === "short" || kind === "pnlShort" ? usdShort(v) : usd(v));
   // a figure that rounds to zero is plain zero: no sign, masked or not
   if (readsZero(short)) return hide ? MASK : kind === "short" || kind === "pnlShort" ? "0.00" : short;
   if (hide) return (v < 0 ? MINUS : signedKind && v > 0 ? "+" : "") + MASK;
   switch (kind) {
     case "pnl":
-      return pnl(v);
+      return upper(pnl(v));
     case "usd":
     case "short":
       return short;
