@@ -991,6 +991,7 @@ function summary(): Summary {
 
 function symbolRow(i: Inst): SymbolRow {
   const mid = midOf(i);
+  const bk = book(i);
   const tr = tradingOf(i);
   const fl = i.cost != null ? i.inv * (mid - i.cost) : 0;
   const best = (side: "buy" | "sell") => {
@@ -1004,7 +1005,7 @@ function symbolRow(i: Inst): SymbolRow {
     reference: i.ref ? i.symbol : null,
     mid,
     ref_mid: i.ref ? i.refMid : null,
-    spread_bps: ((i.spreadTicks * i.tick) / mid) * 1e4,
+    spread_bps: ((bk.ask - bk.bid) / mid) * 1e4,
     basis_bps: i.ref ? (mid / i.refMid - 1) * 1e4 : null,
     inv_qty: i.inv,
     inv_value: i.inv * mid,
@@ -1031,9 +1032,20 @@ function symbolRow(i: Inst): SymbolRow {
     last_fill: i.last,
     dust: i.symbol === "DOTUSDT",
     fair: i.fair,
-    bid: bidOf(i),
-    ask: askOf(i),
+    // the market's best bid and ask include our own orders, as on the exchange's book (ours may improve them)
+    ...bk,
   };
+}
+
+function book(i: Inst): { bid: number; ask: number } {
+  let bid = bidOf(i);
+  let ask = askOf(i);
+  for (const o of i.orders) {
+    if (o.side === "buy") bid = Math.max(bid, o.o.price);
+    else ask = Math.min(ask, o.o.price);
+  }
+  if (ask <= bid) ask = bid + i.tick;
+  return { bid, ask };
 }
 
 function legRow(l: Leg): SymbolRow {
@@ -1138,7 +1150,8 @@ function account(a: (typeof ACCOUNTS)[number]): Account {
       : [],
     orders_10s: adds.length,
     orders_10s_limit: 100,
-    orders_1d: (isMain ? 2_400 : 38_000) + eng1.orders / 4 + adds.length,
+    // each account its own count (the sub-accounts quote different names at different rates)
+    orders_1d: (isMain ? 2_400 : 26_000 + 9_500 * ACCOUNTS.findIndex((x) => x.id === a.id)) + eng1.orders / 4 + adds.length,
     orders_1d_limit: 160_000,
     open_orders: orders.length + (isMain && hedgeOrder ? 1 : 0),
     bids_notional: bidsN,

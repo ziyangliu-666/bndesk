@@ -398,13 +398,23 @@ function fills(symbol: string, from: number, to: number): HistFill[] {
   if (!tracked(symbol)) return [];
   const p = path(symbol);
   const isPerpHedged = symbol === "BTCUSDT" || symbol === "ETHUSDT";
+  const snap = useStore.getState().snap;
+  // the live mock's own fills where its tape reaches (the chart's markers and the Desk's lists show the same),
+  // generated ones before it, at the instrument's own pace today (so a day's count is of the same order)
+  const live = (snap?.fills ?? []).filter((f) => f.symbol === symbol);
+  const tapeFrom = live.length ? live[live.length - 1]!.ts : Infinity;
+  const row = snap?.symbols.find((s) => s.symbol === symbol && s.venue === "spot");
+  const dayStart = snap?.summary.day_start ?? 0;
+  const perMin = row && snap ? row.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.15;
+  // a cluster has about 2.8 fills; activity averages about 1
+  const k = Math.min(0.9, Math.max(0.02, perMin / 2.8));
   const m0 = Math.max(0, Math.floor((from - ORIGIN) / MIN));
-  const m1 = Math.min(p.n - 1, Math.floor((to - ORIGIN) / MIN));
+  const m1 = Math.min(p.n - 1, Math.floor((Math.min(to, tapeFrom - 1) - ORIGIN) / MIN));
   const out: HistFill[] = [];
   for (let m = m0; m <= m1; m++) {
     const r = hash(m, p.seed + 10);
     const a = activity(m);
-    if (r < 0.05 * a) {
+    if (r < k * a) {
       // a cluster: a few fills within seconds, on one side
       const n = 1 + Math.floor(-Math.log(Math.max(1e-9, hash(m, p.seed + 11))) * 1.8);
       const [, h, l] = minuteBar(p, m, 1);
@@ -431,7 +441,11 @@ function fills(symbol: string, from: number, to: number): HistFill[] {
       out.push({ t: ORIGIN + m * MIN + 30_000, side, price: px, qty: (150 + hash(m, p.seed + 19) * 350) / px, account: "main", venue: "usdm", maker: false });
     }
   }
-  return out.sort((x, y) => x.t - y.t);
+  for (const f of live)
+    if (f.ts >= Math.max(from, tapeFrom) && f.ts < to)
+      out.push({ t: f.ts, side: f.side, price: f.price, qty: f.qty, account: f.account, venue: f.venue, maker: f.maker });
+  // the server's page: at most 20 000 fills from `from` on (the page asks again after the last one)
+  return out.filter((f) => f.t >= from && f.t < to).sort((x, y) => x.t - y.t).slice(0, 20_000);
 }
 
 export function mockApi(path: string, q: Record<string, string | number>): unknown {
