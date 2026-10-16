@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 
@@ -7,8 +7,60 @@ const api = process.env.DESK_API ?? "http://127.0.0.1:8710";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
+type Chunk = { type: "chunk"; fileName: string; facadeModuleId: string | null; imports: string[]; isEntry: boolean; viteMetadata?: { importedCss: Set<string> } };
+
+/** The files a chunk needs before it runs: itself, its static imports, their CSS. */
+function closure(bundle: Record<string, { type: string }>, start: Chunk): string[] {
+  const out = new Set<string>();
+  const walk = (c: Chunk) => {
+    if (out.has(c.fileName)) return;
+    out.add(c.fileName);
+    c.viteMetadata?.importedCss.forEach((f) => out.add(f));
+    for (const i of c.imports) {
+      const d = bundle[i] as Chunk | undefined;
+      if (d?.type === "chunk") walk(d);
+    }
+  };
+  walk(start);
+  return [...out];
+}
+
+/**
+ * The Desk page is a lazy chunk on both layouts (a phone never loads AG Grid), so its files would be asked for
+ * only once the entry has run. A script in index.html asks for the layout's Desk files at once instead, alongside
+ * the entry's: `modulepreload` for scripts, `preload` for its CSS. The phone test mirrors responsive.ts.
+ */
+function preloadDesk(): Plugin {
+  let base = "/";
+  return {
+    name: "preload-desk",
+    apply: "build",
+    configResolved(c) {
+      base = c.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html, ctx) {
+        const bundle = ctx.bundle as Record<string, { type: string }> | undefined;
+        if (!bundle) return html;
+        const chunks = Object.values(bundle).filter((c): c is Chunk => c.type === "chunk") as Chunk[];
+        const entry = chunks.find((c) => c.isEntry);
+        const find = (src: string) => chunks.find((c) => c.facadeModuleId?.replaceAll("\\", "/").endsWith(src));
+        const desk = find("/src/pages/Desk.tsx");
+        const phone = find("/src/pages/mobile/DeskM.tsx");
+        if (!entry || !desk || !phone) return html;
+        const have = new Set(closure(bundle, entry));
+        const files = (c: Chunk) => closure(bundle, c).filter((f) => !have.has(f)).map((f) => base + f);
+        const script = `(function(){var m=function(q){return matchMedia(q).matches};var p=m("(max-width: 47.99em)")||(m("(pointer: coarse)")&&Math.min(screen.width,screen.height)<=480);var fs=p?${JSON.stringify(files(phone))}:${JSON.stringify(files(desk))};fs.forEach(function(f){var l=document.createElement("link");if(/\\.css$/.test(f)){l.rel="preload";l.as="style"}else{l.rel="modulepreload"}l.crossOrigin="";l.href=f;document.head.appendChild(l)})})();`;
+        // first in the head: a script after a stylesheet waits for it
+        return html.replace(/<meta charset="UTF-8" \/>\n/, (m) => `${m}    <script>${script}</script>\n`);
+      },
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), preloadDesk()],
   // shown on the phone's More page
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

@@ -15,6 +15,16 @@ export function afterPaint(fn: () => void, timeout = 1000) {
 
 let kick: (() => void) | null = null;
 
+type Early = { ws: WebSocket; queue: (string | ArrayBuffer)[] };
+
+/** index.html's socket, once, while it is still connecting or open. */
+function takeEarly(): Early | null {
+  const w = window as Window & { __deskWs?: Early };
+  const e = w.__deskWs;
+  delete w.__deskWs;
+  return e && e.ws.readyState <= WebSocket.OPEN ? e : null;
+}
+
 /** Drop the socket and open a fresh one now, skipping any backoff wait. */
 export function reconnectNow() {
   kick?.();
@@ -56,8 +66,10 @@ export function connect(): () => void {
   const open = () => {
     if (closed) return;
     let sock: WebSocket | null = null;
+    // the socket index.html opened while the scripts loaded, with what it has received (the first time only)
+    const early = takeEarly();
     try {
-      ws = new WebSocket(url());
+      ws = early?.ws ?? new WebSocket(url());
       sock = ws;
     } catch {
       schedule();
@@ -83,13 +95,17 @@ export function connect(): () => void {
       attempt = 0;
       lastMsg = Date.now();
     };
-    ws.onmessage = (ev) => {
+    const onData = (data: string | ArrayBuffer) => {
       lastMsg = Date.now();
-      const data = ev.data as string | ArrayBuffer;
       queue = queue
         .then(() => (typeof data === "string" ? data : inflate(data)))
         .then(handle, () => sock?.close()); // undecodable frame: reconnect for a fresh snapshot
     };
+    ws.onmessage = (ev) => onData(ev.data as string | ArrayBuffer);
+    if (early) {
+      if (ws.readyState === WebSocket.OPEN) ws.onopen(new Event("open"));
+      early.queue.forEach(onData);
+    }
     ws.onclose = () => {
       if (ws !== sock) return; // replaced by reconnectNow
       ws = null;

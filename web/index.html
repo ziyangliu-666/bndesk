@@ -2,6 +2,22 @@
 <html lang="en" data-mantine-color-scheme="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // The desk's WebSocket opens while the scripts load, so its snapshot is on the way before they run; ws.ts takes
+      // it over with the messages it has queued. Not in the mock build (VITE_MOCK=1).
+      (function () {
+        if ("%VITE_MOCK%" === "1") return;
+        try {
+          var q = [];
+          var s = new WebSocket((location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws");
+          s.binaryType = "arraybuffer";
+          s.onmessage = function (e) {
+            q.push(e.data);
+          };
+          window.__deskWs = { ws: s, queue: q };
+        } catch (e) {}
+      })();
+    </script>
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"

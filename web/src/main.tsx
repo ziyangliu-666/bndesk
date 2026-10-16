@@ -8,7 +8,7 @@ import "@mantine/core/styles.css";
 import "./styles.css";
 import "./mobile.css";
 import { theme } from "./theme";
-import { App } from "./App";
+import { App, preloadFirst } from "./App";
 import { useStore } from "./store";
 import { connect } from "./ws";
 import { reloadOnce } from "./components/LoadBoundary";
@@ -18,6 +18,8 @@ import { reloadOnce } from "./components/LoadBoundary";
 window.addEventListener("vite:preloadError", (e) => {
   if (reloadOnce()) e.preventDefault();
 });
+
+preloadFirst();
 
 if (import.meta.env.VITE_MOCK === "1") {
   void import("./mock").then(({ startMock }) => {

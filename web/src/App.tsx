@@ -1,4 +1,4 @@
-import { lazy, Suspense, useDeferredValue, useEffect } from "react";
+import { Suspense, useDeferredValue, useEffect } from "react";
 import { Header, PAGE_KEYS } from "./components/Header";
 import { AlertBanner } from "./components/AlertBanner";
 import { DemoNotice } from "./components/DemoNotice";
@@ -6,25 +6,28 @@ import { deskPage, useStore } from "./store";
 import { useIsMobile } from "./hooks";
 import { MobileShell } from "./components/mobile/MobileShell";
 import { LoadBoundary } from "./components/LoadBoundary";
-import { isPhoneLayout } from "./responsive";
+import { isPhoneLayout, isPhoneNow } from "./responsive";
+import { lazyPage, useFirstPage } from "./lazyPage";
+import { routePage } from "./pages/mobile";
 
 // Every page is its own chunk, so a phone, whose pages are lazy too (pages/mobile), never loads AG Grid. The
 // desktop fetches all of them as soon as it mounts (while the first snapshot is on its way), and a page switch
 // keeps the page shown until the next one is ready, so a slow load never blanks the frame.
-const LOAD = {
-  desk: () => import("./pages/Desk").then((m) => ({ default: m.Desk })),
-  markouts: () => import("./pages/Markouts").then((m) => ({ default: m.Markouts })),
-  accounts: () => import("./pages/Accounts").then((m) => ({ default: m.Accounts })),
-  engine: () => import("./pages/Engine").then((m) => ({ default: m.Engine })),
-  orders: () => import("./pages/Orders").then((m) => ({ default: m.Orders })),
-  history: () => import("./pages/History").then((m) => ({ default: m.History })),
-};
-const Desk = lazy(LOAD.desk);
-const Markouts = lazy(LOAD.markouts);
-const Accounts = lazy(LOAD.accounts);
-const Engine = lazy(LOAD.engine);
-const Orders = lazy(LOAD.orders);
-const History = lazy(LOAD.history);
+const Desk = lazyPage(() => import("./pages/Desk").then((m) => ({ default: m.Desk })));
+const Markouts = lazyPage(() => import("./pages/Markouts").then((m) => ({ default: m.Markouts })));
+const Accounts = lazyPage(() => import("./pages/Accounts").then((m) => ({ default: m.Accounts })));
+const Engine = lazyPage(() => import("./pages/Engine").then((m) => ({ default: m.Engine })));
+const Orders = lazyPage(() => import("./pages/Orders").then((m) => ({ default: m.Orders })));
+const History = lazyPage(() => import("./pages/History").then((m) => ({ default: m.History })));
+const LOAD = [Desk, Markouts, Accounts, Engine, Orders, History];
+const PAGE = { desk: Desk, markouts: Markouts, accounts: Accounts, engine: Engine, orders: Orders, history: History };
+
+/** The layout's Desk, fetched at once (index.html has already asked for its files): it is ready to draw when the
+ *  first snapshot lands, instead of being asked for only then. */
+export function preloadFirst() {
+  const r = useStore.getState().route;
+  void (isPhoneNow() ? routePage(r) : PAGE[deskPage(r.page)]).preload().catch(() => {});
+}
 
 export function App() {
   const mobile = useIsMobile();
@@ -52,8 +55,10 @@ export function App() {
 function DesktopApp() {
   // deferred: a page whose chunk is still loading suspends the deferred render, not the one on screen
   const page = useDeferredValue(deskPage(useStore((s) => s.page)));
-  const ready = useStore((s) => s.snap != null);
-  useEffect(() => Object.values(LOAD).forEach((load) => void load().catch(() => {})), []);
+  // the first page's chunk is there before it renders: it shows complete, never as a fallback
+  const firstPage = useFirstPage(PAGE[page]);
+  const ready = useStore((s) => s.snap != null) && firstPage;
+  useEffect(() => LOAD.forEach((p) => void p.preload().catch(() => {})), []);
   return (
     <div className="app">
       <Header />

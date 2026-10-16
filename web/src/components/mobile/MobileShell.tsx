@@ -3,7 +3,8 @@ import { UnstyledButton } from "@mantine/core";
 import { IconX } from "@tabler/icons-react";
 import { arrival, back, hashOf, isSub, useStore, type Route } from "../../store";
 import { TEXT_FIELD } from "../../responsive";
-import { DETAILS, PAGES } from "../../pages/mobile";
+import { DETAILS, PAGES, routePage } from "../../pages/mobile";
+import { useFirstPage } from "../../lazyPage";
 import { TopBar } from "./TopBar";
 import { MobileNav } from "./MobileNav";
 import { InfoSheet } from "./Info";
@@ -14,7 +15,9 @@ import "./shell.css";
 /** The phone app: top bar, the route's page, bottom tab bar. The document scrolls, not a box inside it. */
 export function MobileShell() {
   const route = useStore((s) => s.route);
-  const ready = useStore((s) => s.snap != null);
+  // the first page's chunk is there before it renders: it shows complete, never as a fallback
+  const firstPage = useFirstPage(routePage(route));
+  const ready = useStore((s) => s.snap != null) && firstPage;
   const typing = useTyping();
   const app = useRef<HTMLDivElement>(null);
   useEdgeBack();

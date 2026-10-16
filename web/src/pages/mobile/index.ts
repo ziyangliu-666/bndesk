@@ -1,4 +1,5 @@
-import { lazy, memo, type ComponentType, type LazyExoticComponent } from "react";
+import { memo, type ComponentType } from "react";
+import { lazyPage, type LazyPage } from "../../lazyPage";
 import type { Detail, Page, Route } from "../../store";
 import type { Snapshot } from "../../protocol";
 import { RULES, levelWord } from "./rules";
@@ -6,18 +7,18 @@ import { RULES, levelWord } from "./rules";
 // The phone's pages, one lazy chunk each. A page agent owns its own file; this table only maps routes to
 // them. A detail page gets its detail's fields as props (InstrumentM gets { symbol, venue }, and so on).
 
-type Lazy<P> = LazyExoticComponent<ComponentType<P>>;
+type Lazy<P> = LazyPage<P>;
 type DetailProps<K extends Detail["kind"]> = Omit<Extract<Detail, { kind: K }>, "kind">;
 
 // Memoized: a page renders for its own data (useLive, store selectors), not each time the shell above it does
 // (the shell's own state changes rarely; the freshness clock re-renders only the pill and the stale mark).
 const page = <K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K): Lazy<object> =>
-  lazy(() => load().then((m) => ({ default: memo(m[name]) as unknown as ComponentType })));
+  lazyPage(() => load().then((m) => ({ default: memo(m[name]) as unknown as ComponentType })));
 const detail = <K extends Detail["kind"], N extends string>(
   load: () => Promise<Record<N, ComponentType<DetailProps<K>>>>,
   name: N,
 ): Lazy<DetailProps<K>> =>
-  lazy(() => load().then((m) => ({ default: memo(m[name]) as unknown as ComponentType<DetailProps<K>> })));
+  lazyPage(() => load().then((m) => ({ default: memo(m[name]) as unknown as ComponentType<DetailProps<K>> })));
 
 export const PAGES: Record<Page, { title: string; C: Lazy<object> }> = {
   desk: { title: "Desk", C: page(() => import("./DeskM"), "DeskM") },
@@ -42,6 +43,11 @@ export const DETAILS: { [K in Detail["kind"]]: Lazy<DetailProps<K>> } = {
     "HistoryInstrumentM",
   ),
 };
+
+/** The page a route shows. */
+export function routePage(r: Route): Lazy<never> {
+  return (r.detail ? DETAILS[r.detail.kind] : PAGES[r.page].C) as Lazy<never>;
+}
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

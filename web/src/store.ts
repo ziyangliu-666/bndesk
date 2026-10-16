@@ -172,13 +172,17 @@ function mergeBars(cur: DayBars, add: DayBars): DayBars {
  *  or newer), each account's points before its first. */
 function mergeOlder(cur: Snapshot, o: Older): { fills: Fill[]; add: Fill[]; remove: Fill[]; account_series: AccountSeries[] } {
   const have = new Set(cur.fills.map((f) => f.id));
-  const add = o.fills.filter((f) => !have.has(f.id));
+  let add = o.fills.filter((f) => !have.has(f.id));
   let fills = cur.fills;
   let remove: Fill[] = [];
   if (add.length) {
     const merged = cur.fills.concat(add).sort((a, b) => b.ts - a.ts);
     fills = merged.slice(0, MAX_FILLS);
-    remove = merged.slice(MAX_FILLS);
+    // listeners hear of the rows they have: added ones that made the cut, held ones that did not
+    const dropped = merged.slice(MAX_FILLS);
+    const gone = new Set(dropped.map((f) => f.id));
+    add = add.filter((f) => !gone.has(f.id));
+    remove = dropped.filter((f) => have.has(f.id));
   }
   let account_series = cur.account_series;
   for (const a of o.account_series) {
