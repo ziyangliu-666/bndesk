@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJSON, type HistFill } from "../../../api";
 import { compact, price } from "../../../format";
-import { useStore } from "../../../store";
+import { serverNow, useStore } from "../../../store";
 import {
   ExChart,
   closePoints,
@@ -56,12 +56,12 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   const hk = `${venue}:${symbol}`;
   useEffect(() => {
     if (first == null) return;
-    const to = Date.now();
-    let on = true;
-    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to })
-      .then((f) => on && setHist({ k: hk, to, fills: f }))
+    const to = serverNow();
+    const ac = new AbortController();
+    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to }, ac.signal)
+      .then((f) => !ac.signal.aborted && setHist({ k: hk, to, fills: f }))
       .catch(() => {});
-    return () => void (on = false);
+    return () => ac.abort();
   }, [symbol, venue, first, hk]);
   const fills = useMemo(() => {
     const h = hist && hist.k === hk ? hist : null;
@@ -69,6 +69,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
     return [...(h?.fills ?? []), ...extra];
   }, [hist, hk, liveFills, symbol, venue]);
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
+  const markers = useMemo(() => fillMarkers(byBar, "k"), [byBar]);
 
   const ours = (orders ?? []).filter((o) => o.symbol === symbol && o.venue === venue);
   const bid = ours.filter((o) => o.side === "buy").sort((a, b) => b.price - a.price)[0];
@@ -113,11 +114,12 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
       loading={kl.loading}
       emptyText={kl.error ?? undefined}
       height={400}
-      initialBars={72}
+      // bars at least 5 px apart at 393 px, so the fill markers show (they hide on denser bars)
+      initialBars={56}
       resetKey={hk}
       fullscreen
       touch
-      markers={fillMarkers(byBar, "k")}
+      markers={markers}
       priceLines={lines}
       legendExtra={[
         ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: () => price(fair), line: 2 }] : []),

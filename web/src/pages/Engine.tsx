@@ -8,7 +8,7 @@ import { useStore } from "../store";
 import type { Engine as EngineT, Feed } from "../protocol";
 import { C } from "../theme";
 import { gridTheme } from "../gridTheme";
-import { int, num } from "../format";
+import { int, num, stepName } from "../format";
 import { StateTag } from "../components/ui";
 import { fAge, DEFAULT_COL } from "../grid";
 import { AlertsList, useAlertList } from "../components/AlertsList";
@@ -106,7 +106,7 @@ function EngineSection({ e }: { e: EngineT }) {
           <tbody>
             {e.latency.map((l) => (
               <tr key={l.name}>
-                <td className="l">{l.name}</td>
+                <td className="l">{stepName(l.name)}</td>
                 <td>{us(l.p50_us)}</td>
                 <td>{us(l.p99_us)}</td>
               </tr>

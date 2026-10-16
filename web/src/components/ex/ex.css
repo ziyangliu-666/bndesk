@@ -473,7 +473,7 @@
 .touch .ex-chip::after {
   content: "";
   position: absolute;
-  inset: -4px -4px;
+  inset: -5px -4px;
 }
 .ex-chip-sw {
   width: 10px;
@@ -649,17 +649,19 @@
 }
 .ex-marq-l {
   flex: none;
-  position: relative;
-  z-index: 1;
-  padding: 0 8px 0 0;
-  background: var(--ground);
+  padding-right: 2px;
   color: var(--muted);
+}
+.ex-marq-clip {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 .ex-marq-in {
   display: inline-flex;
   animation: ex-marq 60s linear infinite;
 }
-.ex-marq:hover .ex-marq-in {
+.ex-marq-clip:hover .ex-marq-in {
   animation-play-state: paused;
 }
 .ex-marq-copy {

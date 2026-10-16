@@ -130,11 +130,13 @@ const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol
       <span className="ex-marq-l" title="Each instrument's Trading PnL today, USDT">
         Trading PnL
       </span>
-      <div className="ex-marq-in" style={{ animationDuration: `${Math.max(30, items.length * 5)}s` }}>
-        {row(false)}
-        <span aria-hidden="true" className="ex-marq-copy">
-          {row(true)}
-        </span>
+      <div className="ex-marq-clip">
+        <div className="ex-marq-in" style={{ animationDuration: `${Math.max(30, items.length * 5)}s` }}>
+          {row(false)}
+          <span aria-hidden="true" className="ex-marq-copy">
+            {row(true)}
+          </span>
+        </div>
       </div>
     </div>
   );

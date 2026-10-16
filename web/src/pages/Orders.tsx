@@ -8,12 +8,12 @@ import { IconSearch, IconX } from "@tabler/icons-react";
 import { selectInstrument, useStore } from "../store";
 import type { Account, OpenOrder } from "../protocol";
 import { gridTheme } from "../gridTheme";
-import { hms, int, pct, qty } from "../format";
+import { hms, int, pct } from "../format";
 import { fBps, fPrice, DEFAULT_COL } from "../grid";
 import { QuoteControls, QuoteLegend, QuoteMapEC, useQuoteMapState } from "../components/quotes";
 import { TextToggle } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
-import { amount, hideNow, useAmount, useHide } from "../mask";
+import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
 
 const short = (s: string) => s.replace(/USDT$/, "");
@@ -139,7 +139,7 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
       { field: "symbol", headerName: "Symbol", width: 96, minWidth: 92, flex: 96, cellRenderer: SymbolCell },
       { field: "side", headerName: "Side", width: 44, minWidth: 40, flex: 44, cellRenderer: SideCell },
       n({ field: "price", headerName: "Price", headerTooltip: "Limit price, USDT", width: 78, minWidth: 72, flex: 78, valueFormatter: fPrice }),
-      n({ field: "qty", headerName: "Amount", headerTooltip: "Remaining quantity, base asset", width: 66, minWidth: 60, flex: 66, valueFormatter: (p) => qty(p.value as number) }),
+      n({ field: "qty", headerName: "Amount", headerTooltip: "Remaining quantity, base asset", width: 66, minWidth: 60, flex: 66, valueFormatter: (p) => qtyText(p.value as number, hideNow()), cellClass: hide ? "num masked" : "num" }),
       n({
         field: "notional",
         headerName: "Notional",
@@ -147,7 +147,7 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
         width: 68,
         minWidth: 62,
         flex: 68,
-        valueFormatter: (p) => (amount(p.value as number, "money", hideNow())),
+        valueFormatter: (p) => amount(p.value as number, "money", hideNow()),
         cellClass: hide ? "num masked" : "num",
       }),
       n({
