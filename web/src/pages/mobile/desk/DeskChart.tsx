@@ -93,7 +93,8 @@ export function DeskChart({ ms }: { ms: number }) {
       emptyText={hist.err && !day ? "Could not load the last 24 h" : "No P&L yet today"}
       height={300}
       initialBars={VIEW[iv]}
-      resetKey={k}
+      // and again when earlier bars arrive (the first snapshot carries the last minutes only)
+      resetKey={`${k}:${data.bars[0]?.time ?? ""}`}
       fullscreen
       touch
       chips={[

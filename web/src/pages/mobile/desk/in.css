@@ -111,6 +111,8 @@
   gap: 24px;
 }
 .in-tabs .ex-tab {
+  justify-content: center;
+  min-width: 48px;
   font-size: 15px;
 }
 .in-tab {

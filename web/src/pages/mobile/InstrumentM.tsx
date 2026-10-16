@@ -95,7 +95,6 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
         <div className="in-mid-sub m-fig">
           <span className="in-venue">{r.venue === "usdm" ? "Perp" : "Spot"}</span>
           <span className={tone(chg, pctText(chg))}>{pctText(chg)}</span>
-          {r.fair != null && <span>Fair {price(r.fair)}</span>}
         </div>
       </div>
       <dl className="in-24">

@@ -81,7 +81,6 @@ export function DeskM() {
               tone: reconcile ? "warn" : undefined,
               info: "Day PnL minus trading PnL, the hedge and the rebates." + (reconcile ? "\n\nA reconcile alert is active: a fill, transfer or asset the desk does not see." : ""),
             },
-            { key: "pi", label: "Π", sub: "market making + inventory", color: "#c3cad5", v: p.mm + p.inventory, info: "Trading PnL: market making plus inventory PnL, the desk's spot trading today." },
           ]}
         />
       </Section>
@@ -272,7 +271,7 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
         <ListRow
           key={r.venue + r.symbol}
           title={<InstName r={r} />}
-          subtitle={`${money(r.inv_value, "short") === "0.00" ? "no inventory" : "inv " + money(r.inv_value, "short")} · ${int(r.fills_day)} fills`}
+          subtitle={`Spot · ${money(r.inv_value, "short") === "0.00" ? "flat" : "inv " + money(r.inv_value, "short")} · ${int(r.fills_day)} fills`}
           primary={<Money v={instPnl(r)} />}
           secondary={`MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
           to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
