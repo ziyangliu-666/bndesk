@@ -148,7 +148,11 @@ export function Sheet({
       <Drawer.Content ref={content} radius={0}>
         <div className="m-sheet-grip" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
           <div className="m-sheet-head">
-            {title != null && <h2 className="m-sheet-title">{title}</h2>}
+            {title != null && (
+              <h2 className="m-sheet-title" style={{ fontWeight: 500 }}>
+                {title}
+              </h2>
+            )}
             <UnstyledButton className="m-sheet-close" onClick={onClose} aria-label="Close" ml="auto">
               <IconX size={18} stroke={2} />
             </UnstyledButton>
