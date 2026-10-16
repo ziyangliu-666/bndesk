@@ -692,6 +692,15 @@ function buildHistory() {
     left -= i.fills;
   });
   insts[0]!.fills += left;
+  // a name with no fills today and nothing held made nothing today: its share goes to the busiest name
+  const busiest = insts.reduce((a, b) => (b.fills > a.fills ? b : a));
+  for (const i of insts)
+    if (i !== busiest && i.fills === 0 && !i.inv) {
+      busiest.tOff += i.tOff;
+      busiest.mm += i.mm;
+      i.tOff = 0;
+      i.mm = 0;
+    }
   const fSum = sumOf(insts, (i) => i.fills) || 1;
   for (const i of insts) {
     i.volume = (vol0 * i.fills) / fSum;
@@ -1511,7 +1520,9 @@ function snapshot(): Snapshot {
     accounts: acc,
     symbols: symbols(),
     fills: fills.slice(0, 2000),
-    series: series.slice(),
+    // as the server's WebSocket snapshot: the last 15 min of the 5 s series (WS_SERIES_MS); the store fills the
+    // earlier minutes from the minute bars, one point a minute
+    series: series.filter((p) => p.t >= now - 15 * 60_000),
     exposure: exposure(acc),
     engines: engineCache,
     alerts: alerts.map((a) => ({ ...a })),

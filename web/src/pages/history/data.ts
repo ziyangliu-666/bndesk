@@ -3,10 +3,10 @@
 // /api/fills. Every load is keyed by what it was asked for, and the page shows a load only under its own key:
 // a switch of range, interval or instrument clears the chart at once and never shows the old bars under the
 // new label.
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getJSON, type HistBar, type HistDay, type HistFill, type History as Hist } from "../../api";
+import { useEffect, useMemo, useState } from "react";
+import { getJSON, type HistBar, type HistDay, type History as Hist } from "../../api";
 import { serverNow, useStore } from "../../store";
-import type { DayPnl, Fill, Venue } from "../../protocol";
+import type { DayPnl } from "../../protocol";
 import { barStart } from "../../components/ex";
 
 export const DAY = 86_400_000;
@@ -42,27 +42,12 @@ interface Loaded {
   days: HistDay[];
 }
 const cache = new Map<string, Loaded>();
-const inflight = new Map<string, Promise<Loaded>>();
 const CACHE_MAX = 12;
 
 function put(key: string, v: Loaded) {
   cache.delete(key);
   cache.set(key, v);
   while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
-}
-
-function loadFull(key: string, step: number, from: number): Promise<Loaded> {
-  let p = inflight.get(key);
-  if (!p) {
-    p = getJSON<Hist>("/api/history", { from, to: serverNow(), step }).then((h) => {
-      const v = { bars: h.bars, days: h.days };
-      put(key, v);
-      return v;
-    });
-    p.finally(() => inflight.delete(key)).catch(() => {});
-    inflight.set(key, p);
-  }
-  return p;
 }
 
 const same = (a: number | null, b: number | null) => (a == null || b == null ? a === b : Math.abs(a - b) < 1e-9);
@@ -126,7 +111,10 @@ export function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
 
 const NO_BARS: HistBar[] = [];
 const NO_DAYS: HistDay[] = [];
-const TAIL_MS = 3000;
+/** How often the tail is fetched again, by default: the live bar of a chart of days or hours moves slowly. */
+const TAIL_MS = 15_000;
+const RETRY_MIN = 2_500;
+const RETRY_MAX = 60_000;
 
 export interface DeskLoad {
   key: string;
@@ -136,61 +124,114 @@ export interface DeskLoad {
   error: string | null;
 }
 
-/**
- * The desk's bars of `step` seconds from `from` to now, kept current: every few seconds the last bars are
- * fetched again and joined on. A key seen before (switching back) shows at once from memory.
- */
-export function useDeskHistory(step: number, from: number | null): DeskLoad {
-  const key = from == null ? "" : `${step}|${from}`;
-  const [st, setSt] = useState<{ key: string; v: Loaded | null; error: string | null }>({ key: "", v: null, error: null });
-  const cur = useRef(key);
-  cur.current = key;
+/** One key's load, shared by every hook that asks for it (one request per key, whoever polls). */
+interface Feed {
+  key: string;
+  step: number;
+  from: number;
+  v: Loaded | null;
+  error: string | null;
+  subs: Map<() => void, number>; // listener → how often it wants the tail (ms)
+  timer: ReturnType<typeof setTimeout> | null;
+  busy: boolean;
+  fails: number;
+}
+const feeds = new Map<string, Feed>();
 
+function notify(f: Feed) {
+  for (const cb of f.subs.keys()) cb();
+}
+
+/** The pace the feed's listeners want: the shortest asked for. */
+const every = (f: Feed) => Math.min(...f.subs.values());
+
+/** Load the whole range (first time, after an error, or while it has fewer than two bars to tail from: a day
+ *  that has just begun), else fetch the last bars again and join them on. Errors back off, from 2.5 s to 60 s. */
+async function pull(f: Feed) {
+  if (f.busy) return;
+  f.busy = true;
+  try {
+    const c = f.v;
+    if (!c || c.bars.length < 2) {
+      const h = await getJSON<Hist>("/api/history", { from: f.from, to: serverNow(), step: f.step });
+      const v = { bars: h.bars, days: h.days };
+      put(f.key, v);
+      f.v = v;
+    } else {
+      const t = await getJSON<Hist>("/api/history", { from: c.bars[c.bars.length - 2]!.t, to: serverNow(), step: f.step });
+      if (f.v !== c) return; // replaced meanwhile
+      const bars = joinTail(c.bars, t.bars);
+      if (bars !== c.bars) {
+        const v = { bars, days: t.days.length && t.days[t.days.length - 1]!.start !== c.days[c.days.length - 1]?.start ? mergeDays(c.days, t.days) : c.days };
+        put(f.key, v);
+        f.v = v;
+      }
+    }
+    f.fails = 0;
+    f.error = null;
+  } catch (e) {
+    f.fails++;
+    // a first load that failed shows its error; a failed tail keeps the bars it has
+    if (!f.v) f.error = (e as Error).message || "request failed";
+  } finally {
+    f.busy = false;
+  }
+  notify(f);
+}
+
+function schedule(f: Feed) {
+  if (f.timer) clearTimeout(f.timer);
+  f.timer = null;
+  if (!f.subs.size) return;
+  const wait = f.fails ? Math.min(RETRY_MAX, RETRY_MIN * 2 ** (f.fails - 1)) : every(f);
+  f.timer = setTimeout(async () => {
+    if (document.visibilityState !== "hidden" || !f.v) await pull(f);
+    schedule(f);
+  }, wait);
+}
+
+function subscribe(key: string, step: number, from: number, ms: number, cb: () => void): () => void {
+  let f = feeds.get(key);
+  if (!f) {
+    f = { key, step, from, v: cache.get(key) ?? null, error: null, subs: new Map(), timer: null, busy: false, fails: 0 };
+    feeds.set(key, f);
+  }
+  const feed = f;
+  feed.subs.set(cb, ms);
+  if (!feed.v && !feed.busy) void pull(feed).then(() => schedule(feed));
+  else schedule(feed);
+  return () => {
+    feed.subs.delete(cb);
+    if (!feed.subs.size) {
+      if (feed.timer) clearTimeout(feed.timer);
+      feeds.delete(key);
+    } else schedule(feed);
+  };
+}
+
+/**
+ * The desk's bars of `step` seconds from `from` to now, kept current: every `ms` (default 15 s) the last bars
+ * are fetched again and joined on. Hooks asking for the same step and start share one load and one poll. A
+ * load that fails, or a range with fewer than two bars (a day that has just begun), is fetched again, backing
+ * off after errors. A key seen before (switching back) shows at once from memory. A new `from` (the day rolled
+ * at midnight) is a new key: the new day loads by itself.
+ */
+export function useDeskHistory(step: number, from: number | null, ms = TAIL_MS): DeskLoad {
+  const key = from == null ? "" : `${step}|${from}`;
+  const [, bump] = useState(0);
   useEffect(() => {
     if (from == null) return;
-    let alive = true;
-    const show = (v: Loaded) => alive && cur.current === key && setSt({ key, v, error: null });
-    const hit = cache.get(key);
-    if (hit) show(hit);
-    else
-      loadFull(key, step, from).then(show, (e: unknown) => {
-        if (alive && cur.current === key) setSt({ key, v: { bars: NO_BARS, days: NO_DAYS }, error: (e as Error).message || "request failed" });
-      });
-    let busy = false;
-    const tick = async () => {
-      const c = cache.get(key);
-      if (busy || document.visibilityState === "hidden" || !c || c.bars.length < 2) return;
-      busy = true;
-      try {
-        const t = await getJSON<Hist>("/api/history", { from: c.bars[c.bars.length - 2]!.t, to: serverNow(), step });
-        const now = cache.get(key);
-        if (!alive || now !== c) return; // another tick or load replaced it meanwhile
-        const bars = joinTail(c.bars, t.bars);
-        if (bars !== c.bars) {
-          const v = { bars, days: t.days.length && t.days[t.days.length - 1]!.start !== c.days[c.days.length - 1]?.start ? mergeDays(c.days, t.days) : c.days };
-          put(key, v);
-          show(v);
-        }
-      } catch {
-        /* the next tick tries again */
-      } finally {
-        busy = false;
-      }
-    };
-    const id = setInterval(tick, TAIL_MS);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [key, step, from]);
-
-  const ok = st.key === key && !!key;
+    return subscribe(key, step, from, ms, () => bump((n) => n + 1));
+  }, [key, step, from, ms]);
+  const f = key ? feeds.get(key) : undefined;
+  const v = f?.v ?? (key ? cache.get(key) : undefined) ?? null;
+  const error = f?.error ?? null;
   return {
     key,
-    bars: ok ? st.v!.bars : NO_BARS,
-    days: ok ? st.v!.days : NO_DAYS,
-    loading: !!key && !ok,
-    error: ok ? st.error : null,
+    bars: v?.bars ?? NO_BARS,
+    days: v?.days ?? NO_DAYS,
+    loading: !!key && !v && !error,
+    error: v ? null : error,
   };
 }
 
@@ -255,7 +296,8 @@ export function weekBars(days: HistBar[]): HistBar[] {
       last.fills += b.fills;
     } else {
       wk = w;
-      out.push({ ...b });
+      // the bar at its week's start (Monday), whatever day the data starts on
+      out.push({ ...b, t: w });
     }
   }
   return out;
@@ -475,12 +517,17 @@ export function summaryNote(s: DaySummary): string {
   return parts.join(" · ");
 }
 
+/** Today's P&L day name: the UTC date of today's start, as the server names days (the snapshot's days list has
+ *  today only once the P&L engine has started: right after a restart its last day is yesterday). */
+export const todayOf = (dayStart: number) => new Date(dayStart).toISOString().slice(0, 10);
+
 /** The desk's days of a range: the snapshot's kept days and /api/history's day bars (desktop and phone alike). */
 export function useRangeDays(from: number | null): { rows: DayRow[]; todayDay: string | null; loading: boolean; error: string | null } {
   const snapDays = useStore((s) => s.snap?.days);
   const daily = useDeskHistory(86_400, from);
   const rows = useMemo(() => (from == null ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
-  return { rows, todayDay: snapDays?.[snapDays.length - 1]?.day ?? null, loading: daily.loading, error: daily.error };
+  const dayStart = useStore((s) => s.snap?.summary.day_start);
+  return { rows, todayDay: dayStart ? todayOf(dayStart) : null, loading: daily.loading, error: daily.error };
 }
 
 /** Sums of day rows (null where no day had the figure); `se` combined as independent. The parts (the split and
@@ -504,69 +551,4 @@ export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split">
     fills: rows.reduce((a, r) => a + r.fills, 0),
     volume: rows.reduce((a, r) => a + r.volume, 0),
   };
-}
-
-// ================================ instrument fills ================================
-
-const FILLS_PAGE = 20_000; // the server's MAX_FILLS: a full page means there may be more after it
-const FILLS_PAGES = 5;
-
-export interface FillsLoad {
-  key: string;
-  fills: HistFill[];
-  loading: boolean;
-}
-
-/** Our fills on an instrument from `from` to now (/api/fills, paged), then the live ones after it. */
-export function useInstrumentFills(symbol: string | null, venue: Venue, from: number | null): FillsLoad {
-  const key = symbol && from != null ? `${symbol}|${venue}|${from}` : "";
-  const [st, setSt] = useState<{ key: string; to: number; fills: HistFill[] }>({ key: "", to: 0, fills: [] });
-  const cur = useRef(key);
-  cur.current = key;
-  useEffect(() => {
-    if (!symbol || from == null) return;
-    const ac = new AbortController();
-    const to = serverNow();
-    (async () => {
-      const out: HistFill[] = [];
-      let f = from;
-      for (let i = 0; i < FILLS_PAGES; i++) {
-        const page = await getJSON<HistFill[]>("/api/fills", { symbol, from: f, to }, ac.signal);
-        if (page.length < FILLS_PAGE) {
-          out.push(...page);
-          break;
-        }
-        // a full page may stop inside a millisecond: keep what is before it and ask again from that millisecond
-        const last = page[page.length - 1]!.t;
-        const before = page.filter((x) => x.t < last);
-        if (!before.length) {
-          out.push(...page); // one millisecond fills the page: nothing better to do
-          f = last + 1;
-          continue;
-        }
-        out.push(...before);
-        f = last;
-      }
-      if (cur.current === key) setSt({ key, to, fills: out.filter((x) => x.venue === venue) });
-    })().catch(() => {
-      if (cur.current === key && !ac.signal.aborted) setSt({ key, to, fills: [] });
-    });
-    return () => ac.abort();
-  }, [key, symbol, venue, from]);
-  const live = useStore((s) => s.snap?.fills);
-  const ok = st.key === key && !!key;
-  const fills = useMemo(() => {
-    if (!ok) return NO_FILLS;
-    const extra = liveAfter(live, symbol!, venue, st.to);
-    return extra.length ? st.fills.concat(extra) : st.fills;
-  }, [ok, st, live, symbol, venue]);
-  return { key, fills, loading: !!key && !ok };
-}
-
-const NO_FILLS: HistFill[] = [];
-function liveAfter(live: Fill[] | undefined, symbol: string, venue: Venue, to: number): HistFill[] {
-  return (live ?? [])
-    .filter((f) => f.symbol === symbol && f.venue === venue && f.ts > to)
-    .map((f): HistFill => ({ t: f.ts, side: f.side, price: f.price, qty: f.qty, account: f.account, venue: f.venue, maker: f.maker }))
-    .sort((a, b) => a.t - b.t);
 }
