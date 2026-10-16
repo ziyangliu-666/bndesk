@@ -195,6 +195,8 @@ pub enum Req {
 struct Out {
     seq: u64,
     frame: Message,
+    /// a fresh snapshot (day roll): a client's connect-time `older` is stale after it
+    reset: bool,
 }
 
 struct Shared {
@@ -208,9 +210,13 @@ struct Shared {
 impl Shared {
     /// Compresses (if large) once for every client.
     fn broadcast(&self, text: Utf8Bytes) {
+        self.send(text, false);
+    }
+
+    fn send(&self, text: Utf8Bytes, reset: bool) {
         let frame = frame(text);
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.tx.send(Out { seq, frame });
+        let _ = self.tx.send(Out { seq, frame, reset });
     }
 
     async fn snapshot(&self) -> Option<Snap> {
@@ -320,14 +326,16 @@ impl Hub {
     #[allow(clippy::too_many_arguments)]
     pub fn tick(&mut self, v: &Patch, fills: &[P::Fill], series: &[P::SeriesPoint], acct: &[P::AccountSeries],
                 bars: &P::DayBars, snapshot: impl FnOnce() -> (Vec<u8>, Vec<u8>)) {
-        if self.clients() == 0 {
+        // receivers, not `clients`: a connecting client subscribes before it asks for its snapshot and counts
+        // only once that is sent, and this tick's fills / points / bars are not in that snapshot
+        if self.shared.tx.receiver_count() == 0 {
             self.last = Default::default();
             return;
         }
         if self.full {
             self.full = false;
             let (s, o) = snapshot();
-            self.shared.broadcast(msg("snapshot", &s));
+            self.shared.send(msg("snapshot", &s), true);
             self.shared.broadcast(msg("older", &o));
             return;
         }
@@ -443,6 +451,9 @@ async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
             m = rx.recv() => match m {
                 Ok(o) if o.seq <= seq0 => {}
                 Ok(o) => {
+                    if o.reset {
+                        older = None; // the reset's own `older` follows it
+                    }
                     if !matches!(tokio::time::timeout(SEND_TIMEOUT, ws.send(o.frame)).await, Ok(Ok(()))) {
                         break;
                     }
@@ -728,12 +739,10 @@ mod tests {
     #[test]
     fn tick_sends_changed_keys_only() {
         let mut hub = Hub::new();
-        let mut rx = hub.shared.tx.subscribe();
         let mut s = P::Snapshot::default();
         let nb = P::DayBars::default();
-        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
-        assert!(drain(&mut rx).is_empty()); // no clients
-        hub.shared.clients.store(1, Ordering::Relaxed);
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!()); // no one listening: nothing sent
+        let mut rx = hub.shared.tx.subscribe();
         hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
         let m = drain(&mut rx);
         assert_eq!(m.len(), 1);
@@ -760,6 +769,24 @@ mod tests {
         hub.reset();
         hub.tick(&Patch::of(&s), &[f], &[], &[], &nb, || (b"{\"x\":1}".to_vec(), b"{\"y\":2}".to_vec()));
         assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}", "{\"type\":\"older\",\"data\":{\"y\":2}}"]);
+    }
+
+    #[test]
+    fn a_connecting_client_gets_the_ticks_before_it_counts() {
+        // subscribed (as `client` does before its snapshot) but not yet counted in `clients`
+        let mut hub = Hub::new();
+        let mut rx = hub.shared.tx.subscribe();
+        assert_eq!(hub.clients(), 0);
+        let s = P::Snapshot::default();
+        let f = P::Fill { id: "f".into(), ..Default::default() };
+        let bars = P::DayBars { t: vec![60_000], volume: vec![1.0], ..Default::default() };
+        hub.tick(&Patch::of(&s), std::slice::from_ref(&f), &[], &[], &bars, || unreachable!());
+        let m = drain(&mut rx);
+        assert!(m.iter().any(|x| x.starts_with("{\"type\":\"fills\"")), "{m:?}");
+        assert!(m.iter().any(|x| x.starts_with("{\"type\":\"bars\"")), "{m:?}");
+        // and the next tick diffs against what was sent, so it sends nothing new
+        hub.tick(&Patch::of(&s), &[], &[], &[], &P::DayBars::default(), || unreachable!());
+        assert!(drain(&mut rx).is_empty());
     }
 
     #[test]
