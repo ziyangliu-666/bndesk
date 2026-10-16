@@ -5,7 +5,7 @@ import { bps, compact, hm, int, price } from "../../format";
 import { refLabel } from "../../components/ui";
 import { KV, ListRow, Money, Section, span, tone, useHold, useLive, useMoney, type KVItem } from "../../components/mobile";
 import { Tabs, useExPref, useTicker24h, type Ticker24h } from "../../components/ex";
-import { QuoteLegend, QuoteRows, type QRow } from "../../components/quotes";
+import { QuoteRows, type QRow } from "../../components/quotes";
 import type { Fill, OpenOrder, SymbolRow, Venue } from "../../protocol";
 import { FillRow, MkTable, useAccountLabel, useFillSheet, useQty } from "./shared";
 import { instPnl } from "../../selectors";
@@ -94,8 +94,12 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
       <div className="in-head-l">
         <div className={"in-mid m-fig " + m.dir}>{r.mid == null ? "--" : price(r.mid)}</div>
         <div className="in-mid-sub m-fig">
+          {/* the big figure is the book's mid: the chart's last close and the fair (legend) are the other two prices */}
+          <span>Mid</span>
           <span className="in-venue">{r.venue === "usdm" ? "Perp" : "Spot"}</span>
-          <span className={tone(chg, pctText(chg))}>{pctText(chg)}</span>
+          <span>
+            24h <span className={tone(chg, pctText(chg))}>{pctText(chg)}</span>
+          </span>
         </div>
       </div>
       <dl className="in-24">
@@ -132,7 +136,8 @@ function OurStats({ r }: { r: SymbolRow }) {
     ? [
         { label: `Pos (${asset})`, value: q(r.inv_qty, true) },
         { label: "Entry", value: price(r.avg_cost) },
-        { label: "PnL today", value: <Money v={leg?.pnl ?? r.upnl} /> },
+        // the hedge leg's P&L today, as Markets, the Desk and Assets call a perp's Trading PnL (instPnl)
+        { label: "Trading PnL", value: <Money v={leg?.pnl ?? 0} /> },
         {
           label: "Funding",
           value: funding?.rate != null ? <span className={tone(-funding.rate * Math.sign(r.inv_qty), bps(funding.rate * 1e4))}>{bpsUnit(funding.rate * 1e4)}</span> : "--",
@@ -165,10 +170,24 @@ function Band({ symbol, venue }: { symbol: string; venue: Venue }) {
     () => (sym ? [{ sym, orders: (orders ?? []).filter((o) => o.symbol === symbol && o.venue === venue) }] : []),
     [sym, orders, symbol, venue],
   );
+  // the band's reading, always up: our best bid and ask from fair (signed as the axis), the market's spread
+  const nb = rows[0]?.orders.some((o) => o.side === "buy") ?? false;
+  const na = rows[0]?.orders.some((o) => o.side === "sell") ?? false;
+  const d = (v: number | null | undefined, neg: boolean) => (v == null ? "--" : `${bps(neg ? -v : v)} bps`);
   return (
     <section className="in-band">
-      <QuoteLegend short className="in-band-legend" />
-      <QuoteRows rows={rows} range={25} rowH={36} label={0} empty="No quotes" />
+      <div className="q-legend in-band-legend m-fig">
+        <span>
+          <i className="q-lg-dot up" /> Our Bid <b className={nb ? "up" : "muted"}>{nb ? d(sym?.bid_dist_bps, true) : "None"}</b>
+        </span>
+        <span>
+          <i className="q-lg-dot down" /> Our Ask <b className={na ? "down" : "muted"}>{na ? d(sym?.ask_dist_bps, false) : "None"}</b>
+        </span>
+        <span>
+          <i className="q-lg-band" /> Spread <b>{sym?.spread_bps == null ? "--" : `${bps(sym.spread_bps, false)} bps`}</b>
+        </span>
+      </div>
+      <QuoteRows rows={rows} range={25} rowH={30} label={0} status={false} empty="No quotes" />
     </section>
   );
 }
@@ -182,13 +201,10 @@ function QuotesTab({ r }: { r: SymbolRow }) {
   const asks = ours.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price);
   const max = Math.max(1, ...ours.map((o) => o.notional));
   const n = Math.max(bids.length, asks.length);
+  // our distances from fair and the spread are in the band above, the fair in the chart's legend
   const items: KVItem[] = [
-    { label: "Market bid", value: <span className="up">{price(r.bid)}</span> },
-    { label: "Market ask", value: <span className="down">{price(r.ask)}</span> },
-    { label: "Spread", value: bpsUnit(r.spread_bps, false) },
-    { label: "Our bid below fair", value: bpsUnit(r.bid_dist_bps, false), info: "Best own bid below fair: (fair − bid) / fair, bps." },
-    { label: "Our ask above fair", value: bpsUnit(r.ask_dist_bps, false), info: "Best own ask above fair: (ask − fair) / fair, bps." },
-    { label: "Fair", value: price(r.fair), info: "The fair price the quotes are set around, USDT." },
+    { label: "Market Bid", value: <span className="up">{price(r.bid)}</span> },
+    { label: "Market Ask", value: <span className="down">{price(r.ask)}</span> },
   ];
   return (
     <section className="in-tab">
@@ -209,19 +225,11 @@ function QuotesTab({ r }: { r: SymbolRow }) {
         <div className="m-empty">No resting orders on {r.symbol} right now.</div>
       )}
       <div className="in-kv">
-        <KV cols={3} items={items} />
+        <KV cols={2} items={items} />
       </div>
       <div className="in-link">
-      <ListRow
-        dense
-        title="Open orders"
-        primary={
-          <span className="m-fig">
-            {int(r.open_bids)} {r.open_bids === 1 ? "bid" : "bids"} · {int(r.open_asks)} {r.open_asks === 1 ? "ask" : "asks"}
-          </span>
-        }
-        to={{ page: "orders", symbol: r.symbol, venue: r.venue }}
-      />
+        {/* the ladder above counts them: the row only leads to the orders page */}
+        <ListRow dense title="Open orders" secondary="Orders page" to={{ page: "orders", symbol: r.symbol, venue: r.venue }} />
       </div>
     </section>
   );

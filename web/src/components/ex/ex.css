@@ -163,8 +163,8 @@
   line-height: 18px;
 }
 .ex-chart.touch .ex-legend {
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 18px;
   left: 4px;
 }
 .ex-lg-line {
@@ -240,7 +240,7 @@
   border: 1px solid var(--rule);
   border-radius: 4px;
   background: var(--raised);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 17px;
   pointer-events: none;
 }

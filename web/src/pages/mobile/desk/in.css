@@ -49,7 +49,7 @@
   text-align: right;
 }
 .in-24 dt {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -98,6 +98,22 @@
 }
 .in-band .q-legend.in-band-legend {
   padding: 0 0 2px;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* the band's reading: label muted, value in the side's colour */
+.in-band-legend b {
+  font-weight: 400;
+  color: var(--ink);
+}
+.in-band-legend b.up {
+  color: var(--up);
+}
+.in-band-legend b.down {
+  color: var(--down);
+}
+.in-band-legend b.muted {
+  color: var(--muted);
 }
 
 /* tabs under the chart */
@@ -189,7 +205,7 @@
   text-overflow: ellipsis;
 }
 .in-lc-a {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .in-lc-p.up {

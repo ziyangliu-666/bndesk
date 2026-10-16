@@ -276,7 +276,7 @@ function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: nu
       background: { type: ColorType.Solid, color: PLOT_BG },
       textColor: C.muted,
       fontFamily: SANS,
-      fontSize: touch ? 10 : 11,
+      fontSize: 11,
       // the attribution is a link in the footer / About (TvAttribution), as the licence allows
       attributionLogo: false,
       panes: { separatorColor: C.rule, separatorHoverColor: "rgba(126,166,246,0.18)", enableResize: false },
@@ -1006,10 +1006,23 @@ function buildLegend(
         const b = bar(t);
         return b ? [fmt(pick(b)), dir(b)] : "--";
       };
-      add(pane, line, { label: touch ? "O" : "Open", value: f((b) => b.open) });
-      add(pane, line, { label: touch ? "H" : "High", value: f((b) => b.high) });
-      add(pane, line, { label: touch ? "L" : "Low", value: f((b) => b.low) });
-      add(pane, line, { label: touch ? "C" : "Close", value: f((b) => b.close) });
+      if (touch) {
+        // a phone's line holds the close and the bar's change; the long-press box has open, high, low, close
+        const pctOk = !s.format || s.format === fmtPrice;
+        add(pane, line, { label: "Close", value: f((b) => b.close) });
+        add(pane, line, {
+          label: "Chg",
+          value: (t) => {
+            const b = bar(t);
+            return b ? [pctOk ? pctText((b.close - b.open) / b.open) : fmt(b.close - b.open), dir(b)] : "--";
+          },
+        });
+        continue;
+      }
+      add(pane, line, { label: "Open", value: f((b) => b.open) });
+      add(pane, line, { label: "High", value: f((b) => b.high) });
+      add(pane, line, { label: "Low", value: f((b) => b.low) });
+      add(pane, line, { label: "Close", value: f((b) => b.close) });
       const priceLike = !s.format || s.format === fmtPrice;
       if (!touch && !priceLike)
         add(pane, line, {
