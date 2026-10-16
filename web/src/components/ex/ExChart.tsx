@@ -608,6 +608,8 @@ export function ExChart(p: ExChartProps) {
       else if (needFit.current && [...map.values()].some((l) => l.data?.length)) {
         needFit.current = false;
         fitView();
+        // lightweight-charts can lay the new bars out after this frame (a change of bar count): fit again then
+        requestAnimationFrame(fitView);
       }
       hov.set({ v: hov.get().v + 1 });
     }
