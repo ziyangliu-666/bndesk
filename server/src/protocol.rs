@@ -580,6 +580,71 @@ pub struct HistoryDay {
     pub start: i64,
 }
 
+/// `GET /api/markouts`: today's fills seen one way (filters, reference, weighting), from the price path kept
+/// around each fill. Lines are indexed like `horizons_s`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MarkoutReport {
+    pub now: i64,
+    pub day_start: i64,
+    pub horizons_s: Vec<f64>,
+    pub fills: i64,
+    pub notional: f64,
+    pub edge: Option<f64>,
+    pub pnl: f64,
+    pub all: MarkoutLine,
+    pub buy: MarkoutLine,
+    pub sell: MarkoutLine,
+    pub tox: MarkoutLine,
+    pub dist: MarkoutDist,
+    pub by_time: Vec<MarkoutBucket>,
+    pub by_instrument: Vec<MarkoutInst>,
+}
+
+/// A weighted mean per horizon, its standard error, the fills it covers and the weight share below zero.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MarkoutLine {
+    pub n: Vec<i64>,
+    pub mean: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
+    pub adverse: Vec<Option<f64>>,
+}
+
+/// Per-fill markouts at one horizon: weight shares in bins of `width` bps from `lo` (the end bins hold the tails).
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MarkoutDist {
+    pub h: f64,
+    pub n: i64,
+    pub lo: f64,
+    pub width: f64,
+    pub bins: Vec<f64>,
+    pub mean: Option<f64>,
+    pub median: Option<f64>,
+    pub p10: Option<f64>,
+    pub p90: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MarkoutBucket {
+    pub t: i64,
+    pub fills: i64,
+    pub notional: f64,
+    pub mk10: Option<f64>,
+    pub mk60: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MarkoutInst {
+    pub symbol: String,
+    pub venue: Venue,
+    pub fills: i64,
+    pub notional: f64,
+    pub edge: Option<f64>,
+    pub mean: Vec<Option<f64>>,
+    pub se10: Option<f64>,
+    pub adverse10: Option<f64>,
+    pub pnl: f64,
+}
+
 /// `GET /api/fills`: one stored fill.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct HistoryFill {
@@ -700,6 +765,11 @@ mod tests {
             ("History", struct_fields(&History::default())),
             ("HistoryBar", struct_fields(&HistoryBar::default())),
             ("HistoryFill", struct_fields(&HistoryFill::default())),
+            ("MarkoutReport", struct_fields(&MarkoutReport::default())),
+            ("MarkoutLine", struct_fields(&MarkoutLine::default())),
+            ("MarkoutDist", struct_fields(&MarkoutDist::default())),
+            ("MarkoutBucket", struct_fields(&MarkoutBucket::default())),
+            ("MarkoutInst", struct_fields(&MarkoutInst::default())),
         ];
         for (name, got) in cases {
             assert_eq!(got, names(&ifaces[name]), "{name}");

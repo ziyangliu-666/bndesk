@@ -391,6 +391,11 @@ impl Market {
         id
     }
 
+    /// Keep the instrument's every mid change at ms resolution too (the price path around its fills).
+    pub fn keep_fine(&mut self, id: InstId) {
+        self.insts[id].fine.get_or_insert_with(FineRing::default);
+    }
+
     pub fn known(&self, symbol: &str, venue: Venue) -> bool {
         self.info.get(&venue).is_some_and(|m| m.contains_key(symbol))
     }

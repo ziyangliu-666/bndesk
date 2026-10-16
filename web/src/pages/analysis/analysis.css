@@ -1,4 +1,4 @@
-/* Desktop Analysis: one panel with tabs; inside, regions split by 1 px rules on black. */
+/* Desktop Analysis: controls, KPI strip, then one grid of regions split by 1 px rules on black. */
 .page.an-page {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -6,28 +6,64 @@
 .an-main {
   min-height: 0;
 }
-.an-head {
+.an-ctl {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 22px;
   height: 38px;
   padding: 0 12px;
   border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+  overflow: hidden;
 }
-.an-head .ex-tabs {
-  height: 100%;
+.an-ctl-g {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-.an-note {
+.an-ctl-l {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.an-ctl-note {
   margin-left: auto;
   font-size: 12px;
 }
-.an-body {
+.an-kpi {
+  flex: none;
+  height: 52px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.an-grid {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 1px;
   background: var(--rule);
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1.25fr) minmax(0, 0.9fr) minmax(0, 0.95fr);
+  grid-template-areas:
+    "path dist"
+    "day day"
+    "inst scatter";
+}
+.an-c-path {
+  grid-area: path;
+}
+.an-c-dist {
+  grid-area: dist;
+}
+.an-c-day {
+  grid-area: day;
+}
+.an-c-inst {
+  grid-area: inst;
+}
+.an-c-scatter {
+  grid-area: scatter;
 }
 .an-cell {
   background: var(--panel);
@@ -41,9 +77,16 @@
   height: 30px;
   display: flex;
   align-items: center;
+  gap: 12px;
   padding: 0 12px;
   font-size: 12px;
   color: var(--ink-2);
+}
+.an-sub-r {
+  margin-left: auto;
+}
+.an-sub .ex-tt button {
+  padding: 3px 5px;
 }
 .dotted {
   text-decoration: underline dotted;
@@ -51,44 +94,153 @@
   text-underline-offset: 3px;
   cursor: help;
 }
-
-/* Markouts: the two curves over their exact figures */
-.an-mk {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: 1px;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-.an-mk-table,
-.an-tox-table {
-  padding: 4px 0 8px;
-}
-/* By hour: the bars at the left, the table at the right */
-.an-hour {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: 1px;
-  grid-template-columns: minmax(0, 1fr) 460px;
-}
-.an-hour-table {
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-.an-inst {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  background: var(--panel);
-  scrollbar-width: thin;
-}
-
-.an-curve {
+.an-fillbox {
   position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.an-fillbox > .ex-chart {
+  flex: 1;
+  min-height: 0;
+}
+.an-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* the SVG plots */
+.an-path,
+.an-dist,
+.an-scatter {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+.an-path svg {
+  cursor: crosshair;
+}
+.an-path.touch,
+.an-dist.touch {
+  flex: none;
+  touch-action: pan-y;
+}
+.an-path svg,
+.an-dist svg,
+.an-scatter svg {
+  display: block;
+}
+.an-ax {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.an-ax.sel {
+  fill: var(--accent);
+}
+.an-ax.fill {
+  fill: var(--ink-2);
+}
+.an-grid line,
+line.an-grid {
+  stroke: rgba(32, 38, 47, 0.55);
+}
+line.an-zero {
+  stroke: #3b4453;
+}
+line.an-base {
+  stroke: var(--rule);
+}
+rect.an-pre {
+  fill: rgba(195, 202, 213, 0.028);
+}
+line.an-fill-line {
+  stroke: #4a5568;
+  stroke-dasharray: 3 3;
+}
+line.an-sel-line {
+  stroke: rgba(126, 166, 246, 0.7);
+}
+line.an-hover-line {
+  stroke: rgba(195, 202, 213, 0.38);
+  stroke-dasharray: 4 3;
+}
+line.an-mean {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+line.an-med {
+  stroke: var(--ink-2);
+  stroke-dasharray: 4 3;
+}
+line.an-q {
+  stroke: var(--muted);
+  stroke-dasharray: 1 3;
+}
+line.an-diag {
+  stroke: rgba(195, 202, 213, 0.3);
+  stroke-dasharray: 4 4;
+}
+.an-bub {
+  fill: var(--ink-2);
+  font-size: 11px;
+}
+.an-bub.on {
+  fill: var(--ink);
+}
+.an-lg-h {
+  color: var(--ink-2);
+}
+.an-k-mean {
+  color: var(--ink);
+}
+.an-k-med {
+  color: var(--ink-2);
+}
+.an-k-q {
+  color: var(--muted);
+}
+.ex-lg-v.up {
+  color: var(--up);
+}
+.ex-lg-v.down {
+  color: var(--down);
+}
+.ex-lg-v.masked {
+  color: var(--muted);
+}
+
+/* instruments */
+.an-tbox {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.an-spark-td {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: 0;
+}
+.an-spark {
+  display: inline-block;
+  vertical-align: middle;
+}
+.an-tag {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 /* tables */
@@ -101,7 +253,7 @@
 .an-t th,
 .an-t td {
   height: 26px;
-  padding: 0 12px;
+  padding: 0 10px;
   text-align: right;
   white-space: nowrap;
 }
@@ -139,7 +291,11 @@
 .an-t td.down {
   color: var(--down);
 }
-.an-t tbody tr:hover td {
+.an-t td.muted {
+  color: var(--muted);
+}
+.an-t tbody tr:hover td,
+.an-t tbody tr.lit td {
   background: #0d1015;
 }
 .an-t tr.click {
@@ -152,4 +308,106 @@
 }
 .an-sym {
   font-weight: 500;
+}
+
+@media (min-width: 1800px) {
+  .an-grid {
+    grid-template-rows: minmax(0, 1.3fr) minmax(0, 0.85fr) minmax(0, 1fr);
+  }
+}
+.an-tb-title {
+  font-size: 12px;
+  color: var(--ink-2);
+  padding-left: 6px;
+  margin-right: auto;
+  white-space: nowrap;
+}
+.an-tb-title .muted {
+  margin-left: 8px;
+}
+
+/* phone */
+.m-an-ctl {
+  display: flex;
+  flex-direction: column;
+  padding-top: 4px;
+}
+.m-an-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-an-filter .muted {
+  font-size: 12px;
+}
+.m-an-err {
+  font-size: 12px;
+  padding: 4px 0;
+}
+.m-an-kpi {
+  padding: 8px 0 12px;
+  border-top: 1px solid var(--rule);
+}
+.m-an .an-path.touch,
+.m-an .an-dist.touch {
+  margin: 0 -4px;
+}
+.m-an-v {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.m-an-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 16px;
+}
+.m-an-sheet-l {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.an-path.touch .an-path-lg .ex-lg-line {
+  width: auto;
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.m-an-more {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.an-tb-title.m {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  padding-left: 0;
+}
+.an-tb-title.m .muted {
+  font-size: 12px;
+  font-weight: 400;
+}
+.m-an .ex-chart.touch .ex-tb {
+  border-bottom: 0;
+}
+.an-dist.touch .ex-lg-line {
+  width: auto;
+  flex-wrap: wrap;
 }

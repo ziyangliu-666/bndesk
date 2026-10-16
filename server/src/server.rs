@@ -13,6 +13,7 @@
 //! - axum has no permessage-deflate, so a message of `DEFLATE_MIN` bytes or more is compressed once (raw
 //!   DEFLATE, shared by every client) and sent as a binary frame; the browser inflates it with
 //!   `DecompressionStream("deflate-raw")`. Smaller messages stay text frames.
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -180,6 +181,10 @@ pub trait DeskSource {
     /// `P::encode(&desk.snapshot())`: everything (`/api/snapshot`).
     fn snapshot_full(&self) -> Vec<u8>;
     fn health(&self) -> DeskHealth;
+    /// `P::encode` of today's `MarkoutReport` for the query (`/api/markouts`); None while the desk has no day.
+    fn markouts(&self, _q: &crate::markouts::Query) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// A WebSocket snapshot: the sequence number of the last broadcast before it, its JSON, its `P::Older`'s.
@@ -189,6 +194,7 @@ pub enum Req {
     Snapshot(oneshot::Sender<Snap>),
     Full(oneshot::Sender<Bytes>),
     Health(oneshot::Sender<DeskHealth>),
+    Markouts(crate::markouts::Query, oneshot::Sender<Option<Bytes>>),
 }
 
 #[derive(Clone)]
@@ -236,6 +242,12 @@ impl Shared {
         self.req.send(Req::Health(tx)).ok()?;
         tokio::time::timeout(REPLY_TIMEOUT, rx).await.ok()?.ok()
     }
+
+    async fn markouts(&self, q: crate::markouts::Query) -> Option<Bytes> {
+        let (tx, rx) = oneshot::channel();
+        self.req.send(Req::Markouts(q, tx)).ok()?;
+        tokio::time::timeout(REPLY_TIMEOUT, rx).await.ok()?.ok()?
+    }
 }
 
 /// The desk's end of the request channel; hand it to `answer`.
@@ -267,6 +279,9 @@ pub async fn answer<D: DeskSource>(mut r: Requests, desk: D) {
                 }
                 Req::Health(tx) => {
                     let _ = tx.send(desk.health());
+                }
+                Req::Markouts(q, tx) => {
+                    let _ = tx.send(desk.markouts(&q).map(Bytes::from));
                 }
             }
         }
@@ -544,6 +559,17 @@ async fn health(State(st): State<AppState>) -> Response {
     json(serde_json::to_vec(&body).expect("health serializes"), "application/json; charset=utf-8")
 }
 
+async fn markouts(State(st): State<AppState>, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Response {
+    let q = match crate::markouts::Query::parse(&q) {
+        Ok(q) => q,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    match st.shared.markouts(q).await {
+        Some(b) => ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], b).into_response(),
+        None => unavailable(),
+    }
+}
+
 async fn healthz() -> &'static str {
     "ok"
 }
@@ -610,6 +636,7 @@ pub fn make_app(hub: &HubHandle, auth: Option<Auth>, web_dist: PathBuf, history:
         .route("/healthz", get(healthz))
         .route("/api/snapshot", get(snapshot))
         .route("/api/health", get(health))
+        .route("/api/markouts", get(markouts))
         .fallback(spa)
         .with_state(st.clone())
         .merge(crate::history::routes(history))
@@ -850,6 +877,10 @@ mod tests {
         fn health(&self) -> DeskHealth {
             DeskHealth { feeds: 3, started: epoch_s() - 10.0, ..Default::default() }
         }
+        fn markouts(&self, q: &crate::markouts::Query) -> Option<Vec<u8>> {
+            let side = q.side.map_or("", |s| s.as_str());
+            Some(format!("{{\"h\":{:?},\"side\":\"{side}\"}}", crate::fills::PATH_S[q.h]).into_bytes())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -871,6 +902,8 @@ mod tests {
                 let get = |p: &str| reqwest::get(format!("{base}{p}"));
                 assert_eq!(get("/healthz").await.unwrap().text().await.unwrap(), "ok");
                 assert_eq!(get("/api/snapshot").await.unwrap().text().await.unwrap(), "{\"full\":1}");
+                assert_eq!(get("/api/markouts?side=buy&h=60").await.unwrap().text().await.unwrap(), "{\"h\":60.0,\"side\":\"buy\"}");
+                assert_eq!(get("/api/markouts?ref=mid").await.unwrap().status(), 400);
                 let r = get("/assets/a.js").await.unwrap();
                 assert_eq!(r.headers()["x-frame-options"], "DENY");
                 assert_eq!(r.headers()["cache-control"], IMMUTABLE);

@@ -1,238 +1,252 @@
-// Desktop Analysis (was Markouts): tabs Markouts | By hour | By instrument. Charts with in-plot legends
-// that show each line's value at the hovered point, the exact figures in plain tables under them; figures are
-// coloured as text only, never as cell backgrounds.
-import { useMemo } from "react";
+// Desktop Analysis: today's post-trade markouts on one screen. Controls, a KPI strip, the price path around our
+// fills (−10 s to 5 min, per side, ±2 SE) next to the distribution at the chosen horizon, the day in 15-minute
+// buckets, then the instruments as a table with their own curves next to edge against 10 s markout. Everything
+// comes from /api/markouts over all of today's fills (analysis/data.ts) and follows the controls.
+import { useMemo, useState, type ReactNode } from "react";
 import { selectInstrument, useStore } from "../store";
-import { bps, compact, int, num, signClass } from "../format";
+import { bps, compact, int, pct, signClass } from "../format";
 import { C, S1 } from "../theme";
-import type { SymbolRow } from "../protocol";
-import { Tabs, useExHidden, useExPref } from "../components/ex";
-import { refLabel } from "../components/ui";
-import { maskFormat, maskText } from "../mask";
-import { Curve, type CurveSeries } from "./analysis/Curve";
+import { TextToggle, TickerStrip, useExHidden, type TickerItem } from "../components/ex";
+import { maskText, money, useHide } from "../mask";
+import type { MarkoutInst, MarkoutReport } from "../protocol";
+import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, hLabel, sideLine, useMarkouts, useView, type SideF, type VenueF, type Weight } from "./analysis/data";
+import { PathChart, type PathLineDef } from "./analysis/PathChart";
+import { Dist } from "./analysis/Dist";
+import { DayChart } from "./analysis/DayChart";
+import { Scatter, instKey } from "./analysis/Scatter";
+import { Spark } from "./analysis/Spark";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
 
-type Tab = "markouts" | "hour" | "inst";
-const TABS: Tab[] = ["markouts", "hour", "inst"];
-
-const MK_DEF =
-  "Markout at h: side × (mid(t+h) / price − 1); net subtracts the reference's move from τ = 1 s or 0.2 s after the fill. " +
-  "Notional-weighted over today's fills. A diagnostic, not PnL";
-const TOX_DEF =
-  "How far the reference moved against the fill from 5 s before it to h after it, −side × (ref(t+h) / ref(t−5 s) − 1), " +
-  "weighted by notional over today's fills with a reference. Positive = the reference moved against us. A rise between 0 and 0.2 s is a " +
-  "price jump that picked off the quote before any hedge could trade";
-
-/** bps, signed; unknown is `--`. */
-const bp = (v: number | null | undefined) => (v == null ? "--" : bps(v));
-const fb = (v: number) => bp(v);
-const hz = (h: number) => (h === 0 ? "fill" : `${h} s`);
-const MK_HIDDEN = ["fast", "raw"];
+const SIDES = [
+  { value: "all" as SideF, label: "All" },
+  { value: "buy" as SideF, label: "Buys" },
+  { value: "sell" as SideF, label: "Sells" },
+];
+const VENUES = [
+  { value: "all" as VenueF, label: "All" },
+  { value: "spot" as VenueF, label: "Spot" },
+  { value: "usdm" as VenueF, label: "Perp" },
+];
+const WEIGHTS = [
+  { value: "notional" as Weight, label: "By notional" },
+  { value: "fill" as Weight, label: "By fill" },
+];
 
 export function Markouts() {
-  const [tab, setTab] = useExPref<Tab>("analysis", "tab", "markouts", TABS);
+  const c = useView("analysis");
+  const v = c.view;
+  const { r, error } = useMarkouts(v);
+  const accounts = useStore((s) => s.snap?.accounts);
+  const hide = useHide();
+  const [hover, setHover] = useState<string | null>(null);
+  const of = v.weight === "fill" ? "fills" : "notional";
+
   return (
     <div className="page an-page">
       <section className="panel an-main">
-        <div className="an-head">
-          <Tabs
-            items={[
-              { value: "markouts", label: "Markouts" },
-              { value: "hour", label: "By hour" },
-              { value: "inst", label: "By instrument" },
-            ]}
-            value={tab}
-            onChange={setTab}
-          />
-          <span className="an-note muted">{tab === "inst" ? "Spot, today: PnL in USDT, edge and markouts in bps" : tab === "hour" ? "Today, UTC hours" : "Today's fills, bps"}</span>
+        <div className="an-ctl">
+          <Group label="Reference">
+            <TextToggle label="Reference" options={REF_OPTS} value={v.ref} onChange={c.setRef} />
+          </Group>
+          <Group label="Side">
+            <TextToggle label="Side" options={SIDES} value={v.side} onChange={c.setSide} />
+          </Group>
+          <Group label="Account">
+            <TextToggle
+              label="Account"
+              options={[{ value: "", label: "All" }, ...(accounts ?? []).map((a) => ({ value: a.id, label: a.label || a.id }))]}
+              value={v.account}
+              onChange={c.setAccount}
+            />
+          </Group>
+          <Group label="Venue">
+            <TextToggle label="Venue" options={VENUES} value={v.venue} onChange={c.setVenue} />
+          </Group>
+          <Group label="Weight">
+            <TextToggle label="Weight" options={WEIGHTS} value={v.weight} onChange={c.setWeight} />
+          </Group>
+          <span className="an-ctl-note muted">{error ? <span className="warn-text">{error}</span> : "Today, all fills"}</span>
         </div>
-        <div className="an-body">{tab === "markouts" ? <MarkoutsTab /> : tab === "hour" ? <HourTab /> : <InstrumentTab />}</div>
+        <Kpis r={r} side={v.side} hide={hide} />
+        <div className="an-grid">
+          <div className="an-cell an-c-path">
+            <div className="an-sub">
+              <span className="dotted" title={MK_DEF}>
+                Price path around our fills
+              </span>
+              <span className="an-sub-r muted">Click a horizon for its distribution</span>
+            </div>
+            <Path r={r} side={v.side} h={v.h} onH={c.setH} />
+          </div>
+          <div className="an-cell an-c-dist">
+            <div className="an-sub">
+              <span>Distribution</span>
+              <TextToggle
+                className="an-sub-r"
+                label="Horizon"
+                value={String(v.h)}
+                onChange={(x) => c.setH(Number(x))}
+                options={[...new Set([...MAIN_H, v.h])].sort((a, b) => a - b).map((h) => ({ value: String(h), label: hLabel(h) }))}
+              />
+            </div>
+            <Dist d={r?.dist ?? null} of={of} />
+          </div>
+          <div className="an-cell an-c-day">
+            <div className="an-fillbox">
+              <DayChart
+                id="an-day"
+                buckets={r?.by_time ?? []}
+                hide={hide}
+                fill
+                title={
+                  <span className="an-tb-title">
+                    Markout through the day <span className="muted">15 min, bps</span>
+                  </span>
+                }
+              />
+            </div>
+          </div>
+          <div className="an-cell an-c-inst">
+            <Instruments r={r} hide={hide} hover={hover} onHover={setHover} of={of} />
+          </div>
+          <div className="an-cell an-c-scatter">
+            <div className="an-sub">
+              <span className="dotted" title="Each instrument's edge at the fill (x) against its 10 s markout (y), bps; the bubble's area is its notional. Under zero the market took more than the edge; under the dashed diagonal some of the edge went.">
+                Edge vs 10 s markout
+              </span>
+            </div>
+            <Scatter
+              rows={r?.by_instrument ?? []}
+              j10={hIdx(r, 10)}
+              hide={hide}
+              hover={hover}
+              onHover={setHover}
+              onPick={(x) => selectInstrument({ symbol: x.symbol, venue: x.venue })}
+            />
+          </div>
+        </div>
       </section>
     </div>
   );
 }
 
-// ---------------- Markouts ----------------
-
-function MarkoutsTab() {
-  const mk = useStore((s) => s.snap?.markouts);
-  // Net 0.2 s and Raw run on top of Net 1 s most days: off until asked for, so the lines read apart
-  const mkHidden = useExHidden("an-mk", MK_HIDDEN);
-  const toxHidden = useExHidden("an-tox");
-  const cats = useMemo(() => (mk?.horizons ?? [1, 10, 60, 300]).map(hz), [mk?.horizons]);
-  const series = useMemo<CurveSeries[]>(
-    () => [
-      { key: "all", label: "Net 1 s", color: C.ink, data: mk?.all ?? [], format: fb, title: "Net of the reference's move from 1 s after the fill" },
-      { key: "fast", label: "Net 0.2 s", color: S1, data: mk?.fast ?? [], format: fb, title: "Net of the reference's move from 0.2 s after the fill" },
-      { key: "raw", label: "Raw", color: C.muted, dashed: true, data: mk?.raw ?? [], format: fb, title: "Against the instrument's own mid only" },
-      { key: "buys", label: "Buys", color: C.up, data: mk?.buys ?? [], format: fb, title: "Buys only, net 1 s" },
-      { key: "sells", label: "Sells", color: C.down, data: mk?.sells ?? [], format: fb, title: "Sells only, net 1 s" },
-    ],
-    [mk],
-  );
-  const tox = mk?.toxicity;
-  const toxCats = useMemo(() => (tox?.horizons_s ?? []).map(hz), [tox?.horizons_s]);
-  const toxSeries = useMemo<CurveSeries[]>(
-    () => [
-      { key: "d", label: "D(h)", color: C.ink, data: tox?.bps ?? [], format: fb, title: TOX_DEF },
-    ],
-    [tox],
-  );
-
-  type HRow = { key: string; label: string; title: string; v: (number | null)[] };
-  const rows: HRow[] = series.map((s) => ({ key: s.key, label: s.label, title: s.title ?? "", v: s.data }));
-  const cols: SCol<HRow>[] = [
-    { key: "l", label: "", left: true, cell: (r) => <span title={r.title}>{r.label}</span> },
-    ...cats.map((c, i): SCol<HRow> => ({ key: c, label: c, cell: (r) => bp(r.v[i]), cls: (r) => "fig " + signClass(r.v[i]) })),
-  ];
-  type TRow = { key: string; label: string; v: (number | null)[]; fills?: boolean };
-  const toxRows: TRow[] = tox ? [{ key: "d", label: "D(h)", v: tox.bps }, { key: "n", label: "Fills", v: tox.fills, fills: true }] : [];
-  const toxCols: SCol<TRow>[] = [
-    { key: "l", label: "", left: true, cell: (r) => (r.fills ? r.label : <span title={TOX_DEF}>{r.label}</span>) },
-    ...toxCats.map((c, i): SCol<TRow> => ({
-      key: c,
-      label: c,
-      cell: (r) => (r.fills ? int(r.v[i]) : bp(r.v[i])),
-      cls: (r) => "fig " + (r.fills ? "" : signClass(r.v[i])),
-    })),
-  ];
-
+function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="an-mk">
-      <div className="an-cell an-mk-chart">
-        <div className="an-sub">
-          <span className="dotted" title={MK_DEF}>
-            Markout by horizon
-          </span>
-        </div>
-        <Curve categories={cats} series={series} hidden={mkHidden.hidden} onToggle={mkHidden.toggle} axisFormat={(v) => num(v, 1, true)} unit="bps" heading={(c) => `At ${c}`} />
-      </div>
-      <div className="an-cell an-tox-chart">
-        <div className="an-sub">
-          <span className="dotted" title={TOX_DEF}>
-            Toxicity D(h)
-          </span>
-        </div>
-        <Curve
-          categories={toxCats}
-          series={toxSeries}
-          hidden={toxHidden.hidden}
-          onToggle={toxHidden.toggle}
-          axisFormat={(v) => num(v, 1, true)}
-          unit="bps"
-          heading={(c) => (c === "fill" ? "At the fill" : `At ${c}`)}
-        />
-      </div>
-      <div className="an-cell an-mk-table">
-        <SortTable cols={cols} rows={rows} rowKey={(r) => r.key} empty="No fills today" />
-      </div>
-      <div className="an-cell an-tox-table">
-        <SortTable cols={toxCols} rows={toxRows} rowKey={(r) => r.key} empty="No fills today" />
-      </div>
+    <div className="an-ctl-g">
+      <span className="an-ctl-l">{label}</span>
+      {children}
     </div>
   );
 }
 
-// ---------------- By hour ----------------
-
-type Hour = { hour: number; fills: number; mk10: number | null; mk60: number | null; pnl: number };
-
-function HourTab() {
-  const mk = useStore((s) => s.snap?.markouts);
-  const hidden = useExHidden("an-hour");
-  const hide = useStore((s) => s.hideAmounts);
-  // the hours so far today, empty ones included (a gap in the bars reads as a quiet hour)
-  const hours = useMemo<Hour[]>(() => {
-    const by = new Map((mk?.by_hour ?? []).map((h) => [h.hour, h]));
-    const last = Math.max(-1, ...(mk?.by_hour ?? []).filter((h) => h.fills > 0).map((h) => h.hour), new Date().getUTCHours());
-    const out: Hour[] = [];
-    for (let h = 0; h <= last; h++) out.push(by.get(h) ?? { hour: h, fills: 0, mk10: null, mk60: null, pnl: 0 });
-    return out;
-  }, [mk?.by_hour]);
-  const cats = hours.map((h) => `${String(h.hour).padStart(2, "0")}:00`);
-  const series = useMemo<CurveSeries[]>(
-    () => [
-      { key: "pnl", label: "PnL 60 s", kind: "bar", signBars: !hide, signValue: !hide, color: hide ? C.muted : C.up, data: hours.map((h) => (h.fills ? h.pnl : null)), format: maskFormat(hide, (v) => num(v, 2, true)), title: "60 s markout × notional, USDT: a diagnostic, not PnL" },
-      { key: "fills", label: "Fills", color: S1, data: hours.map((h) => h.fills), format: (v) => int(v), axis: 1, title: "Fills in the hour, on the left axis" },
-    ],
-    [hours, hide],
-  );
-  const cols: SCol<Hour>[] = [
-    { key: "h", label: "Hour", title: "UTC hour", left: true, cell: (h) => `${String(h.hour).padStart(2, "0")}:00`, sort: (h) => h.hour },
-    { key: "f", label: "Fills", cell: (h) => int(h.fills), cls: () => "fig", sort: (h) => h.fills },
-    { key: "m10", label: "10 s", title: "Markout at 10 s, net 1 s, bps", cell: (h) => bp(h.mk10), cls: (h) => "fig " + signClass(h.mk10), sort: (h) => h.mk10 },
-    { key: "m60", label: "60 s", title: "Markout at 60 s, net 1 s, bps", cell: (h) => bp(h.mk60), cls: (h) => "fig " + signClass(h.mk60), sort: (h) => h.mk60 },
-    { key: "p", label: "PnL 60 s", dot: true, title: "60 s markout × notional, USDT: a diagnostic, not PnL", cell: (h) => (h.fills ? maskText(hide, num(h.pnl, 2, true)) : "--"), cls: (h) => "fig " + (hide ? "masked" : signClass(h.pnl)), sort: hide ? undefined : (h) => (h.fills ? h.pnl : null) },
-  ];
-  const rows = hours.filter((h) => h.fills > 0);
-  return (
-    <div className="an-hour">
-      <div className="an-cell an-hour-chart">
-        <div className="an-sub">
-          <span>
-            <span className="dotted" title="Each fill's 60 s markout × its notional, summed per UTC hour, USDT: a diagnostic, not PnL">
-              PnL 60 s
-            </span>{" "}
-            and fills by UTC hour
-          </span>
-        </div>
-        <Curve
-          categories={cats}
-          series={series}
-          hidden={hidden.hidden}
-          onToggle={hidden.toggle}
-          axisFormat={maskFormat(hide, (v) => num(v, 2, true))}
-          unit="USDT"
-          unit2="Fills"
-          axis2Format={(v) => compact(v, 1)}
-          heading={(c) => `${c} UTC`}
-        />
-      </div>
-      <div className="an-cell an-hour-table">
-        <SortTable cols={cols} rows={rows} rowKey={(h) => String(h.hour)} initial={{ key: "h", desc: true }} empty="No fills today" />
-      </div>
-    </div>
-  );
-}
-
-// ---------------- By instrument ----------------
-
-function InstrumentTab() {
-  const symbols = useStore((s) => s.snap?.symbols);
-  const rows = useMemo(() => symbols?.filter((r) => r.venue === "spot" && (r.fills_day > 0 || r.trading_pnl !== 0)) ?? [], [symbols]);
-  const hide = useStore((s) => s.hideAmounts);
-  const m = (s: string) => maskText(hide, s);
-  const p2 = (v: number | null) => (v == null ? "--" : m(num(v, 2, true)));
-  const cols: SCol<SymbolRow>[] = [
-    { key: "sym", label: "Instrument", left: true, cell: (r) => <span className="an-sym">{r.symbol}</span>, sort: (r) => r.symbol },
+function Kpis({ r, side, hide }: { r: MarkoutReport | null; side: SideF; hide: boolean }) {
+  const l = r ? sideLine(r, side) : null;
+  const at = (h: number) => (l ? l.mean[hIdx(r, h)] : null);
+  const mk = (h: number): TickerItem => {
+    const x = at(h);
+    return { label: `Markout ${h} s`, value: bps(x), tone: (signClass(x) || undefined) as TickerItem["tone"] };
+  };
+  const adv = l ? l.adverse[hIdx(r, 10)] : null;
+  const items: (TickerItem | "|")[] = [
+    { label: "Fills", value: r ? int(r.fills) : "--" },
+    { label: "Notional", value: r ? maskText(hide, compact(r.notional)) : "--", tone: hide ? "muted" : undefined },
+    { label: "Edge at fill", value: bps(r?.edge) },
+    "|",
+    mk(1),
+    mk(10),
+    mk(60),
+    mk(300),
+    "|",
     {
-      key: "ref",
-      label: "Reference",
-      title: "The instrument the net markouts are taken against",
-      left: true,
-      cell: (r) => <span className="muted">{!r.reference ? "--" : r.reference === `usdm:${r.symbol}` || r.reference === r.symbol ? "Perp" : refLabel(r.reference)}</span>,
+      label: "Markout PnL",
+      title: "Σ notional × 60 s markout, USDT: what the fills were worth a minute later. A diagnostic, not P&L",
+      value: r ? maskText(hide, money(r.pnl, true)) : "--",
+      tone: hide || !r ? (hide ? "muted" : undefined) : ((signClass(r.pnl) || undefined) as TickerItem["tone"]),
     },
-    { key: "f", label: "Fills", cell: (r) => int(r.fills_day), cls: () => "fig", sort: (r) => r.fills_day },
-    { key: "re", label: "Realized", title: "Sells matched FIFO to buys, day-start inventory included, minus fees, USDT", cell: (r) => p2(r.realized_pnl), cls: (r) => "fig " + (hide ? "masked" : signClass(r.realized_pnl)), sort: (r) => r.realized_pnl },
-    { key: "fl", label: "Float", title: "Inventory left, at mid against cost, USDT", cell: (r) => p2(r.float_pnl), cls: (r) => "fig " + (hide ? "masked" : signClass(r.float_pnl)), sort: (r) => r.float_pnl },
-    { key: "v", label: "Volume", title: "Filled notional today, USDT", cell: (r) => m(compact(r.volume_day)), cls: () => "fig" + (hide ? " masked" : ""), sort: (r) => r.volume_day },
-    { key: "inv", label: "Inventory", title: "Quantity held across accounts × mid, USDT", cell: (r) => m(compact(r.inv_value)), cls: () => "fig" + (hide ? " masked" : ""), sort: (r) => r.inv_value },
-    { key: "e", label: "Edge", dot: true, title: "Edge at fill: side × (fair − price) / fair, volume-weighted, bps", cell: (r) => bp(r.edge_bps), cls: (r) => "fig " + signClass(r.edge_bps), sort: (r) => r.edge_bps },
-    { key: "m10", label: "10 s", title: "Markout 10 s after the fill, net 1 s, bps", cell: (r) => bp(r.mk10_bps), cls: (r) => "fig " + signClass(r.mk10_bps), sort: (r) => r.mk10_bps },
-    { key: "m60", label: "60 s", title: "Markout 60 s after the fill, net 1 s, bps", cell: (r) => bp(r.mk60_bps), cls: (r) => "fig " + signClass(r.mk60_bps), sort: (r) => r.mk60_bps },
-    { key: "m300", label: "300 s", title: "Markout 300 s after the fill, net 1 s, bps", cell: (r) => bp(r.mk300_bps), cls: (r) => "fig " + signClass(r.mk300_bps), sort: (r) => r.mk300_bps },
+    { label: "Adverse at 10 s", value: adv == null ? "--" : pct(adv, 1) },
+  ];
+  return <TickerStrip className="an-kpi" size="md" items={items} />;
+}
+
+function Path({ r, side, h, onH }: { r: MarkoutReport | null; side: SideF; h: number; onH: (h: number) => void }) {
+  const { hidden, toggle } = useExHidden("an-path");
+  const lines = useMemo<PathLineDef[]>(() => {
+    if (!r) return [];
+    const out: PathLineDef[] = [];
+    if (side === "all") out.push({ key: "all", label: "All", color: C.ink, line: r.all, band: true });
+    if (side !== "sell") out.push({ key: "buy", label: "Buys", color: C.up, line: r.buy, band: side === "buy" });
+    if (side !== "buy") out.push({ key: "sell", label: "Sells", color: C.down, line: r.sell, band: side === "sell" });
+    out.push({ key: "tox", label: "Ref move", color: S1, line: r.tox, dashed: true, title: TOX_DEF });
+    return out;
+  }, [r, side]);
+  return (
+    <div className="an-fillbox">
+      {r ? <PathChart horizons={r.horizons_s} lines={lines} hidden={hidden} onToggle={toggle} selected={h} onSelect={onH} /> : <div className="an-empty">Loading</div>}
+    </div>
+  );
+}
+
+function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null; hide: boolean; hover: string | null; onHover: (k: string | null) => void; of: string }) {
+  const rows = r?.by_instrument ?? [];
+  const ix = (h: number) => hIdx(r, h);
+  const iFill = ix(0);
+  const mkCol = (h: number): SCol<MarkoutInst> => ({
+    key: "m" + h,
+    label: `${h} s`,
+    title: `Markout ${h} s after the fill, bps`,
+    cell: (x) => bps(x.mean[ix(h)]),
+    cls: (x) => "fig " + signClass(x.mean[ix(h)]),
+    sort: (x) => x.mean[ix(h)] ?? null,
+  });
+  const cols: SCol<MarkoutInst>[] = [
+    {
+      key: "sym",
+      label: "Instrument",
+      left: true,
+      cell: (x) => (
+        <span className="an-sym">
+          {x.symbol}
+          {x.venue === "usdm" && <span className="an-tag">Perp</span>}
+        </span>
+      ),
+      sort: (x) => x.symbol,
+    },
+    { key: "f", label: "Fills", cell: (x) => int(x.fills), cls: () => "fig", sort: (x) => x.fills },
+    { key: "n", label: "Notional", title: "Filled notional today, USDT", cell: (x) => maskText(hide, compact(x.notional)), cls: () => "fig" + (hide ? " masked" : ""), sort: (x) => x.notional },
+    { key: "e", label: "Edge", title: "Edge at fill, bps", cell: (x) => bps(x.edge), cls: (x) => "fig " + signClass(x.edge), sort: (x) => x.edge },
+    ...MAIN_H.map(mkCol),
+    {
+      key: "se",
+      label: "±2 SE",
+      title: "Two standard errors of the 10 s markout: a name with few fills reads wide",
+      cell: (x) => (x.se10 == null ? "--" : "±" + (2 * x.se10).toFixed(1)),
+      cls: () => "fig muted",
+      sort: (x) => x.se10,
+    },
+    {
+      key: "p",
+      label: "Markout PnL",
+      title: "Σ notional × 60 s markout, USDT. A diagnostic, not P&L",
+      cell: (x) => maskText(hide, money(x.pnl, true)),
+      cls: (x) => "fig " + (hide ? "masked" : signClass(x.pnl)),
+      sort: hide ? undefined : (x) => x.pnl,
+    },
+    { key: "a", label: "Adverse", title: `Share of ${of} whose 10 s markout is below zero`, cell: (x) => (x.adverse10 == null ? "--" : pct(x.adverse10, 0)), cls: () => "fig", sort: (x) => x.adverse10 },
+    { key: "c", label: "−10 s … 5 min", title: "The instrument's own markout path, the same horizons as the chart above", cell: (x) => <Spark vals={x.mean} iFill={iFill} />, cls: () => "an-spark-td" },
   ];
   return (
-    <div className="an-inst">
+    <div className="an-tbox">
       <SortTable
         className="sticky"
         cols={cols}
         rows={rows}
-        rowKey={(r) => r.venue + ":" + r.symbol}
-        initial={{ key: "re", desc: true }}
-        onRow={(r) => selectInstrument({ symbol: r.symbol, venue: r.venue })}
-        empty="No fills today"
+        rowKey={instKey}
+        initial={{ key: "n", desc: true }}
+        onRow={(x) => selectInstrument({ symbol: x.symbol, venue: x.venue })}
+        hover={hover}
+        onHover={onHover}
+        empty={r ? "No fills today" : "Loading"}
       />
     </div>
   );

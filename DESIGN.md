@@ -237,6 +237,18 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
   400, a 429 / 418 a 503 until its Retry-After.
 
+Markouts, answered on the desk's thread from today's fills in memory:
+- `GET /api/markouts?account&venue&side&ref&weight&h` -> `MarkoutReport`. Optional filters `account`, `venue`
+  (spot | usdm), `side` (buy | sell); `ref` net (τ = 1 s, default) | fast (τ = 0.2 s) | raw; `weight` notional
+  (default) | fill; `h` the distribution's horizon in seconds (default 10, the nearest path horizon). Each fill
+  keeps its instrument's mid and the reference's at the path horizons −10, −5, −2, −1, −0.5, 0, 0.2, 0.5, 1, 2,
+  5, 10, 20, 30, 60, 120, 300 s (the 1 s ring's at 1, 10, 60, 300 s, as the markouts; the ms ring's
+  elsewhere, kept for every configured or filled instrument), stored with the fill. A horizon before the
+  fill reads the same formula: positive = the mid was then on our side of our price. The `all`, `buy`,
+  `sell` lines ignore `side`; everything else is filtered by it. Standard error: the weighted variance over
+  (effective n − 1); `adverse` is the weight share below zero. `pnl` = Σ notional × 60 s markout (a
+  diagnostic, not P&L). `by_time`: 15-minute buckets from the day start; `by_instrument` by notional.
+
 ```ts
 type Msg =
   | { type: "snapshot"; data: Snapshot }
@@ -366,6 +378,27 @@ interface HistoryBar {
 }
 
 interface HistoryFill { t: number; side: "buy" | "sell"; price: number; qty: number; account: string; venue: "spot" | "usdm"; maker: boolean }
+
+interface MarkoutReport {
+  now: number; day_start: number;
+  horizons_s: number[];                     // the path horizons, −10 … 300
+  fills: number; notional: number;          // the filtered fills
+  edge: number | null;                      // weighted edge at the fill, bps
+  pnl: number;                              // Σ notional × 60 s markout, USDT
+  all: MarkoutLine; buy: MarkoutLine; sell: MarkoutLine;   // by horizon, `side` ignored
+  tox: MarkoutLine;                         // D(h), reference move against the fill since −5 s
+  dist: MarkoutDist;                        // per-fill markouts at `h`
+  by_time: MarkoutBucket[];                 // 15-minute buckets
+  by_instrument: MarkoutInst[];             // by notional, largest first
+}
+
+interface MarkoutLine { n: number[]; mean: (number | null)[]; se: (number | null)[]; adverse: (number | null)[] }
+
+interface MarkoutDist { h: number; n: number; lo: number; width: number; bins: number[]; mean: number | null; median: number | null; p10: number | null; p90: number | null }   // bins: weight shares
+
+interface MarkoutBucket { t: number; fills: number; notional: number; mk10: number | null; mk60: number | null }
+
+interface MarkoutInst { symbol: string; venue: "spot" | "usdm"; fills: number; notional: number; edge: number | null; mean: (number | null)[]; se10: number | null; adverse10: number | null; pnl: number }   // mean by path horizon
 
 interface SeriesPoint { t: number; equity: number; pnl_day: number; trading: number | null; hedged: number | null; inventory: number; futures_notional: number }   // trading, hedged: Π, S so far today; null before the P&L grid ran
 
