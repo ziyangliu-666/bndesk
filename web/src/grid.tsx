@@ -6,8 +6,9 @@ import {
   type GridOptions,
   type ValueFormatterParams,
 } from "ag-grid-community";
-import { age, bps, hms, int, pnl, price, qty, usd, signClass } from "./format";
+import { DASH, age, bps, hms, int, pnl, price, qty, usd, signClass } from "./format";
 import { useStore } from "./store";
+import { hideNow, maskText } from "./mask";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -30,7 +31,7 @@ export const fQtyS: VF = (p) => qty(v(p), true);
 export const fTime: VF = (p) => hms(v(p), useStore.getState().tz);
 export const fAge: VF = (p) => {
   const t = v(p);
-  return t == null ? "—" : age(Date.now() + useStore.getState().skew - t);
+  return t == null ? DASH : age(Date.now() + useStore.getState().skew - t);
 };
 
 /**
@@ -41,6 +42,18 @@ export function flashOn(fmt: VF) {
   const f = (value: unknown) => fmt({ value } as ValueFormatterParams);
   return { enableCellChangeFlash: true, equals: (a: unknown, b: unknown) => f(a) === f(b) };
 }
+
+/** A money or size formatter that follows Hide amounts (read at format time: rebuild the columns when it flips). */
+export const maskVF =
+  <P extends { value?: unknown }>(f: (p: P) => string) =>
+  (p: P): string =>
+    maskText(hideNow(), f(p));
+
+/** The cell class of a masked column: `num masked` (muted, no sign colour) while hidden, else `cls`. */
+export const maskCls =
+  <P extends CellClassParams>(cls: string | ((p: P) => string) = "num") =>
+  (p: P): string =>
+    hideNow() ? "num masked" : typeof cls === "string" ? cls : cls(p);
 
 /** Text color follows sign (the sign is in the text too). */
 export const signCls = (p: CellClassParams) => "num " + signClass(p.value as number | null);

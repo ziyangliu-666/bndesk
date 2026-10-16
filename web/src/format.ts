@@ -1,7 +1,8 @@
 // Number and time formatting. Every signed figure carries its sign; minus is U+2212.
 
 export const MINUS = "−";
-export const DASH = "—";
+/** Unknown, the exchange way. */
+export const DASH = "--";
 
 const nf = (d: number) =>
   new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -17,28 +18,28 @@ function signed(abs: string, v: number, sign: boolean): string {
   return abs;
 }
 
-/** USD: 2 decimals, k suffix at or above 10k (m at or above 10m). */
+/** USD: 2 decimals, K suffix at or above 10K (M at or above 10M). */
 export function usd(v: number | null | undefined, sign = false): string {
   if (v == null || !Number.isFinite(v)) return DASH;
   const a = Math.abs(v);
   let s: string;
-  if (a >= 1e7) s = fmtFixed(a / 1e6, 2) + "m";
-  else if (a >= 1e4) s = fmtFixed(a / 1e3, 2) + "k";
+  if (a >= 1e7) s = fmtFixed(a / 1e6, 2) + "M";
+  else if (a >= 1e4) s = fmtFixed(a / 1e3, 2) + "K";
   else s = fmtFixed(a, 2);
   // a value that rounds to zero shows no sign
   if (s === "0.00") return s;
   return signed(s, v, sign);
 }
 
-/** USD in at most four significant figures, for tight sub-lines: 950.12, 9,501, 95.0k, 950k, 9.50m. */
+/** USD in at most four significant figures, for tight sub-lines: 950.12, 9,501, 95.0K, 950K, 9.50M. */
 export function usdShort(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return DASH;
   const a = Math.abs(v);
   let s: string;
-  if (a >= 1e7) s = fmtFixed(a / 1e6, 1) + "m";
-  else if (a >= 1e6) s = fmtFixed(a / 1e6, 2) + "m";
-  else if (a >= 1e5) s = fmtFixed(a / 1e3, 0) + "k";
-  else if (a >= 1e4) s = fmtFixed(a / 1e3, 1) + "k";
+  if (a >= 1e7) s = fmtFixed(a / 1e6, 1) + "M";
+  else if (a >= 1e6) s = fmtFixed(a / 1e6, 2) + "M";
+  else if (a >= 1e5) s = fmtFixed(a / 1e3, 0) + "K";
+  else if (a >= 1e4) s = fmtFixed(a / 1e3, 1) + "K";
   else if (a >= 1e3) s = fmtFixed(a, 0);
   else s = fmtFixed(a, 2);
   return signed(s, v, false);
@@ -166,5 +167,5 @@ export function signClass(v: number | null | undefined): string {
 
 /** Standard error as "± 1.23" (USD, unsigned); dash when there is none yet. */
 export function se(v: number | null | undefined): string {
-  return v == null || !Number.isFinite(v) ? "± —" : "± " + usd(v);
+  return v == null || !Number.isFinite(v) ? "± --" : "± " + usd(v);
 }

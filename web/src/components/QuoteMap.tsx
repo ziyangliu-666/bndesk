@@ -3,6 +3,7 @@ import type { Venue } from "../protocol";
 import { useStore } from "../store";
 import { C, SANS } from "../theme";
 import { bps, MINUS, price, usd } from "../format";
+import { MASK, hideNow, maskText, useHide } from "../mask";
 import { EChart, phoneDpr, type EChartsType } from "./EChart";
 import { BAND, BAND_EDGE, INV_FILL, LADDER, clamp, dotSize, off, quoteRows, short, type MapSort, type QRow } from "./quotes/model";
 
@@ -36,7 +37,7 @@ const TD = "padding:1px 4px";
 const TH = "padding:0 4px 2px;font-weight:400;font-size:10.5px";
 const R = ";text-align:right";
 
-function tipHtml(r: Row): string {
+function tipHtml(r: Row, hide: boolean): string {
   const s = r.sym;
   const os = [...r.orders].sort((a, b) => b.price - a.price);
   const td = (v: string, cls = "", right = false) => `<td class="${cls}" style="${TD}${right ? R : ""}">${v}</td>`;
@@ -45,16 +46,17 @@ function tipHtml(r: Row): string {
   const table = (body: string, extra = "") => `<table class="fig" style="width:100%;border-collapse:collapse;${extra}">${body}</table>`;
   const orders = os.length
     ? table(
-        `<thead><tr class="muted">${th("Side")}${th("Acct")}${th("Price", true)}${th("USDT", true)}${th("bps", true)}</tr></thead><tbody>` +
+        `<thead><tr class="muted">${th("Side")}${th("Account")}${th("Price", true)}${th("USDT", true)}${th("bps", true)}</tr></thead><tbody>` +
           os
             .map(
               (o) =>
                 "<tr>" +
-                td(o.side === "buy" ? "bid" : "ask", o.side === "buy" ? "up" : "down") +
+                td(o.side === "buy" ? "Bid" : "Ask", o.side === "buy" ? "up" : "down") +
                 td(o.account) +
                 td(price(o.price), "", true) +
-                td(usd(o.notional), "", true) +
-                td(bps(o.dist_bps), o.dist_bps != null && o.dist_bps < 0 ? "warn-text" : "", true) +
+                td(maskText(hide, usd(o.notional)), hide ? "masked" : "", true) +
+                // signed from fair, as the axis: a bid below it is negative
+                td(bps(o.dist_bps == null ? null : o.side === "buy" ? -o.dist_bps : o.dist_bps), o.dist_bps != null && o.dist_bps < 0 ? "warn-text" : "", true) +
                 "</tr>",
             )
             .join("") +
@@ -70,7 +72,7 @@ function tipHtml(r: Row): string {
         kv("Bid", price(s.bid)) +
         kv("Ask", price(s.ask)) +
         kv("Fair", price(s.fair)) +
-        kv("Inventory", usd(s.inv_value) + " USDT") +
+        kv("Inventory", hide ? MASK : usd(s.inv_value) + " USDT") +
         "</tbody>",
       `border-top:1px solid ${C.rule};margin-top:4px`,
     )
@@ -99,6 +101,8 @@ export function QuoteMap({
 }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const orders = useStore((s) => s.snap?.orders);
+  // Hide amounts: the inventory column and the tip's notionals read ••• (bars empty)
+  const hide = useHide();
   const rows = useMemo(
     () =>
       quoteRows(symbols ?? [], orders ?? [], sort, account),
@@ -204,14 +208,14 @@ export function QuoteMap({
         borderColor: C.rule,
         borderWidth: 1,
         padding: [6, 6],
-        extraCssText: "width:300px;box-shadow:0 4px 14px rgba(0,0,0,0.35);border-radius:4px",
+        extraCssText: "width:300px;box-shadow:none;border-radius:4px",
         textStyle: { color: C.ink, fontSize: 11.5, fontFamily: SANS },
         transitionDuration: 0,
         confine: true,
         formatter: (ps: any) => {
           const p = Array.isArray(ps) ? ps[0] : ps;
           const r = p && live.current.rows.find((x) => short(x.sym.symbol) === p.axisValue);
-          return r ? tipHtml(r) : "";
+          return r ? tipHtml(r, hideNow()) : "";
         },
       },
       grid: [
@@ -322,7 +326,8 @@ export function QuoteMap({
             fontFamily: SANS,
             formatter: (_: string, i: number) => {
               const v = rows[i]?.sym.inv_value ?? 0;
-              return Math.abs(v) >= 1 ? (v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US") : "";
+              if (Math.abs(v) < 1) return "";
+              return hide ? MASK : (v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US");
             },
           },
         },
@@ -440,7 +445,7 @@ export function QuoteMap({
           barWidth: "45%",
           barMaxWidth: 9,
           itemStyle: { color: INV_FILL },
-          data: rows.map((r) => r.sym.inv_value),
+          data: rows.map((r) => (hide ? 0 : r.sym.inv_value)),
         },
       ],
     });

@@ -8,6 +8,7 @@ import { C, S1 } from "../theme";
 import type { SymbolRow } from "../protocol";
 import { Tabs, useExHidden, useExPref } from "../components/ex";
 import { refLabel } from "../components/ui";
+import { maskText } from "../mask";
 import { Curve, type CurveSeries } from "./analysis/Curve";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
@@ -195,7 +196,7 @@ function InstrumentTab() {
   const symbols = useStore((s) => s.snap?.symbols);
   const rows = useMemo(() => symbols?.filter((r) => r.venue === "spot" && (r.fills_day > 0 || r.trading_pnl !== 0)) ?? [], [symbols]);
   const hide = useStore((s) => s.hideAmounts);
-  const m = (s: string) => (hide ? "•••" : s);
+  const m = (s: string) => maskText(hide, s);
   const p2 = (v: number | null) => (v == null ? "--" : m(num(v, 2, true)));
   const cols: SCol<SymbolRow>[] = [
     { key: "sym", label: "Instrument", left: true, cell: (r) => <span className="an-sym">{r.symbol}</span>, sort: (r) => r.symbol },
@@ -207,10 +208,10 @@ function InstrumentTab() {
       cell: (r) => <span className="muted">{!r.reference ? "--" : r.reference === `usdm:${r.symbol}` || r.reference === r.symbol ? "Perp" : refLabel(r.reference)}</span>,
     },
     { key: "f", label: "Fills", cell: (r) => int(r.fills_day), cls: () => "fig", sort: (r) => r.fills_day },
-    { key: "re", label: "Realized", title: "Sells matched FIFO to buys, day-start inventory included, minus fees, USDT", cell: (r) => p2(r.realized_pnl), cls: (r) => "fig " + signClass(r.realized_pnl), sort: (r) => r.realized_pnl },
-    { key: "fl", label: "Float", title: "Inventory left, at mid against cost, USDT", cell: (r) => p2(r.float_pnl), cls: (r) => "fig " + signClass(r.float_pnl), sort: (r) => r.float_pnl },
-    { key: "v", label: "Volume", title: "Filled notional today, USDT", cell: (r) => compact(r.volume_day), cls: () => "fig", sort: (r) => r.volume_day },
-    { key: "inv", label: "Inventory", title: "Quantity held across accounts × mid, USDT", cell: (r) => m(compact(r.inv_value)), cls: () => "fig", sort: (r) => r.inv_value },
+    { key: "re", label: "Realized", title: "Sells matched FIFO to buys, day-start inventory included, minus fees, USDT", cell: (r) => p2(r.realized_pnl), cls: (r) => "fig " + (hide ? "masked" : signClass(r.realized_pnl)), sort: (r) => r.realized_pnl },
+    { key: "fl", label: "Float", title: "Inventory left, at mid against cost, USDT", cell: (r) => p2(r.float_pnl), cls: (r) => "fig " + (hide ? "masked" : signClass(r.float_pnl)), sort: (r) => r.float_pnl },
+    { key: "v", label: "Volume", title: "Filled notional today, USDT", cell: (r) => m(compact(r.volume_day)), cls: () => "fig" + (hide ? " masked" : ""), sort: (r) => r.volume_day },
+    { key: "inv", label: "Inventory", title: "Quantity held across accounts × mid, USDT", cell: (r) => m(compact(r.inv_value)), cls: () => "fig" + (hide ? " masked" : ""), sort: (r) => r.inv_value },
     { key: "e", label: "Edge", dot: true, title: "Edge at fill: side × (fair − price) / fair, volume-weighted, bps", cell: (r) => bp(r.edge_bps), cls: (r) => "fig " + signClass(r.edge_bps), sort: (r) => r.edge_bps },
     { key: "m10", label: "10 s", title: "Markout 10 s after the fill, net 1 s, bps", cell: (r) => bp(r.mk10_bps), cls: (r) => "fig " + signClass(r.mk10_bps), sort: (r) => r.mk10_bps },
     { key: "m60", label: "60 s", title: "Markout 60 s after the fill, net 1 s, bps", cell: (r) => bp(r.mk60_bps), cls: (r) => "fig " + signClass(r.mk60_bps), sort: (r) => r.mk60_bps },

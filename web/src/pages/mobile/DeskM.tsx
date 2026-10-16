@@ -8,7 +8,12 @@ import { LevelIcon } from "../../components/ui";
 import { DefinedLabel, KV, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
 import { HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../theme";
 import type { Account, Exposure, SymbolRow } from "../../protocol";
-import { Bps, FillRow, InstName, instPnl, useFillSheet } from "./shared";
+import { Bps, FillRow, InstName, useFillSheet } from "./shared";
+import { instPnl as instPnlOf } from "../../selectors";
+import { pctOfMoney, useHide } from "../../mask";
+
+/** A spot market's Trading PnL (the movers are spot only). */
+const instPnl = (r: SymbolRow) => instPnlOf(r, null);
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
@@ -30,6 +35,7 @@ export function DeskM() {
   // the movers and the latest fills hold still under a resting finger
   const [held, hold] = useHold();
   const symbols = useLive((s) => s.snap?.symbols, PAGE_MS, held);
+  const hide = useHide();
   const fills = useLive((s) => s.snap?.fills, PAGE_MS, held);
   const reconcile = useStore((s) => s.snap?.alerts.some((a) => a.active && a.rule === "reconcile") ?? false);
   const tz = useStore((s) => s.tz);
@@ -53,7 +59,7 @@ export function DeskM() {
         v={sm.pnl_day}
         sub={
           <>
-            {ofEquity != null && <span className="m-fig">{(ofEquity >= 0 ? "+" : "−") + num(Math.abs(ofEquity), 3)}% of equity · </span>}
+            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 3)} of equity · </span>}
             since {hm(sm.day_start, tz)}
             {zone}
           </>

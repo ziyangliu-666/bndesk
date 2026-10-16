@@ -7,7 +7,8 @@ import { KV, ListRow, Money, Section, span, tone, useHold, useLive, useMoney, ty
 import { Tabs, useExPref, useTicker24h, type Ticker24h } from "../../components/ex";
 import { QuoteLegend, QuoteRows, type QRow } from "../../components/quotes";
 import type { Fill, OpenOrder, SymbolRow, Venue } from "../../protocol";
-import { FillRow, MkTable, instPnl, useAccountLabel, useFillSheet, useQty } from "./shared";
+import { FillRow, MkTable, useAccountLabel, useFillSheet, useQty } from "./shared";
+import { instPnl } from "../../selectors";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
@@ -140,7 +141,7 @@ function OurStats({ r }: { r: SymbolRow }) {
     : [
         { label: `Inv (${asset})`, value: r.inv_qty === 0 ? "flat" : q(r.inv_qty, true) },
         { label: "Avg cost", value: r.inv_qty === 0 ? "--" : price(r.avg_cost) },
-        { label: "Day PnL", value: <Money v={instPnl(r)} /> },
+        { label: "Trading PnL", value: <Money v={instPnl(r, null)} /> },
         { label: "Edge", value: <span className={tone(r.edge_bps, bps(r.edge_bps))}>{bpsUnit(r.edge_bps)}</span> },
       ];
   return (

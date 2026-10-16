@@ -8,7 +8,8 @@ import { compact, price, qty as fmtQty } from "../../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, S1 } from "../../../theme";
 import { ExChart, type ExSeries } from "../../../components/ex";
 import type { Account, Position } from "../../../protocol";
-import { Amt, MASK, Row, amt } from "./ui";
+import { Amt, Row, amt } from "./ui";
+import { MASK } from "../../../mask";
 import "./assets.css";
 
 /** The eye next to a hero's label: Hide amounts on and off. */
@@ -95,7 +96,6 @@ export function DeskChart({ what }: { what: "equity" | "exposure" }) {
   return (
     <div className="r-chart">
       <ExChart
-        key={hide ? "h" : "s"}
         id={what === "equity" ? "m-assets-eq" : "m-assets-exp"}
         title={what === "equity" ? "Equity today" : "Exposure today"}
         toolbarLeft={<span className="a-chart-t">{what === "equity" ? "Equity today (USDT)" : "Exposure today (USDT)"}</span>}
@@ -127,7 +127,6 @@ export function AccountsChart({ accounts, only }: { accounts: Account[]; only?: 
   return (
     <div className="r-chart">
       <ExChart
-        key={hide ? "h" : "s"}
         id={only ? "m-account-pnl" : "m-assets-accts"}
         title={only ? "Day PnL" : "Day PnL by account"}
         toolbarLeft={<span className="a-chart-t">{only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}</span>}

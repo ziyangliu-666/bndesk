@@ -21,7 +21,6 @@ import { dayTitle } from "./index";
 import {
   Amt,
   Empty,
-  MASK,
   PageTabs,
   Row,
   Sec,
@@ -30,6 +29,7 @@ import {
   useAmt,
 } from "./rest/ui";
 import "./history.css";
+import { MASK } from "../../mask";
 
 // ---- History: the desk's days (Daily | Cumulative over 7D 30D 90D All, then the list), or the instruments ----
 

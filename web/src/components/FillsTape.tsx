@@ -9,8 +9,7 @@ import type { Fill } from "../protocol";
 import { gridTheme } from "../gridTheme";
 import { fBps, fPrice, fTime, fUsd, DEFAULT_COL } from "../grid";
 import { qty } from "../format";
-import { flashOn, flexCols } from "../grid";
-import { MASK } from "../pages/desk/mask";
+import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import type { Option } from "./ex";
 
 function SideCell(p: ICellRendererParams<Fill>) {
@@ -38,7 +37,6 @@ export const MARKOUT_BASIS: Option<MarkoutBasis>[] = [
 ];
 
 const rowIdFill = (p: GetRowIdParams<Fill>) => p.data.id;
-const masked = (f: (p: { value: unknown }) => string) => (p: { value: unknown }) => (useStore.getState().hideAmounts ? MASK : f(p));
 
 export function FillsTape({ mode = "net", symbol = null }: { mode?: MarkoutBasis; symbol?: Instrument | null }) {
   const api = useRef<GridApi<Fill> | null>(null);
@@ -74,8 +72,8 @@ export function FillsTape({ mode = "net", symbol = null }: { mode?: MarkoutBasis
       },
       { field: "side", headerName: "Side", width: 78, cellRenderer: SideCell, headerTooltip: "Our side; taker fills are marked, the rest are maker" },
       n({ field: "price", headerName: "Price", width: 84, valueFormatter: fPrice }),
-      n({ field: "qty", headerName: "Qty", width: 80, valueFormatter: masked((p) => qty(p.value as number)), headerTooltip: "Base-asset units" }),
-      n({ field: "notional", headerName: "Notional", width: 76, valueFormatter: masked(fUsd as never), headerTooltip: "Price × quantity, USDT" }),
+      n({ field: "qty", headerName: "Qty", width: 80, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: maskCls(), headerTooltip: "Base-asset units" }),
+      n({ field: "notional", headerName: "Notional", width: 76, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: "Price × quantity, USDT" }),
       { field: "account", headerName: "Account", width: 70 },
       n({ field: "edge_bps", headerName: "Edge", width: 54, valueFormatter: fBps, headerTooltip: "Edge at fill: side × (fair − price) / fair, bps" }),
       mk("1"),

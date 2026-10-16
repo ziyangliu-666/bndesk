@@ -10,23 +10,23 @@ import { bps, dur, hm, hms, pct, price, qty } from "../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR } from "../theme";
 import { gridTheme } from "../gridTheme";
 import { AccountsGrid } from "../components/AccountsGrid";
-import { fPrice, fQtyS, flexCols, signCls, DEFAULT_COL } from "../grid";
+import { fPrice, fQtyS, flexCols, maskVF, signCls, DEFAULT_COL } from "../grid";
 import type { Account, HedgeLeg, Position, SymbolRow } from "../protocol";
 import { HedgeBridge } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
 import { ExChart, Tabs, useExPref, type ExSeries } from "../components/ex";
-import { Money, hideNow, masked, money, useHide, useMoney } from "./ops/money";
-import { IVS, IV_KEYS, STEP, useBucketed, useRefit } from "./ops/series";
+import { Money, amount, hideNow, pctOfMoney, useAmount, useHide } from "../mask";
+import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
 
 // ---- grid helpers: USD columns follow Hide amounts (columns rebuilt when it changes) ----
 const vv = (p: ValueFormatterParams) => p.value as number | null | undefined;
-const fMoney = (p: ValueFormatterParams) => (hideNow() ? masked(vv(p)) : money(vv(p)));
-const fSigned = (p: ValueFormatterParams) => (hideNow() ? masked(vv(p), true) : money(vv(p), true));
-const mCls = (hide: boolean) => (hide ? "num ops-masked" : "num");
-const sCls = (hide: boolean) => (hide ? () => "num ops-masked" : signCls);
+const fMoney = (p: ValueFormatterParams) => (amount(vv(p), "money", hideNow()));
+const fSigned = (p: ValueFormatterParams) => (amount(vv(p), "pnlMoney", hideNow()));
+const mCls = (hide: boolean) => (hide ? "num masked" : "num");
+const sCls = (hide: boolean) => (hide ? () => "num masked" : signCls);
 
 function SymCell(p: ICellRendererParams<{ symbol: string; venue?: string }>) {
   const d = p.data;
@@ -60,7 +60,7 @@ function Hero() {
   }, [accounts]);
   const pnlDay = summary?.pnl_day ?? t?.pnl;
   const pctDay = t && t.open > 0 && pnlDay != null ? pnlDay / t.open : null;
-  const tone = hide || pnlDay == null ? "" : pnlDay > 0 ? "up" : pnlDay < 0 ? "down" : "";
+  const tone = hide ? "masked" : pnlDay == null ? "" : pnlDay > 0 ? "up" : pnlDay < 0 ? "down" : "";
   return (
     <div className="ops-hero">
       <div className="ops-hero-main">
@@ -70,13 +70,13 @@ function Hero() {
             {hide ? <IconEyeOff size={14} /> : <IconEye size={14} />}
           </button>
         </span>
-        <span className={"ops-hero-value fig" + (hide ? " ops-masked" : "")}>{t ? (hide ? masked(t.equity) : money(t.equity)) : "--"}</span>
+        <span className={"ops-hero-value fig" + (hide ? " masked" : "")}>{t ? (amount(t.equity, "money", hide)) : "--"}</span>
       </div>
       <div className="ops-pair" title="Equity now − equity at the day start − net transfers in, and that as a share of the equity at the start">
-        <span className="ops-l">Today's PnL</span>
+        <span className="ops-l">Day PnL</span>
         <span className={"ops-v fig " + tone}>
-          {pnlDay == null ? "--" : hide ? masked(pnlDay, true) : money(pnlDay, true)}
-          {pctDay != null && <span className={"ops-unit " + tone}>({pctDay >= 0 ? "+" : "−"}{Math.abs(pctDay * 100).toFixed(2)}%)</span>}
+          {pnlDay == null ? "--" : amount(pnlDay, "pnlMoney", hide)}
+          {pctDay != null && <span className={"ops-unit " + tone}>({pctOfMoney(pctDay, hide)})</span>}
         </span>
       </div>
       <div className="ops-pairs">
@@ -102,8 +102,8 @@ function Hero() {
 }
 
 // ================================ Overview ================================
-// Each ExChart here is keyed on Hide amounts: ExChart takes a series' format when the series is created, so a
-// new chart picks up the masked one (axis, legend and tag all read •••).
+// ExChart re-reads a series' format when it prints otherwise, so Hide amounts masks the axis, legend and tag
+// without a new chart.
 
 /** Day PnL by account (one line each, plus the desk) or the desk's equity, today, on the account grid. */
 function AccountChart() {
@@ -114,14 +114,13 @@ function AccountChart() {
   const [iv, setIv] = useExPref("assets-acc", "interval", "1m", IV_KEYS);
   const [mode, setMode] = useExPref("assets-acc", "mode", "pnl", ["pnl", "equity"]);
   const pts = useBucketed();
-  const refit = useRefit(iv, mode);
   const step = STEP[iv] ?? 0;
   const desk = useMemo(() => {
     const s = series ?? [];
     return { t: s.map((p) => p.t), eq: s.map((p) => p.equity) };
   }, [series]);
-  const fmtS = (v: number) => (hide ? masked(v, true) : money(v, true));
-  const fmtU = (v: number) => (hide ? masked(v) : money(v));
+  const fmtS = (v: number) => amount(v, "pnlMoney", hide);
+  const fmtU = (v: number) => amount(v, "money", hide);
   const shown = useMemo(() => {
     const by = new Map((all ?? []).map((a) => [a.account, a]));
     return (accounts ?? [])
@@ -182,9 +181,7 @@ function AccountChart() {
   return (
     <section className="ops-panel ops-chart-panel">
       <ExChart
-        key={hide ? "masked" : "shown"}
         id="assets-acc"
-        chartRef={refit}
         title={mode === "pnl" ? "Day PnL by account" : "Equity"}
         series={lines}
         intervals={IVS}
@@ -233,18 +230,15 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
   const hide = useHide();
   const [iv, setIv] = useExPref(id, "interval", "1m", IV_KEYS);
   const pts = useBucketed();
-  const refit = useRefit(iv);
   const cols = useMemo(() => {
     const s = series ?? [];
     return { t: s.map((p) => p.t), v: s.map((p) => p[field]) };
   }, [series, field]);
-  const fmt = (v: number) => (hide ? masked(v, field === "futures_notional") : money(v, field === "futures_notional"));
+  const fmt = (v: number) => (amount(v, field === "futures_notional" ? "pnlMoney" : "money", hide));
   return (
     <section className="ops-panel ops-chart-panel">
       <ExChart
-        key={hide ? "masked" : "shown"}
         id={id}
-        chartRef={refit}
         title={title}
         series={[{ key: field, kind: field === "inventory" ? "area" : "line", label: title, color, data: pts(field, cols.t, cols.v, STEP[iv] ?? 0), format: fmt, toggle: false }]}
         intervals={IVS}
@@ -321,7 +315,7 @@ function AssetCell(p: ICellRendererParams<SpotRow>) {
 
 function SpotAccounts() {
   const accounts = useStore((s) => s.snap?.accounts);
-  const m = useMoney();
+  const m = useAmount();
   const hide = useHide();
   return (
     <section className="ops-panel">
@@ -339,13 +333,13 @@ function SpotAccounts() {
               <th title="Resting bid notional / (free quote + resting bid notional)">Bid use</th>
             </tr>
           </thead>
-          <tbody className={hide ? "ops-masked-body" : undefined}>
+          <tbody className={hide ? "masked-body" : undefined}>
             {(accounts ?? []).map((a) => (
               <tr key={a.id}>
                 <td className="l">{a.label}</td>
-                <td className={hide ? "ops-masked" : ""}>{m(a.quote_free)}</td>
-                <td className={hide ? "ops-masked" : ""}>{m(a.quote_locked)}</td>
-                <td className={hide ? "ops-masked" : ""}>{m(a.inventory_value)}</td>
+                <td className={hide ? "masked" : ""}>{m(a.quote_free)}</td>
+                <td className={hide ? "masked" : ""}>{m(a.quote_locked)}</td>
+                <td className={hide ? "masked" : ""}>{m(a.inventory_value)}</td>
                 <td>{a.role === "master" || !Number.isFinite(a.utilization) ? "--" : pct(a.utilization)}</td>
               </tr>
             ))}
@@ -363,14 +357,15 @@ function Spot() {
     const n = (c: ColDef<SpotRow>): ColDef<SpotRow> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
       { field: "asset", headerName: "Asset", width: 90, cellRenderer: AssetCell, pinned: "left" },
-      n({ field: "amount", headerName: "Amount", headerTooltip: "Held across the accounts, free + in orders", width: 100, valueFormatter: (p) => qty(p.value as number) }),
-      n({ field: "locked", headerName: "In orders", headerTooltip: "Held in resting sell orders", width: 90, valueFormatter: (p) => qty(p.value as number) }),
-      n({ field: "free", headerName: "Available", width: 90, valueFormatter: (p) => qty(p.value as number) }),
+      // sizes and balances are masked too: they give the amount away
+      n({ field: "amount", headerName: "Amount", headerTooltip: "Held across the accounts, free + in orders", width: 100, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
+      n({ field: "locked", headerName: "In orders", headerTooltip: "Held in resting sell orders", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
+      n({ field: "free", headerName: "Available", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "mid", headerName: "Price", headerTooltip: "Mid, USDT", width: 90, valueFormatter: fPrice }),
       n({ field: "avg", headerName: "Avg cost", headerTooltip: "Average cost of what is held, USDT", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : price(p.value as number)) }),
       n({ field: "value", headerName: "Value (USDT)", headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), initialSort: "desc" }),
       n({ field: "upnl", headerName: "uPnL", headerTooltip: "Value − amount × avg cost, USDT", width: 84, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
-      n({ field: "today", headerName: "Today", headerTooltip: "Today's trading P&L on the market (Π: realized + float), USDT", width: 84, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
+      n({ field: "today", headerName: "Trading PnL", headerTooltip: "Today, USDT: market making + inventory PnL (realized + float), fees included", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
     ]);
   }, [hide]);
   const pinned = useMemo(() => [usdt], [usdt]);
@@ -416,7 +411,7 @@ const openPos = (e: RowClickedEvent<PosRow>) => e.data && selectInstrument({ sym
 function FuturesAccounts() {
   const accounts = useStore((s) => s.snap?.accounts);
   const hide = useHide();
-  const m = useMoney();
+  const m = useAmount();
   const fut = (accounts ?? []).filter((a) => a.fut_wallet || a.positions.length);
   return (
     <section className="ops-panel">
@@ -441,11 +436,11 @@ function FuturesAccounts() {
               {fut.map((a) => (
                 <tr key={a.id}>
                   <td className="l">{a.label}</td>
-                  <td className={hide ? "ops-masked" : ""}>{m(a.fut_wallet)}</td>
+                  <td className={hide ? "masked" : ""}>{m(a.fut_wallet)}</td>
                   <td>
                     <Money v={a.fut_upnl} sign />
                   </td>
-                  <td className={hide ? "ops-masked" : ""}>{m(a.fut_available)}</td>
+                  <td className={hide ? "masked" : ""}>{m(a.fut_available)}</td>
                   <td>{a.positions.length}</td>
                 </tr>
               ))}
@@ -468,15 +463,15 @@ function Futures() {
     const n = (c: ColDef<PosRow>): ColDef<PosRow> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
       { field: "symbol", headerName: "Symbol", headerTooltip: "USD-M perpetual", width: 120, cellRenderer: SymCell },
-      n({ field: "amt", headerName: "Size", headerTooltip: "Position size, base asset; negative = short", width: 96, valueFormatter: fQtyS, cellClass: signCls }),
+      n({ field: "amt", headerName: "Size", headerTooltip: "Position size, base asset; negative = short", width: 96, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "notional", headerName: "Notional", headerTooltip: "Size × mark, USDT", width: 96, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({ field: "entry", headerName: "Entry price", headerTooltip: "Average entry price, USDT", width: 96, valueFormatter: fPrice }),
       n({ field: "mark", headerName: "Mark price", headerTooltip: "Mark price, USDT", width: 96, valueFormatter: fPrice }),
       n({ field: "upnl", headerName: "uPnL", headerTooltip: "Unrealized PnL at mark against the entry price, USDT. Not today's result: see Today", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({
         field: "pnl_day",
-        headerName: "Today",
-        headerTooltip: "Today's P&L on the symbol: the position held at the day start and today's fills marked to mark now, minus fees, plus funding, USDT",
+        headerName: "Trading PnL",
+        headerTooltip: "Today, USDT: the position held at the day start and today's fills marked to mark now, minus fees, plus funding (the hedge leg)",
         width: 90,
         valueFormatter: fSigned,
         cellClass: sCls(hide),
@@ -519,7 +514,7 @@ function ExposureTable() {
   const x = useStore((s) => s.snap?.exposure);
   const tz = useStore((s) => s.tz);
   const hide = useHide();
-  const mc = hide ? "ops-masked" : "";
+  const mc = hide ? "masked" : "";
   if (!x)
     return (
       <section className="ops-panel">
@@ -549,7 +544,7 @@ function ExposureTable() {
                   (x.beta_source === "estimate" ? "β: the desk's own estimate, may differ from the engine's." : "β: configured per market.")
                 }
               >
-                Target <b className={mc}>{hide ? masked(x.target, true) : money(x.target, true)}</b> · Band <b className={mc}>±{hide ? masked(x.band) : money(x.band)}</b>
+                Target <b className={mc}>{amount(x.target, "pnlMoney", hide)}</b> · Band <b className={mc}>±{amount(x.band, "money", hide)}</b>
               </span>
             )}
           </span>
@@ -691,12 +686,12 @@ function HedgePanel() {
     const n = (c: ColDef<HedgeLeg>): ColDef<HedgeLeg> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
       { field: "symbol", headerName: "Leg", headerTooltip: "Futures hedge leg", width: 104, cellRenderer: LegCell },
-      n({ field: "qty0", headerName: "Start", headerTooltip: "Position at the day start, base asset", width: 76, valueFormatter: fQtyS, cellClass: signCls }),
-      n({ field: "qty", headerName: "Now", headerTooltip: "Position now, base asset", width: 76, valueFormatter: fQtyS, cellClass: signCls }),
+      n({ field: "qty0", headerName: "Start", headerTooltip: "Position at the day start, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
+      n({ field: "qty", headerName: "Now", headerTooltip: "Position now, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "fills", headerName: "Fills", headerTooltip: "Futures fills today", width: 52 }),
       n({ field: "mark", headerName: "Mark", headerTooltip: "Mark price now, USDT", width: 84, valueFormatter: fPrice }),
       n({ colId: "fees", headerName: "Fees", headerTooltip: "Fees today, a cost, USDT", width: 64, valueGetter: (p) => (p.data ? -p.data.fees : null), valueFormatter: fSigned, cellClass: sCls(hide) }),
-      n({ field: "pnl", headerName: "Today", headerTooltip: "Price P&L at mark − fees + funding, USDT", width: 76, valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "pnl", headerName: "Trading PnL", headerTooltip: "Today: price P&L at mark − fees + funding, USDT", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
     ]);
   }, [hide]);
   const offset = h && inv != null && h.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -h.hedge_pnl / inv : null;
@@ -744,13 +739,12 @@ function ExposureChart() {
   const hide = useHide();
   const [iv, setIv] = useExPref("assets-exp", "interval", "1m", IV_KEYS);
   const pts = useBucketed();
-  const refit = useRefit(iv);
   const step = STEP[iv] ?? 0;
   const cols = useMemo(() => {
     const s = series ?? [];
     return { t: s.map((p) => p.t), inv: s.map((p) => p.inventory), fut: s.map((p) => p.futures_notional), net: s.map((p) => p.inventory + p.futures_notional) };
   }, [series]);
-  const fmt = (v: number) => (hide ? masked(v, true) : money(v, true));
+  const fmt = (v: number) => amount(v, "pnlMoney", hide);
   const lines: ExSeries[] = [
     { key: "inv", kind: "line", label: "Spot inventory", color: INV_COLOR, data: pts("inv", cols.t, cols.inv, step), format: fmt },
     { key: "fut", kind: "line", label: "Futures notional", color: FUT_COLOR, data: pts("fut", cols.t, cols.fut, step), format: fmt },
@@ -759,9 +753,7 @@ function ExposureChart() {
   return (
     <section className="ops-panel ops-chart-panel">
       <ExChart
-        key={hide ? "masked" : "shown"}
         id="assets-exp"
-        chartRef={refit}
         title="Exposure"
         series={lines}
         intervals={IVS}

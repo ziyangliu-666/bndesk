@@ -1,5 +1,6 @@
 // The alert rules' names and meanings: the alert pages and the top bar's title read them.
 import type { Alert } from "../../protocol";
+import { MASK } from "../../mask";
 import { span } from "../../components/mobile/figures";
 
 /** A rule in a few words, and what it means (DESIGN.md, "Alerts"). */
@@ -99,7 +100,7 @@ export function alertText(a: Pick<Alert, "rule" | "text">, hide: boolean): strin
   if (hide && MONEY_RULES.has(a.rule)) {
     // a list's " +3" (names not shown) is a count
     const more = / \+\d+$/.exec(t)?.[0] ?? "";
-    t = t.slice(0, t.length - more.length).replace(AMOUNT, (_m, pre: string, sign: string) => pre + sign + "•••") + more;
+    t = t.slice(0, t.length - more.length).replace(AMOUNT, (_m, pre: string) => pre + MASK) + more;
   }
   return t;
 }

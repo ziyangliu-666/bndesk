@@ -20,7 +20,9 @@ import {
   useMoney,
 } from "../../components/mobile";
 import { Dot } from "../../components/ui";
-import { bps, hms, int, num, price, qty } from "../../format";
+import { bps, hms, int, num, price } from "../../format";
+import { useQty } from "../../mask";
+import { instPnl as instPnlOf } from "../../selectors";
 import { usePageVisible } from "../../hooks";
 import type { Account, Alert, Engine, Feed, Fill, Markouts, Position, SymbolRow } from "../../protocol";
 import { useStore } from "../../store";
@@ -98,8 +100,8 @@ export const PART_INFO: Record<PartKey, string> = {
 
 // ---- instruments and fills (Desk, Instruments, Instrument) ----
 
-/** An instrument's spot PnL today: market making plus inventory. */
-export const instPnl = (r: SymbolRow) => r.mm_pnl + r.inv_pnl;
+/** An instrument's spot PnL today: market making plus inventory (selectors.instPnl). */
+const instPnl = (r: SymbolRow) => instPnlOf(r, null);
 
 /** "BTCUSDT perp", with "dust" when the balance is below the minimum notional. */
 export function InstName({ r }: { r: Pick<SymbolRow, "symbol" | "venue" | "dust"> }) {
@@ -124,10 +126,7 @@ export function Bps({ v, unit = true }: { v: number | null | undefined; unit?: b
 }
 
 /** A quantity, or ••• with Hide amounts on: a size gives the amount away even where the price does not. */
-export function useQty(): (v: number | null | undefined, sign?: boolean) => string {
-  const hide = useStore((s) => s.hideAmounts);
-  return (v, sign) => (hide && v != null ? "•••" : qty(v, sign));
-}
+export { useQty };
 
 /** An account's label for its id (the id itself while the account is unknown). */
 export function useAccountLabel(id: string): string {
@@ -463,7 +462,7 @@ export function PositionsTable({ rows, showAccount }: { rows: PosRow[]; showAcco
 
 /** Microseconds as "11.4 µs" or "7.90 ms". */
 export function us(v: number | null): string {
-  if (v == null) return "—";
+  if (v == null) return "--";
   if (v >= 1000) return num(v / 1000, 2) + " ms";
   return num(v, 1) + " µs";
 }

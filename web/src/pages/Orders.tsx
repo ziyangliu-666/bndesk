@@ -13,7 +13,7 @@ import { fBps, fPrice, DEFAULT_COL } from "../grid";
 import { QuoteControls, QuoteLegend, QuoteMapEC, useQuoteMapState } from "../components/quotes";
 import { TextToggle } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
-import { hideNow, masked, money, useHide, useMoney } from "./ops/money";
+import { amount, hideNow, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
 
 const short = (s: string) => s.replace(/USDT$/, "");
@@ -23,7 +23,7 @@ const tradingAccounts = (accounts: Account[]) => accounts.filter((a) => a.role !
  *  10 s and per day against Binance's limits, bid use) and the resting notional on each side. Bars are neutral and
  *  turn amber, then red, only near a limit. */
 function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrder[] }) {
-  const m = useMoney();
+  const m = useAmount();
   const hide = useHide();
   const rows = accounts.map((a) => {
     let bid = 0;
@@ -75,12 +75,12 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               </div>
               <div title={`${nb} resting bids, USDT`}>
                 <span className="ops-l">Bids {nb}</span>
-                <span className={"ops-v-side up" + (hide ? " ops-masked" : "")}>{m(bid)}</span>
+                <span className={"ops-v-side up" + (hide ? " masked" : "")}>{m(bid)}</span>
                 <LimitBar value={bid} limit={scale} empty={hide} neutral />
               </div>
               <div title={`${na} resting asks, USDT`}>
                 <span className="ops-l">Asks {na}</span>
-                <span className={"ops-v-side down" + (hide ? " ops-masked" : "")}>{m(ask)}</span>
+                <span className={"ops-v-side down" + (hide ? " masked" : "")}>{m(ask)}</span>
                 <LimitBar value={ask} limit={scale} empty={hide} neutral />
               </div>
             </div>
@@ -147,8 +147,8 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
         width: 68,
         minWidth: 62,
         flex: 68,
-        valueFormatter: (p) => (hideNow() ? masked(p.value as number) : money(p.value as number)),
-        cellClass: hide ? "num ops-masked" : "num",
+        valueFormatter: (p) => (amount(p.value as number, "money", hideNow())),
+        cellClass: hide ? "num masked" : "num",
       }),
       n({
         field: "dist_bps",

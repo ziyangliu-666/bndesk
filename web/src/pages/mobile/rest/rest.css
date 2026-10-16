@@ -4,9 +4,6 @@
 .r-fig {
   font-variant-numeric: tabular-nums;
 }
-.r-masked {
-  color: var(--muted);
-}
 .crit-text {
   color: var(--crit);
 }
@@ -335,8 +332,8 @@ button.r-stat-l::after {
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
-.r-big-v.r-masked,
-.r-big-v .r-masked {
+.r-big-v.masked,
+.r-big-v .masked {
   font-size: 22px;
 }
 .r-big-s {
@@ -381,9 +378,6 @@ button.r-stat-l::after {
 }
 .r-chart .ex-chart {
   background: var(--ground);
-}
-.r-chart .ex-chart.touch .ex-chip {
-  height: 36px;
 }
 /* the chip row runs past the edge: it fades there, so the chips out of view read as more to scroll to */
 .r-chart .ex-chips {

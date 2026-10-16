@@ -22,6 +22,7 @@ import {
 import { C, S1, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
 import type { Fill, Venue } from "../../../protocol";
+import { maskText } from "../../../mask";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -85,16 +86,17 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   ];
   const tag = { labelTextColor: C.ground };
   const lines: ExPriceLine[] = [];
-  if (bid) lines.push({ series: "k", key: "quotes", price: bid.price, color: rgba(C.up, 0.75), title: "Bid", labelColor: C.up, ...tag });
-  if (ask) lines.push({ series: "k", key: "quotes", price: ask.price, color: rgba(C.down, 0.75), title: "Ask", labelColor: C.down, ...tag });
+  // labelled on the axis only: a title inside the plot covers the last candles (the legend names them)
+  if (bid) lines.push({ series: "k", key: "quotes", price: bid.price, color: rgba(C.up, 0.75), labelColor: C.up, ...tag });
+  if (ask) lines.push({ series: "k", key: "quotes", price: ask.price, color: rgba(C.down, 0.75), labelColor: C.down, ...tag });
   if (fair != null) lines.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.8), style: "dotted", axisLabel: false });
-  if (avg != null) lines.push({ series: "k", key: "avg", price: avg, color: C.muted, title: avgWord, style: "large", labelColor: C.raised, labelTextColor: C.ink });
+  if (avg != null) lines.push({ series: "k", key: "avg", price: avg, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink });
 
   // our traded notional in a bar, for the volume pane's legend
   const oursIn = (t: number) => {
     const f = byBar.get(t);
     if (!f) return "0";
-    return hide ? "•••" : compact((f.buyVwap ?? 0) * f.buyQty + (f.sellVwap ?? 0) * f.sellQty);
+    return maskText(hide, compact((f.buyVwap ?? 0) * f.buyQty + (f.sellVwap ?? 0) * f.sellQty));
   };
 
   return (

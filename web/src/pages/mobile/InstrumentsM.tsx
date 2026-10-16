@@ -6,7 +6,8 @@ import { int, price } from "../../format";
 import { Money, Segmented, tone, useHold, useLive, useMoney } from "../../components/mobile";
 import { Tabs, useTicker24h, useTickers24h, tickerKey, type Ticker24h } from "../../components/ex";
 import type { SymbolRow, Venue } from "../../protocol";
-import { instPnl } from "./shared";
+import { instPnl, legPnl } from "../../selectors";
+import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
@@ -56,11 +57,15 @@ function MarketList() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
-  // a perp's PnL is its hedge leg's today
+  // each instrument's Trading PnL as every page has it (a perp's is its hedge leg's today)
   const pnlOf = useMemo(() => {
-    const leg = new Map((legs ?? []).map((l) => [l.symbol, l.pnl]));
-    return (r: SymbolRow) => (r.venue === "usdm" ? (leg.get(r.symbol) ?? r.upnl ?? 0) : instPnl(r));
+    const leg = legPnl(legs);
+    return (r: SymbolRow) => instPnl(r, leg);
   }, [legs]);
+  // with Hide amounts on, a list ordered by a hidden figure would give its ranking away: by name instead
+  const hide = useHide();
+  const sortHidden = hide && (sort.key === "pnl" || sort.key === "inv");
+  const eff: Sort = sortHidden ? { key: "name", desc: false } : sort;
   const all = rows ?? [];
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: 0, held: 0, quoted: 0, perp: 0 };
@@ -73,10 +78,10 @@ function MarketList() {
     [all, filter, needle],
   );
   // the 24 h change is read for the whole list only while it orders the list (each row reads its own)
-  const tick = useTickers24h(sort.key === "chg" ? shown : NO_ROWS);
+  const tick = useTickers24h(eff.key === "chg" ? shown : NO_ROWS);
   const list = useMemo(() => {
     const val = (r: SymbolRow): number | string | null => {
-      switch (sort.key) {
+      switch (eff.key) {
         case "name":
           return r.symbol;
         case "fills":
@@ -89,7 +94,7 @@ function MarketList() {
           return Math.abs(r.inv_value);
       }
     };
-    const dir = sort.desc ? -1 : 1;
+    const dir = eff.desc ? -1 : 1;
     return shown.slice().sort((a, b) => {
       const x = val(a);
       const y = val(b);
@@ -97,7 +102,8 @@ function MarketList() {
       if (typeof x === "string") return dir * x.localeCompare(y as string);
       return dir * (x - (y as number));
     });
-  }, [shown, sort, tick, pnlOf]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, eff.key, eff.desc, tick, pnlOf]);
 
   // each header cell steps through its figures: Name / Fills, Mid / 24h (both ways), Day PnL (both ways) / Inv
   const tapLeft = () => setSort(sort.key === "fills" ? { key: "name", desc: false } : { key: "fills", desc: true });
@@ -106,11 +112,11 @@ function MarketList() {
     setSort(
       sort.key === "pnl" ? (sort.desc ? { key: "pnl", desc: false } : { key: "inv", desc: true }) : { key: "pnl", desc: true },
     );
-  const arrow = sort.desc ? "↓" : "↑";
+  const arrow = eff.desc ? "↓" : "↑";
   const word = (k: Key, text: string) => (
-    <span className={sort.key === k ? "on" : ""}>
+    <span className={eff.key === k ? "on" : ""}>
       {text}
-      {sort.key === k && <i>{arrow}</i>}
+      {eff.key === k && <i>{arrow}</i>}
     </span>
   );
 
@@ -157,7 +163,7 @@ function MarketList() {
             Mid / {word("chg", "24h")}
           </UnstyledButton>
           <UnstyledButton className="mk-h-r" onClick={tapRight}>
-            {word("pnl", "Day PnL")} / {word("inv", "Inv")}
+            {word("pnl", "Trading PnL")} / {word("inv", "Inv")}
           </UnstyledButton>
         </div>
       </div>

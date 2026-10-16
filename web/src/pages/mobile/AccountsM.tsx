@@ -5,7 +5,8 @@ import { bps, hms, int, num, pct, price } from "../../format";
 import { showInfo, span, useLive } from "../../components/mobile";
 import type { Account, Exposure } from "../../protocol";
 import { TIP, bandDef, useQty } from "./shared";
-import { Amt, Big, Empty, PageTabs, Row, Sec, Stats, limitCls, pctSigned, useAmt } from "./rest/ui";
+import { Amt, Big, Empty, PageTabs, Row, Sec, Stats, limitCls, useAmt } from "./rest/ui";
+import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
@@ -22,6 +23,7 @@ export function AccountsM() {
   const accounts = useLive((s) => s.snap?.accounts, 250);
   const [tab, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
   const money = useAmt();
+  const hide = useHide();
   const open = sm ? sm.equity - sm.pnl_day : null;
   const nPos = (accounts ?? []).reduce((n, a) => n + a.positions.length, 0);
 
@@ -37,9 +39,9 @@ export function AccountsM() {
         value={money(sm?.equity, "full")}
         sub={
           <button type="button" className="a-today" onClick={() => navigate({ page: "history" })}>
-            Today's PnL <Amt v={sm?.pnl_day} />
-            <span className={"r-fig " + (sm && open ? (sm.pnl_day > 0 ? "up" : sm.pnl_day < 0 ? "down" : "") : "")}>
-              ({sm && open ? pctSigned(sm.pnl_day / open) : "--"})
+            Day PnL <Amt v={sm?.pnl_day} />
+            <span className={"fig " + (hide ? "masked" : sm && open ? (sm.pnl_day > 0 ? "up" : sm.pnl_day < 0 ? "down" : "") : "")}>
+              ({sm && open ? pctOfMoney(sm.pnl_day / open, hide) : "--"})
             </span>
           </button>
         }

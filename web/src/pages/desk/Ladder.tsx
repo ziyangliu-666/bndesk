@@ -6,7 +6,7 @@ import { useElementSize } from "@mantine/hooks";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { bps, price, qty } from "../../format";
 import type { OpenOrder, SymbolRow } from "../../protocol";
-import { MASK, dd, useHide } from "./mask";
+import { maskNode, qtyText, useHide } from "../../mask";
 
 interface Level {
   price: number;
@@ -113,7 +113,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
         key={l.side + (l.grid ? "g" : "") + l.price}
         className={"dk-lad-row" + (l.qty > 0 ? " ours" : "") + (l.best ? " best" : "") + (l.through ? " through" : "") + (l.grid ? " grid" : "")}
         title={
-          (l.qty > 0 ? `Ours: ${qty(l.qty)} ${base} (${l.accounts.join(", ")})` : "") +
+          (l.qty > 0 ? `Ours: ${qtyText(l.qty, hide)} ${base} (${l.accounts.join(", ")})` : "") +
           (l.best ? (l.qty > 0 ? "; " : "") + `market best ${l.side === "buy" ? "bid" : "ask"}` : "") +
           (l.through ? "; through fair" : "") +
           (l.grid ? `Fair ${l.side === "buy" ? "−" : "+"}${bps(Math.abs(d ?? 0), false)} bps` : "")
@@ -125,7 +125,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
           {l.qty > 0 ? (
             <>
               <span className="dk-lad-acct">{l.accounts.length > 1 ? `${l.accounts.length} accts` : l.accounts[0]}</span>
-              {hide ? MASK : qty(l.qty)}
+              {maskNode(hide, qty(l.qty))}
             </>
           ) : l.best ? (
             <span className="dk-lad-mkt">best {l.side === "buy" ? "bid" : "ask"}</span>
@@ -158,12 +158,12 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
       </div>
       <div className="dk-lad-mid">
         <span className={"dk-lad-mid-px fig " + dir}>
-          {dd(price(mid))}
+          {price(mid)}
           {dir === "up" ? " ↑" : dir === "down" ? " ↓" : ""}
         </span>
         <span className="dk-lad-mid-sub">
           <span>
-            Fair <b className="fig">{dd(price(fair))}</b>
+            Fair <b className="fig">{price(fair)}</b>
           </span>
           <span title="Mid against fair">
             Mid {mid != null && fair ? `${bps(((mid - fair) / fair) * 1e4)} bps` : "--"}
@@ -178,7 +178,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
           Ours <span className="up">{nb} bids</span> · <span className="down">{na} asks</span>
         </span>
         <span title="Best own bid and ask, distance from fair">
-          Best {dd(bps(dist(bestBid), false))} / {dd(bps(dist(bestAsk), false))} bps
+          Best {bps(dist(bestBid), false)} / {bps(dist(bestAsk), false)} bps
         </span>
       </div>
       {!inst && <div className="dk-empty dk-lad-none">No quoted instrument</div>}

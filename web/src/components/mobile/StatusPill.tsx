@@ -94,7 +94,7 @@ function StatusSheet({ opened, onClose }: { opened: boolean; onClose: () => void
         <KV
           items={[
             { label: "Clock", value: `${hms(now, tz)} ${tzName}` },
-            { label: "Last update", value: lastMsg ? `${span(age ?? 0)} ago` : "—", tone: state === "stale" ? "crit" : state === "lag" ? "warn" : undefined },
+            { label: "Last update", value: lastMsg ? `${span(age ?? 0)} ago` : "--", tone: state === "stale" ? "crit" : state === "lag" ? "warn" : undefined },
             // one session line: "Americas · closes in 1 h 7 min", the event's clock time beside it
             {
               label: "Session",
@@ -105,7 +105,7 @@ function StatusSheet({ opened, onClose }: { opened: boolean; onClose: () => void
                   {span(sess.next_event_at! - now)} <span className="muted">· {hm(sess.next_event_at!, tz)} {tzName}</span>
                 </>
               ) : (
-                "—"
+                "--"
               ),
             },
           ]}

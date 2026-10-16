@@ -82,7 +82,7 @@ export function StateTag({ state }: { state: string }) {
   return (
     <span className={"state " + (ok ? "ok" : na ? "na" : warn ? "warn" : "bad")}>
       {!na && <Dot ok={ok} warn={warn} />}
-      {na ? "n/a" : state}
+      {na ? "--" : state}
     </span>
   );
 }

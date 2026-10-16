@@ -9,6 +9,7 @@ import { useFreshness, type Fresh } from "../mobile/StatusPill";
 import type { Venue } from "../../protocol";
 import { TvAttribution } from "./controls";
 import { useDayPnlList } from "../../selectors";
+import { maskText, useHide } from "../../mask";
 import "./ex.css";
 
 const CONN: Record<Fresh, [string, string]> = {
@@ -105,6 +106,7 @@ function TzToggle() {
 
 const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol: string, venue: Venue) => void }) {
   const items = useDayPnlList(24);
+  const hide = useHide();
   if (!items.length) return <span className="ex-marq" />;
   const row = (copy: boolean) => items.map((r) => (
     <button
@@ -113,18 +115,21 @@ const Marquee = memo(function Marquee({ onInstrument }: { onInstrument?: (symbol
       tabIndex={copy ? -1 : undefined}
       className="ex-marq-it"
       onClick={onInstrument ? () => onInstrument(r.symbol, r.venue) : undefined}
-      title={`${r.symbol}${r.venue === "usdm" ? " perp" : ""}: trading P&L today`}
+      title={`${r.symbol}${r.venue === "usdm" ? " perp" : ""}: Trading PnL today, USDT`}
     >
       <span className="ex-ink">
         {r.symbol}
         {r.venue === "usdm" ? " perp" : ""}
       </span>{" "}
-      <span className={"fig " + (r.pnl > 0.005 ? "up" : r.pnl < -0.005 ? "down" : "")}>{pnl(r.pnl)}</span>
+      <span className={"fig " + (hide ? "masked" : r.pnl > 0.005 ? "up" : r.pnl < -0.005 ? "down" : "")}>{maskText(hide, pnl(r.pnl))}</span>
     </button>
   ));
   // two copies scroll by half their width, so the loop has no seam
   return (
     <div className="ex-marq">
+      <span className="ex-marq-l" title="Each instrument's Trading PnL today, USDT">
+        Trading PnL
+      </span>
       <div className="ex-marq-in" style={{ animationDuration: `${Math.max(30, items.length * 5)}s` }}>
         {row(false)}
         <span aria-hidden="true" className="ex-marq-copy">

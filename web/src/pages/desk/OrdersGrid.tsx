@@ -1,17 +1,15 @@
 // The Desk's Open orders tab: every resting order of ours, in an exchange's column order (Time, Symbol, Side,
 // Price, Amount, Notional, Dist(bps), Account). A click picks the instrument; `symbol` keeps one instrument's.
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GetRowIdParams, GridApi, ICellRendererParams, RowClickedEvent } from "ag-grid-community";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import type { OpenOrder } from "../../protocol";
 import { gridTheme } from "../../gridTheme";
-import { fBpsU, fPrice, fTime, fUsd, DEFAULT_COL, flexCols } from "../../grid";
+import { fBpsU, fPrice, fTime, fUsd, DEFAULT_COL, flexCols, maskCls, maskVF } from "../../grid";
 import { qty } from "../../format";
-import { MASK } from "./mask";
 
 const rowId = (p: GetRowIdParams<OpenOrder>) => p.data.id;
-const masked = (f: (p: { value: unknown }) => string) => (p: { value: unknown }) => (useStore.getState().hideAmounts ? MASK : f(p));
 
 function cols(): ColDef<OpenOrder>[] {
   const n = (c: ColDef<OpenOrder>): ColDef<OpenOrder> => ({ type: "rightAligned", cellClass: "num", ...c });
@@ -36,8 +34,8 @@ function cols(): ColDef<OpenOrder>[] {
       cellRenderer: (p: ICellRendererParams<OpenOrder>) => (p.data ? <span className={p.data.side === "buy" ? "up" : "down"}>{p.data.side === "buy" ? "Buy" : "Sell"}</span> : null),
     },
     n({ field: "price", headerName: "Price", width: 90, valueFormatter: fPrice }),
-    n({ field: "qty", headerName: "Amount", width: 90, valueFormatter: masked((p) => qty(p.value as number)), headerTooltip: "Base-asset units" }),
-    n({ field: "notional", headerName: "Notional", width: 84, valueFormatter: masked(fUsd as never), headerTooltip: "Price × amount, USDT" }),
+    n({ field: "qty", headerName: "Amount", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: maskCls(), headerTooltip: "Base-asset units" }),
+    n({ field: "notional", headerName: "Notional", width: 84, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: "Price × amount, USDT" }),
     n({
       field: "dist_bps",
       headerName: "Dist(bps)",
@@ -56,10 +54,8 @@ export function OrdersGrid({ symbol = null }: { symbol?: Instrument | null }) {
   const hide = useStore((s) => s.hideAmounts);
   const api = useRef<GridApi<OpenOrder> | null>(null);
   const rows = useMemo(() => (symbol ? (all ?? []).filter((o) => o.symbol === symbol.symbol && o.venue === symbol.venue) : (all ?? [])), [all, symbol]);
-  const c = useMemo(() => flexCols(cols()), []);
-  useEffect(() => {
-    api.current?.refreshCells({ force: true, columns: ["qty", "notional"] });
-  }, [hide]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const c = useMemo(() => flexCols(cols()), [hide]);
   return (
     <AgGridReact<OpenOrder>
       theme={gridTheme}

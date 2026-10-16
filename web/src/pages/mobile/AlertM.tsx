@@ -436,7 +436,7 @@ function InstrumentsEv({ a, snap, dust }: { a: Alert; snap: Snapshot; dust: bool
                 <Money v={s?.inv_value} kind="short" />
               ) : (
                 <span className="m-fig">
-                  {s?.spread_bps != null ? num(s.spread_bps, 1) : "—"}
+                  {s?.spread_bps != null ? num(s.spread_bps, 1) : "--"}
                   <span className="m-unit">bps spread</span>
                 </span>
               )
@@ -552,7 +552,7 @@ function MarkoutEv() {
   if (!sm) return null;
   const i10 = mk?.horizons.indexOf(10) ?? -1;
   const day = i10 >= 0 ? mk!.all[i10] : null;
-  const f = (v: number | null | undefined) => (v == null ? "—" : `${bps(v)} bps`);
+  const f = (v: number | null | undefined) => (v == null ? "--" : `${bps(v)} bps`);
   const hour = sm.markout_net_bps_1h;
   // one figure when the hour and the day read the same
   const same = f(hour) === f(day);

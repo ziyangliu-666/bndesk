@@ -1,7 +1,8 @@
 import { memo, useCallback, type ReactNode } from "react";
 import { useElementSize } from "@mantine/hooks";
 import { useStore } from "../../store";
-import { DASH, MINUS, int, pnl, usd, usdShort } from "../../format";
+import { DASH, int } from "../../format";
+import { MASK, Money as AmountSpan, signTone, useAmount } from "../../mask";
 import { DefinedLabel, InfoLabel, defineProps } from "./Info";
 
 // ---- durations: one way to write a span of time on every phone page ----
@@ -18,87 +19,27 @@ export function span(ms: number | null | undefined): string {
   return h % 24 ? `${Math.floor(h / 24)} d ${h % 24} h` : `${Math.floor(h / 24)} d`;
 }
 
-// ---- money: USD figures that "Hide amounts" masks; bps, percentages and counts are never masked ----
+// ---- money: USD figures that "Hide amounts" masks (the rules and the formats are in src/mask.tsx) ----
 
-/** pnl: signed USD (+1,234.56); usd: unsigned; short: four significant figures (95.0K); pnlShort: signed short;
- *  full: the whole figure, never abbreviated (balances: 45,370.12). Suffixes are upper case. */
+/** pnl: signed USD (+1,234.56, K from 10K); usd: unsigned; short: four significant figures (95.0K); pnlShort:
+ *  signed short; full: the whole figure, never abbreviated (balances: 45,370.12). */
 export type MoneyKind = "pnl" | "usd" | "short" | "pnlShort" | "full";
-
-const MASK = "•••";
-
-/** True when a printed figure reads as zero ("0.00", "−0.0", "0"): no digit 1–9 in it. */
-const readsZero = (text: string) => !/[1-9]/.test(text);
 
 /**
  * The phone's sign colour for a figure as printed: "up", "down", or "" when it is missing or prints as zero
  * ("0.00", "0.0 bps" stay neutral and unsigned). Pass the printed text when the format rounds.
- * The desktop keeps signClass.
  */
-export function tone(v: number | null | undefined, text?: string): "" | "up" | "down" {
-  if (v == null || !Number.isFinite(v) || v === 0) return "";
-  if (text != null && readsZero(text)) return "";
-  return v > 0 ? "up" : "down";
-}
+export const tone = signTone;
 
-const FULL = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-/** Exchange style: the K / M suffixes upper case (9.50K, 1.20M), never a lower-case m that reads as minutes. */
-const upper = (s: string) => s.replace(/([0-9])([km])$/, (_, d: string, u: string) => d + u.toUpperCase());
-
-function fmtMoney(v: number | null | undefined, kind: MoneyKind, hide: boolean): string {
-  if (v == null || !Number.isFinite(v)) return DASH;
-  const signedKind = kind === "pnl" || kind === "pnlShort";
-  if (kind === "full") {
-    const s = FULL.format(Math.abs(v));
-    if (readsZero(s)) return hide ? MASK : s;
-    return hide ? (v < 0 ? MINUS : "") + MASK : (v < 0 ? MINUS : "") + s;
-  }
-  const short = upper(kind === "short" || kind === "pnlShort" ? usdShort(v) : usd(v));
-  // a figure that rounds to zero is plain zero: no sign, masked or not
-  if (readsZero(short)) return hide ? MASK : kind === "short" || kind === "pnlShort" ? "0.00" : short;
-  if (hide) return (v < 0 ? MINUS : signedKind && v > 0 ? "+" : "") + MASK;
-  switch (kind) {
-    case "pnl":
-      return upper(pnl(v));
-    case "usd":
-    case "short":
-      return short;
-    case "pnlShort":
-      return v > 0 ? "+" + short : short;
-  }
-}
-
-/** A formatter that follows the Hide amounts setting, for figures inside strings: `money(v, "short")`. */
+/** `useAmount` with the phone's default kind, signed USD: `money(v)`, `money(v, "short")`. */
 export function useMoney(): (v: number | null | undefined, kind?: MoneyKind) => string {
-  const hide = useStore((s) => s.hideAmounts);
-  return useCallback((v, kind = "pnl") => fmtMoney(v, kind, hide), [hide]);
+  const a = useAmount();
+  return useCallback((v, kind = "pnl") => a(v, kind), [a]);
 }
 
-/** A USD figure. Signed kinds take the sign's color unless `color` is false; `unit` adds a small "USDT". Memoized:
- *  a page re-rendering redraws only the figures whose value changed. */
-export const Money = memo(function Money({
-  v,
-  kind = "pnl",
-  color,
-  unit,
-  className,
-}: {
-  v: number | null | undefined;
-  kind?: MoneyKind;
-  color?: boolean;
-  unit?: string;
-  className?: string;
-}) {
-  const hide = useStore((s) => s.hideAmounts);
-  const tint = color ?? (kind === "pnl" || kind === "pnlShort");
-  const text = fmtMoney(v, kind, hide);
-  // masked: muted, so "•••" never reads as a figure (or a loader)
-  const cls = ["m-fig", tint && !hide ? tone(v, text) : "", hide ? "m-masked" : "", className ?? ""].filter(Boolean).join(" ");
-  return (
-    <span className={cls}>
-      {text}
-      {unit && <span className="m-unit">{unit}</span>}
-    </span>
-  );
+/** mask.tsx's Money with the phone's default kind (signed USD, coloured by sign). */
+export const Money = memo(function Money(props: { v: number | null | undefined; kind?: MoneyKind; color?: boolean; unit?: string; className?: string }) {
+  return <AmountSpan {...props} kind={props.kind ?? "pnl"} />;
 });
 
 // ---- hero: the one big figure of a screen ----
@@ -143,7 +84,7 @@ export function Hero({
       <div className="m-hero-line">
         {value == null && hide ? (
           // masked: "•••" at body size and muted, as every masked figure
-          <span className="m-hero-value m-hero-hidden m-masked">{MASK}</span>
+          <span className="m-hero-value m-hero-hidden masked">{MASK}</span>
         ) : (
           <span className={"m-hero-value m-fig " + (tone ?? "")}>
             {value ?? <Money v={v} kind={kind} color={tone == null && kind === "pnl"} />}

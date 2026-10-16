@@ -5,7 +5,8 @@ import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl, usd } from "../../format";
 import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
-import { MASK, dd, useHide } from "./mask";
+import { maskNode, useHide } from "../../mask";
+import { useInstPnl } from "../../selectors";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -16,6 +17,7 @@ const quoted = (r: SymbolRow) => r.open_bids + r.open_asks > 0;
 export function Instruments({ sel }: { sel: Instrument | null }) {
   const rows = useStore((s) => s.snap?.symbols);
   const hide = useHide();
+  const pnlOf = useInstPnl();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ k: SortKey; desc: boolean }>({ k: "value", desc: true });
@@ -27,13 +29,13 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         (!qq || r.symbol.includes(qq)) &&
         (filter === "all" || (filter === "held" && held(r)) || (filter === "quoted" && quoted(r)) || (filter === "perp" && r.venue === "usdm")),
     );
-    const v = (r: SymbolRow) => (sort.k === "value" ? Math.abs(r.inv_value) : r.trading_pnl);
+    const v = (r: SymbolRow) => (sort.k === "value" ? Math.abs(r.inv_value) : pnlOf(r));
     out.sort((a, b) => {
       const d = sort.k === "symbol" ? a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue) : v(a) - v(b);
       return sort.desc ? -d : d;
     });
     return out;
-  }, [rows, q, filter, sort]);
+  }, [rows, q, filter, sort, pnlOf]);
 
   // a pick from elsewhere (a fill, a grid row, the footer) brings its row into view
   const body = useRef<HTMLDivElement>(null);
@@ -90,7 +92,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       <div className="dk-mk-hd">
         {head("symbol", "Symbol", "Sort by name")}
         {head("value", "Inv value", "Inventory × mid, USDT; sorted by size")}
-        {head("pnl", "Day PnL", "Trading PnL today (Π), USDT")}
+        {head("pnl", "Trading PnL", "Today, USDT: market making + inventory PnL; a perp's is its hedge leg")}
       </div>
       <div className="dk-mk-body" ref={body}>
         <button type="button" className={"dk-mk-row pin" + (sel ? "" : " sel")} onClick={() => selectInstrument(null)} title="The desk as a whole (Esc)">
@@ -99,6 +101,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
           <span />
         </button>
         {list.map((r) => {
+          const tp = pnlOf(r);
           const on = sel?.symbol === r.symbol && sel.venue === r.venue;
           return (
             <button
@@ -111,8 +114,8 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
                 {r.symbol}
                 {r.venue === "usdm" && <span className="dk-tag">Perp</span>}
               </span>
-              <span className="fig">{hide ? MASK : dd(usd(r.inv_value))}</span>
-              <span className={"fig " + (hide ? "" : r.trading_pnl > 0.005 ? "up" : r.trading_pnl < -0.005 ? "down" : "")}>{hide ? MASK : dd(pnl(r.trading_pnl))}</span>
+              <span className="fig">{maskNode(hide, usd(r.inv_value))}</span>
+              <span className={"fig " + (hide ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>{maskNode(hide, pnl(tp))}</span>
             </button>
           );
         })}

@@ -599,7 +599,7 @@ a.m-row:active,
   letter-spacing: 0;
   color: var(--muted);
 }
-.m-hero-value .m-masked {
+.m-hero-value .masked {
   font-weight: 400;
   color: var(--muted);
 }
@@ -1127,12 +1127,6 @@ a.m-row:active,
 }
 
 /* ---- money ---- */
-/* Hide amounts: "•••" in the figure's own size, muted, so it never reads as a figure or a loader */
-.m-masked {
-  color: var(--muted);
-  font-weight: 400;
-  letter-spacing: normal;
-}
 /* Hide amounts: a bar whose length (or lone zero tick) would give an amount away keeps its space, unseen */
 .m-veil {
   visibility: hidden;

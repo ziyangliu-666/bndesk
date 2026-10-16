@@ -30,6 +30,13 @@ body {
   overflow: hidden;
 }
 
+/* Hide amounts: a masked figure (mask.tsx) is muted, never a gain, a loss or a loader */
+.masked {
+  color: var(--muted) !important;
+  font-weight: 400;
+  letter-spacing: normal;
+}
+
 /* figures: tabular numerals */
 .fig,
 .num,

@@ -8,16 +8,16 @@ import { fAge, fInt, signCls, DEFAULT_COL } from "../grid";
 import { flexCols } from "../grid";
 import { int, num, pct } from "../format";
 import { Meter, StateTag } from "./ui";
-import { hideNow, masked, money } from "../pages/ops/money";
+import { amount, hideNow, money } from "../mask";
 
 type Row = Account & { _total?: boolean };
 
 // USD columns follow Hide amounts (the columns are rebuilt when it changes)
 const v = (p: ValueFormatterParams) => p.value as number | null | undefined;
-const fMoney = (p: ValueFormatterParams) => (hideNow() ? masked(v(p)) : money(v(p)));
-const fSigned = (p: ValueFormatterParams) => (hideNow() ? masked(v(p), true) : money(v(p), true));
-const moneyCls = (hide: boolean) => (hide ? "num ops-masked" : "num");
-const signedCls = (hide: boolean) => (hide ? () => "num ops-masked" : signCls);
+const fMoney = (p: ValueFormatterParams) => (amount(v(p), "money", hideNow()));
+const fSigned = (p: ValueFormatterParams) => (amount(v(p), "pnlMoney", hideNow()));
+const moneyCls = (hide: boolean) => (hide ? "num masked" : "num");
+const signedCls = (hide: boolean) => (hide ? () => "num masked" : signCls);
 
 function AccountCell(p: ICellRendererParams<Row>) {
   const a = p.data;

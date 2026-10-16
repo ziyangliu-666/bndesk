@@ -4,7 +4,7 @@ import { memo, useEffect, useMemo, useRef } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { bps, compact, hms, int, price, qty } from "../../format";
 import type { Fill } from "../../protocol";
-import { MASK, useHide } from "./mask";
+import { maskNode, qtyText, useHide } from "../../mask";
 
 const N = 80;
 
@@ -77,7 +77,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
 
 const FillRow = memo(function FillRow({ f, inst, fresh, hide, time }: { f: Fill; inst: boolean; fresh: boolean; hide: boolean; time: string }) {
   const side = f.side === "buy" ? "up" : "down";
-  const tip = `${f.side === "buy" ? "Buy" : "Sell"} ${qty(f.qty)} ${f.symbol.replace(/USDT$/, "")} at ${price(f.price)}, ${f.account}${f.maker ? "" : ", taker"}`;
+  const tip = `${f.side === "buy" ? "Buy" : "Sell"} ${qtyText(f.qty, hide)} ${f.symbol.replace(/USDT$/, "")} at ${price(f.price)}, ${f.account}${f.maker ? "" : ", taker"}`;
   return (
     <div
       className={"dk-tr-row" + (inst ? " inst" : " click") + (fresh ? " fresh" : "")}
@@ -87,7 +87,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time }: { f: Fill;
       {inst ? (
         <>
           <span className={"fig " + side}>{price(f.price)}</span>
-          <span className="fig">{hide ? MASK : qty(f.qty)}</span>
+          <span className="fig">{maskNode(hide, qty(f.qty))}</span>
         </>
       ) : (
         <>
@@ -96,7 +96,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time }: { f: Fill;
             {f.venue === "usdm" && <span className="dk-tag">Perp</span>}
           </span>
           <span className={"fig " + side}>{price(f.price)}</span>
-          <span className="fig">{hide ? MASK : compact(f.notional)}</span>
+          <span className="fig">{maskNode(hide, compact(f.notional))}</span>
         </>
       )}
       <span className={"fig " + (f.edge_bps == null ? "muted" : "")}>{f.edge_bps == null ? "--" : bps(f.edge_bps)}</span>

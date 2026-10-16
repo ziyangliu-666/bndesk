@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "r
 import { C, SANS } from "../../theme";
 import { MINUS } from "../../format";
 import { BAND, BAND_EDGE, INV_FILL, clamp, dotSize, off, short, type QRow } from "./model";
+import { MASK, useHide } from "../../mask";
 
 export interface QuoteRowsProps {
   rows: readonly QRow[];
@@ -46,8 +47,10 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
   const [w, setW] = useState(0);
   const top = axis ? AXIS_H : 0;
   const h = top + Math.max(1, rows.length) * rowH;
-  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty });
-  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty };
+  // Hide amounts: the inventory column reads ••• with no bars
+  const hide = useHide();
+  const live = useRef({ rows, range, rowH, label, inv, top, selected, w, h, empty, hide });
+  live.current = { rows, range, rowH, label, inv, top, selected, w, h, empty, hide };
 
   useEffect(() => {
     const el = box.current;
@@ -93,7 +96,7 @@ export function QuoteRows({ rows, range, rowH = 28, label = 64, inv = false, axi
 
 function draw(
   cv: HTMLCanvasElement,
-  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string },
+  p: { rows: readonly QRow[]; range: number; rowH: number; label: number; inv: boolean; top: number; selected?: string; w: number; h: number; empty?: string; hide: boolean },
 ) {
   const { rows, range, rowH, label, inv, top, w, h } = p;
   if (!w) return;
@@ -226,12 +229,12 @@ function draw(
       const a = ixOf(0);
       const b = ixOf(v);
       g.fillStyle = INV_FILL;
-      g.fillRect(Math.min(a, b), yc - Math.min(4.5, rowH * 0.22), Math.max(1, Math.abs(b - a)), Math.min(9, rowH * 0.45));
+      if (!p.hide) g.fillRect(Math.min(a, b), yc - Math.min(4.5, rowH * 0.22), Math.max(1, Math.abs(b - a)), Math.min(9, rowH * 0.45));
       if (Math.abs(v) >= 1) {
         g.font = `400 11px ${SANS}`;
         g.textAlign = "right";
-        g.fillStyle = C.ink2;
-        g.fillText((v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US"), w - PAD / 2, yc);
+        g.fillStyle = p.hide ? C.muted : C.ink2;
+        g.fillText(p.hide ? MASK : (v < 0 ? MINUS : "") + Math.round(Math.abs(v)).toLocaleString("en-US"), w - PAD / 2, yc);
       }
     }
   });

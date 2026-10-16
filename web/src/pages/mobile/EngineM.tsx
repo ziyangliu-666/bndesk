@@ -51,7 +51,7 @@ function VenueBlock({ v, feeds, now, alerts }: { v: Engine["venues"][number]; fe
           info:
             "The engine's connections to this venue (market data, user data and order entry), and the monitor's feeds of the " +
             "same market, classified as in Feeds.",
-          value: bad.length ? bad.join(", ") : states.length ? "all up" : "n/a",
+          value: bad.length ? bad.join(", ") : states.length ? "all up" : "--",
           tone: worst,
           span: 3,
         },

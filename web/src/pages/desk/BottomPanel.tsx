@@ -8,7 +8,7 @@ import { FillsTape, MARKOUT_BASIS, type MarkoutBasis } from "../../components/Fi
 import { AccountsGrid } from "../../components/AccountsGrid";
 import { AlertsList } from "../../components/AlertsList";
 import { OrdersGrid } from "./OrdersGrid";
-import { useHide } from "./mask";
+import { useHide } from "../../mask";
 
 type Tab = "inventory" | "orders" | "fills" | "accounts" | "alerts";
 const TABS: Tab[] = ["inventory", "orders", "fills", "accounts", "alerts"];

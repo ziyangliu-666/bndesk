@@ -3,7 +3,7 @@
 // chip row for the overlays, and an Info tab.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { getJSON, type HistFill } from "../../api";
-import { useStore, type Instrument } from "../../store";
+import { serverNow, useStore, type Instrument } from "../../store";
 import { bps, compact, int, num, pnl, price, qty } from "../../format";
 import type { Fill, OpenOrder } from "../../protocol";
 import { C } from "../../theme";
@@ -23,7 +23,7 @@ import {
   type KInterval,
 } from "../../components/ex";
 import { refLabel } from "../../components/ui";
-import { MASK, dd, useHide } from "./mask";
+import { maskNode, maskText, useHide } from "../../mask";
 
 const IVS = [
   { value: "1m", label: "1m" },
@@ -75,12 +75,12 @@ function Klines({ inst }: { inst: Instrument }) {
   const key = `${venue}:${symbol}`;
   useEffect(() => {
     if (first == null) return;
-    const to = Date.now();
-    let live = true;
-    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to })
-      .then((f) => live && setHist({ key, to, fills: f.filter((x) => x.venue === venue) }))
+    const to = serverNow();
+    const ac = new AbortController();
+    getJSON<HistFill[]>("/api/fills", { symbol, venue, from: first, to }, ac.signal)
+      .then((f) => !ac.signal.aborted && setHist({ key, to, fills: f.filter((x) => x.venue === venue) }))
       .catch(() => {});
-    return () => void (live = false);
+    return () => ac.abort();
   }, [key, first, symbol, venue]);
   const fills = useMemo(() => {
     const h = hist && hist.key === key ? hist : null;
@@ -99,47 +99,64 @@ function Klines({ inst }: { inst: Instrument }) {
   const mine = ours(orders, inst);
   const bids = mine.filter((o) => o.side === "buy").sort((a, b) => b.price - a.price);
   const asks = mine.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price);
-  const tag = { labelTextColor: C.ground };
-  const lines: ExPriceLine[] = [];
-  bids.forEach((o, i) =>
-    lines.push(
-      i === 0
-        ? { series: "k", key: "orders", price: o.price, color: rgba(C.up, 0.8), title: "Bid " + o.account, labelColor: C.up, ...tag }
-        : { series: "k", key: "orders", price: o.price, color: rgba(C.up, 0.35), style: "dotted", axisLabel: false },
-    ),
-  );
-  asks.forEach((o, i) =>
-    lines.push(
-      i === 0
-        ? { series: "k", key: "orders", price: o.price, color: rgba(C.down, 0.8), title: "Ask " + o.account, labelColor: C.down, ...tag }
-        : { series: "k", key: "orders", price: o.price, color: rgba(C.down, 0.35), style: "dotted", axisLabel: false },
-    ),
-  );
-  if (row?.fair != null) lines.push({ series: "k", key: "fair", price: row.fair, color: rgba(FAIR, 0.7), title: "Fair", style: "dotted", labelColor: FAIR, ...tag });
-  if (row?.avg_cost != null) lines.push({ series: "k", key: "avg", price: row.avg_cost, color: C.muted, title: "Avg cost", style: "large", labelColor: C.raised, labelTextColor: C.ink });
+  const fair = row?.fair ?? null;
+  const avg = row?.avg_cost ?? null;
+  // a key of what the lines show, so they are rebuilt only when a price moves (not on every store update)
+  const linesKey = [bids.map((o) => o.price).join(","), asks.map((o) => o.price).join(","), fair, avg].join("|");
+  // price lines are labelled on the axis only (a title inside the plot covers the last candles); the legend
+  // names them
+  const lines = useMemo<ExPriceLine[]>(() => {
+    const tag = { labelTextColor: C.ground };
+    const out: ExPriceLine[] = [];
+    bids.forEach((o, i) =>
+      out.push(
+        i === 0
+          ? { series: "k", key: "orders", price: o.price, color: rgba(C.up, 0.8), labelColor: C.up, ...tag }
+          : { series: "k", key: "orders", price: o.price, color: rgba(C.up, 0.35), style: "dotted", axisLabel: false },
+      ),
+    );
+    asks.forEach((o, i) =>
+      out.push(
+        i === 0
+          ? { series: "k", key: "orders", price: o.price, color: rgba(C.down, 0.8), labelColor: C.down, ...tag }
+          : { series: "k", key: "orders", price: o.price, color: rgba(C.down, 0.35), style: "dotted", axisLabel: false },
+      ),
+    );
+    if (fair != null) out.push({ series: "k", key: "fair", price: fair, color: rgba(FAIR, 0.7), style: "dotted", labelColor: FAIR, ...tag });
+    if (avg != null) out.push({ series: "k", key: "avg", price: avg, color: C.muted, style: "large", labelColor: C.raised, labelTextColor: C.ink });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linesKey]);
+  const markers = useMemo(() => fillMarkers(byBar, "k"), [byBar]);
 
-  const series: ExSeries[] = [
-    { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false },
-    { key: "vol", kind: "histogram", label: "Vol(USDT)", data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
-  ];
-  const legend: ExLegendItem[] = [
-    ...(row?.fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: () => price(row.fair) }] : []),
-    ...(bids.length || asks.length
+  const series: ExSeries[] = useMemo(
+    () => [
+      { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false },
+      // the market's volume, not ours: never masked
+      { key: "vol", kind: "histogram", label: "Vol(USDT)", data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
+    ],
+    [symbol, k.bars],
+  );
+  const bid0 = bids[0]?.price;
+  const ask0 = asks[0]?.price;
+  const legend = useMemo<ExLegendItem[]>(() => [
+    ...(fair != null ? [{ key: "fair", label: "Fair", color: FAIR, value: () => price(fair) }] : []),
+    ...(bid0 != null || ask0 != null
       ? [
-          { key: "orders", label: "Our bid", color: C.up, value: () => dd(price(bids[0]?.price)) },
-          { key: "orders", label: "Our ask", color: C.down, value: () => dd(price(asks[0]?.price)) },
+          { key: "orders", label: "Our bid", color: C.up, value: () => price(bid0) },
+          { key: "orders", label: "Our ask", color: C.down, value: () => price(ask0) },
         ]
       : []),
-    ...(row?.avg_cost != null ? [{ key: "avg", label: "Avg cost", color: C.ink2, value: () => price(row.avg_cost) }] : []),
+    ...(avg != null ? [{ key: "avg", label: "Avg cost", color: C.ink2, value: () => price(avg) }] : []),
     { key: "fills", label: "Fills", value: (t: number) => fillsText(byBar.get(t)) },
     {
       pane: 1,
       label: "Ours(USDT)",
       color: C.ink2,
       title: "Our filled notional in the bar",
-      value: (t: number) => (hide ? MASK : compact(oursByBar.get(t) ?? 0)),
+      value: (t: number) => maskText(hide, compact(oursByBar.get(t) ?? 0)),
     },
-  ];
+  ], [fair, bid0, ask0, avg, byBar, oursByBar, hide]);
 
   return (
     <div className="dk-chart-col">
@@ -158,7 +175,7 @@ function Klines({ inst }: { inst: Instrument }) {
         initialBars={110}
         resetKey={key}
         fullscreen
-        markers={fillMarkers(byBar, "k")}
+        markers={markers}
         priceLines={lines}
         legendExtra={legend}
         chips={[
@@ -179,33 +196,33 @@ function Info({ inst }: { inst: Instrument }) {
   const row = useStore((s) => s.snap?.symbols.find((r) => r.symbol === inst.symbol && r.venue === inst.venue));
   const funding = useStore((s) => s.snap?.exposure.funding.find((f) => f.symbol === inst.symbol));
   const hide = useHide();
-  const m = (s: string) => (hide ? MASK : dd(s));
-  const items: [string, string, string?][] = row
+  const m = (s: string) => maskNode(hide, s);
+  const items: [string, ReactNode, string?][] = row
     ? [
         ["Venue", inst.venue === "usdm" ? "USD-M perpetual" : "Spot"],
         ["Reference", row.reference != null ? refLabel(row.reference) : "--"],
-        ["Mid", dd(price(row.mid))],
-        ["Fair", dd(price(row.fair))],
-        ["Reference mid", dd(price(row.ref_mid))],
-        ["Basis", dd(bps(row.basis_bps)) + " bps", "Mid / reference mid − 1"],
-        ["Best bid", dd(price(row.bid))],
-        ["Best ask", dd(price(row.ask))],
+        ["Mid", price(row.mid)],
+        ["Fair", price(row.fair)],
+        ["Reference mid", price(row.ref_mid)],
+        ["Basis", bps(row.basis_bps) + " bps", "Mid / reference mid − 1"],
+        ["Best bid", price(row.bid)],
+        ["Best ask", price(row.ask)],
         ["Inventory", m(qty(row.inv_qty, true))],
         ["Realized", m(pnl(row.realized_pnl)), "Sells matched FIFO to today's buys, minus fees"],
         ["Floating", m(pnl(row.float_pnl)), "The inventory left, at mid, against its cost"],
         ["Unrealized", m(pnl(row.upnl))],
         ["Buys / sells", `${int(row.buys_day)} / ${int(row.sells_day)}`],
-        ["Markout 10 s", dd(bps(row.mk10_bps)) + " bps", "Volume-weighted over today's fills, net of the reference move"],
-        ["Markout 60 s", dd(bps(row.mk60_bps)) + " bps"],
-        ["Markout 300 s", dd(bps(row.mk300_bps)) + " bps"],
+        ["Markout 10 s", bps(row.mk10_bps) + " bps", "Volume-weighted over today's fills, net of the reference move"],
+        ["Markout 60 s", bps(row.mk60_bps) + " bps"],
+        ["Markout 300 s", bps(row.mk300_bps) + " bps"],
         ["Our bids / asks", `${row.open_bids} / ${row.open_asks}`],
-        ["Bid dist", dd(bps(row.bid_dist_bps, false)) + " bps", "Best own bid below fair"],
-        ["Ask dist", dd(bps(row.ask_dist_bps, false)) + " bps", "Best own ask above fair"],
+        ["Bid dist", bps(row.bid_dist_bps, false) + " bps", "Best own bid below fair"],
+        ["Ask dist", bps(row.ask_dist_bps, false) + " bps", "Best own ask above fair"],
         ...(funding
           ? ([
               ["Funding rate", funding.rate == null ? "--" : num(funding.rate * 100, 4, true) + "%"],
               ["Position", m(compact(funding.position))],
-            ] as [string, string][])
+            ] as [string, ReactNode][])
           : []),
       ]
     : [];

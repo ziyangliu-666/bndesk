@@ -6,7 +6,8 @@ import { C, HEDGE_COLOR, INVPNL_COLOR, MM_COLOR, REBATE_COLOR } from "../../them
 import { ExChart, type ExBoxRow, type ExSeries } from "../../components/ex";
 import { showInfo } from "../../components/mobile";
 import { DAY, PART_INFO, useLoad } from "./shared";
-import { Amt, Big, MASK, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
+import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
+import { MASK } from "../../mask";
 import "./rest/assets.css";
 import "./history.css";
 

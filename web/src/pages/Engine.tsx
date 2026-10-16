@@ -13,7 +13,7 @@ import { StateTag } from "../components/ui";
 import { fAge, DEFAULT_COL } from "../grid";
 import { AlertsList, useAlertList } from "../components/AlertsList";
 import { Tabs, TextToggle, useExPref } from "../components/ex";
-import { Money } from "./ops/money";
+import { Money } from "../mask";
 import "./ops/ops.css";
 
 function us(v: number | null): string {

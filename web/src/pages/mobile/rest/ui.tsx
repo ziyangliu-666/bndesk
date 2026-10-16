@@ -2,62 +2,38 @@
 // with the accent underline, 56 px two-line rows without chevrons, label-over-value stats, a big hero figure,
 // plain section heads. Amounts honour Hide amounts (•••); unknown is `--`.
 import { memo, useCallback, type ReactNode } from "react";
-import { navigate, useStore, type Route } from "../../../store";
-import { compact, num } from "../../../format";
+import { navigate, type Route } from "../../../store";
+import { Money, amount, signTone, useAmount, type AmountKind } from "../../../mask";
+import { num } from "../../../format";
 import { Tabs, type Option } from "../../../components/ex";
 import { showInfo } from "../../../components/mobile";
 import "./rest.css";
 
 export const NA = "--";
-export const MASK = "•••";
-const MINUS = "−";
 
-// ---------------- figures ----------------
+// ---------------- figures (the Hide amounts rules and formats are in src/mask.tsx) ----------------
 
+/** `pnl` +1,234.56 (the whole figure, signed), `full` 45,380.12 (balances are never shortened), `k` 59.80K,
+ *  `pnlK` +59.80K. */
 export type AmtKind = "pnl" | "full" | "k" | "pnlK";
+const KIND: Record<AmtKind, AmountKind> = { pnl: "pnlFull", full: "full", k: "k", pnlK: "pnlK" };
 
-/** True when a printed figure reads as zero ("0.00", "−0.0"). */
-const zeroText = (s: string) => !/[1-9]/.test(s);
-
-/** A USD amount as text: `pnl` +1,234.56, `full` 45,380.12 (balances are never shortened), `k` 59.80K, `pnlK`
- *  +59.80K. Masked with Hide amounts. */
-export function amt(v: number | null | undefined, kind: AmtKind = "pnl", hide = false): string {
-  if (v == null || !Number.isFinite(v)) return NA;
-  const signed = kind === "pnl" || kind === "pnlK";
-  const s = kind === "k" || kind === "pnlK" ? compact(v, 2, signed) : num(v, 2, signed);
-  if (zeroText(s)) return hide ? MASK : s.replace(/^[+−-]/, "");
-  if (hide) return (v < 0 ? MINUS : signed ? "+" : "") + MASK;
-  return s;
-}
+/** A USD amount as text, `•••` when masked. */
+export const amt = (v: number | null | undefined, kind: AmtKind = "pnl", hide = false): string => amount(v, KIND[kind], hide);
 
 /** Sign class of a figure as printed ("" for zero and unknown). */
-export function sgn(v: number | null | undefined, text?: string): "" | "up" | "down" {
-  if (v == null || !Number.isFinite(v) || v === 0) return "";
-  if (text != null && zeroText(text)) return "";
-  return v > 0 ? "up" : "down";
-}
+export const sgn = signTone;
 
 /** `amt` bound to the Hide amounts setting. */
 export function useAmt(): (v: number | null | undefined, kind?: AmtKind) => string {
-  const hide = useStore((s) => s.hideAmounts);
-  return useCallback((v, kind = "pnl") => amt(v, kind, hide), [hide]);
+  const a = useAmount();
+  return useCallback((v, kind = "pnl") => a(v, KIND[kind]), [a]);
 }
 
 /** An amount in a span; signed kinds take the sign colour unless `plain`. */
 export const Amt = memo(function Amt({ v, kind = "pnl", plain, className }: { v: number | null | undefined; kind?: AmtKind; plain?: boolean; className?: string }) {
-  const hide = useStore((s) => s.hideAmounts);
-  const text = amt(v, kind, hide);
-  const tint = !plain && !hide && (kind === "pnl" || kind === "pnlK") ? sgn(v, text) : "";
-  return <span className={["r-fig", tint, hide ? "r-masked" : "", className ?? ""].filter(Boolean).join(" ")}>{text}</span>;
+  return <Money v={v} kind={KIND[kind]} color={plain ? false : undefined} className={className} />;
 });
-
-/** A signed percent of the same figure: `+0.06%`. */
-export function pctSigned(v: number | null | undefined, d = 2): string {
-  if (v == null || !Number.isFinite(v)) return NA;
-  const s = Math.abs(v * 100).toFixed(d);
-  if (zeroText(s)) return s + "%";
-  return (v > 0 ? "+" : MINUS) + s + "%";
-}
 
 // ---------------- layout ----------------
 
