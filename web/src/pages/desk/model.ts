@@ -140,18 +140,29 @@ export function bucket(rows: readonly Row[], step: number): Row[] {
   return out;
 }
 
-/** Each account's Day PnL, bucketed to `step` ms (0: its own 45 s points), today only. */
-export function accountRows(a: AccountSeries, dayStart: number, step: number): { time: number; value: number }[] {
-  const out: { time: number; value: number }[] = [];
-  for (let i = 0; i < a.t.length; i++) {
-    const t0 = a.t[i]!;
-    if (t0 < dayStart) continue;
-    const t = step > 0 ? Math.floor(t0 / step) * step : t0;
-    const last = out[out.length - 1];
-    if (last && last.time === t) last.value = a.pnl_day[i]!;
-    else out.push({ time: t, value: a.pnl_day[i]! });
+/** The last value at or before `t` of a series with ascending times `ts`; null before its first point. */
+export function valueAt(ts: readonly number[], vs: readonly number[], t: number): number | null {
+  let lo = 0;
+  let hi = ts.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (ts[m]! <= t) lo = m + 1;
+    else hi = m;
   }
-  return out;
+  return lo ? vs[lo - 1]! : null;
+}
+
+/** Each account's Day PnL (its 45 s points) on the chart's own bar times: each bar the last point before the
+ *  next bar starts, the forming bar the latest point; today only. */
+export function accountOnGrid(a: AccountSeries, rows: readonly Row[], dayStart: number): { time: number; value: number | null }[] {
+  const first = a.t.findIndex((t) => t >= dayStart);
+  if (first < 0) return [];
+  const ts = a.t.slice(first);
+  const vs = a.pnl_day.slice(first);
+  return rows.map((r, i) => {
+    const next = rows[i + 1]?.t;
+    return { time: r.t, value: valueAt(ts, vs, next == null ? Infinity : next - 1) };
+  });
 }
 
 /**
