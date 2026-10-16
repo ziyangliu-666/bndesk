@@ -87,7 +87,7 @@
   border-radius: 2px;
   background: var(--raised);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 16px;
   vertical-align: 1px;
@@ -269,7 +269,7 @@
 }
 .dk-name-row .dk-x {
   margin-left: 6px;
-  font-size: 13px;
+  font-size: 12px;
 }
 .dk-name-sub {
   font-size: 12px;
@@ -425,7 +425,7 @@
 .dk-lad-acct {
   margin-right: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .dk-lad-mkt {
   color: var(--muted);

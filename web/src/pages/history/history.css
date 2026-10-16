@@ -57,7 +57,7 @@
 }
 .hx-perp {
   margin-left: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -73,7 +73,7 @@
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
   padding: 0 2px 0 5px;
   cursor: pointer;
 }
@@ -118,7 +118,7 @@
 }
 .hx-pick-head {
   height: 22px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .hx-pick-list {
@@ -258,7 +258,7 @@
 }
 .hx-cal-h {
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 18px;
   color: var(--muted);
 }
@@ -282,12 +282,12 @@
 }
 .hx-cal-c i {
   font-style: normal;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 .hx-cal-c b {
   font-weight: 400;
-  font-size: 11px;
+  font-size: 12px;
 }
 .hx-cal-c.out {
   cursor: default;
@@ -408,7 +408,7 @@
   border-radius: 2px;
   background: var(--raised);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 12px;
 }
 /* a text button: the chosen day's ✕, its Intraday / Days switch */
 .hx-link {

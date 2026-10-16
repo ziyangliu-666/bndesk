@@ -62,8 +62,8 @@ export function AlertsList({ bare = false, filter }: { bare?: boolean; filter?: 
             <span />
           );
           const age = (
-            <span className="alert-age fig" title={a.active ? "Time since the alert fired" : undefined}>
-              {a.active ? dur(now - a.since) : "cleared"}
+            <span className="alert-age fig" title={a.active ? "Time since the alert fired" : `Cleared; it fired at ${hms(a.since, tz)}`}>
+              {a.active ? dur(now - a.since) : bare ? "cleared" : `cleared, fired ${hms(a.since, tz)}`}
             </span>
           );
           if (bare)

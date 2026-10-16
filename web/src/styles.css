@@ -268,7 +268,7 @@ kbd {
 .panel-head h2 {
   margin: 0;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
 }
@@ -345,13 +345,13 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 .sym.total {
   color: var(--ink);
 }
 .sym-suffix {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   font-weight: 400;
 }
@@ -362,7 +362,7 @@ kbd {
   opacity: 0.6;
 }
 .side {
-  font-weight: 600;
+  font-weight: 500;
 }
 .ag-cell.muted {
   color: var(--muted);
@@ -380,7 +380,7 @@ kbd {
 .ag-right-aligned-cell {
 }
 .ag-row-pinned .ag-cell {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* meters */
@@ -422,7 +422,7 @@ kbd {
 }
 .state.bad {
   color: var(--crit);
-  font-weight: 600;
+  font-weight: 500;
 }
 .state.warn {
   color: var(--warn);
@@ -464,7 +464,7 @@ kbd {
   margin-top: 1px;
 }
 .alert-level {
-  font-weight: 600;
+  font-weight: 500;
   margin-right: 6px;
 }
 .alert.crit .alert-level {
@@ -542,7 +542,7 @@ kbd {
   align-items: center;
   gap: 5px;
   color: var(--crit);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* thin dark scrollbars */
@@ -606,7 +606,7 @@ kbd {
   border: 1px solid var(--rule);
 }
 .demo-notice-title {
-  font-weight: 600;
+  font-weight: 500;
 }
 .demo-notice-body {
   margin: 0 0 8px;
