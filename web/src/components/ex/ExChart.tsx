@@ -1,0 +1,1126 @@
+// ExChart: the one wrapper over TradingView Lightweight Charts v5 for every time-series chart, desktop and
+// phone. It owns the toolbar (intervals, modes, ⤢), the in-plot legend with values, the right axis with its
+// last-value tag, `>>` back to live, the touch value box, the chip row, loading, markers and price lines.
+// See README.md in this folder for the API in short.
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  AreaSeries,
+  BaselineSeries,
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  HistogramSeries,
+  LineSeries,
+  LineStyle,
+  TrackingModeExitMode,
+  createChart,
+  createSeriesMarkers,
+  type ChartOptions,
+  type DeepPartial,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type MouseEventParams,
+  type SeriesMarker,
+  type SeriesType,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { num, price as fmtPrice } from "../../format";
+import { useStore } from "../../store";
+import type { TzMode } from "../../format";
+import { C, CROSSHAIR, DOWN, GRID, PLOT_BG, SANS, UP, rgba, signColor } from "./palette";
+import { barLabel, boxLabel, tickLabel } from "./time";
+import { ChipRow, TextToggle, type Chip, type Option } from "./controls";
+import { useExHidden, useExPref } from "./prefs";
+import { ChartFullscreen, goFullscreen } from "./fullscreen";
+import "./ex.css";
+
+// ================================ public types ================================
+
+export type ExKind = "line" | "area" | "baseline" | "histogram" | "candles";
+
+/** A value point; `value: null` leaves a gap. `color` (histogram) colours that bar. Time in ms. */
+export interface ExPoint {
+  time: number;
+  value: number | null;
+  color?: string;
+}
+/** A candle. Time in ms (bar start). Extra fields (volume) are ignored. */
+export interface ExOhlc {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface ExSeries {
+  /** Stable id: legend clicks and chips toggle it, `hidden` lists it, markers and price lines name it. */
+  key: string;
+  kind: ExKind;
+  /** Legend label (plain, short: `Day PnL`, `MM`, `Vol(USDT)`). */
+  label: string;
+  /** Oldest first. Keep earlier points' object identity across live updates (append, or replace the last)
+   *  and ExChart updates only the tail instead of resetting the series. */
+  data: readonly ExPoint[] | readonly ExOhlc[];
+  /** Line colour (line, area, histogram default). Baseline and candles use up/down unless given `colors`. */
+  color?: string;
+  /** Baseline / candles: [up, down]. */
+  colors?: [string, string];
+  /** Pane index, 0 = the main one; panes must be contiguous. */
+  pane?: number;
+  /** Axis and legend number format. Default: candles format.price, else 2 decimals. */
+  format?: (v: number) => string;
+  /** Legend value coloured by sign (P&L). */
+  signColor?: boolean;
+  /** Legend line within its pane (1 = first). Default: the first series of pane 0 on line 1, the others on 2;
+   *  other panes line 1. `false` keeps it out of the legend. */
+  legend?: number | false;
+  /** May the user hide it (legend click, chips). Default true. */
+  toggle?: boolean;
+  /** Hidden until the user shows it (when no choice is stored yet). */
+  hiddenByDefault?: boolean;
+  /** Line width (line, area, baseline). Default 1.5 (2 for baseline). */
+  width?: number;
+  lineStyle?: "solid" | "dashed" | "dotted";
+  /** Baseline: the base value. Default 0. */
+  base?: number;
+  /** Axis tag with the last value (and its dotted price line). Default: the first series of each pane, unless
+   *  it is a histogram. */
+  lastValue?: boolean;
+  /** Price scale id. Default the pane's right scale; any other id is an invisible overlay scale. */
+  scale?: string;
+  /** Margins of this series' scale, fractions of the pane height. */
+  margins?: { top: number; bottom: number };
+  /** In the touch value box. Default true. */
+  box?: boolean;
+  /** Raw Lightweight Charts series options, applied last. */
+  options?: Record<string, unknown>;
+}
+
+export interface ExMarker {
+  /** Key of the series it sits on. */
+  series: string;
+  time: number;
+  /** For `atPrice*` positions. */
+  price?: number;
+  color: string;
+  shape?: "circle" | "square" | "arrowUp" | "arrowDown";
+  position?: "aboveBar" | "belowBar" | "inBar" | "atPriceTop" | "atPriceMiddle" | "atPriceBottom";
+  size?: number;
+  text?: string;
+  /** Overlay key (chip / hidden): hidden with it. */
+  key?: string;
+}
+
+export interface ExPriceLine {
+  series: string;
+  price: number;
+  color: string;
+  /** Short text on the line at the axis: `Bid sub-a`, `Avg cost`. */
+  title?: string;
+  style?: "solid" | "dashed" | "dotted" | "large";
+  width?: number;
+  /** Price box on the axis. Default true. */
+  axisLabel?: boolean;
+  labelColor?: string;
+  labelTextColor?: string;
+  key?: string;
+}
+
+/** A value for the legend or the value box: text, or [text, colour]. */
+export type ExValue = string | [string, string | undefined];
+
+export interface ExLegendItem {
+  label: string;
+  /** `t`: the hovered bar's time (ms), else the latest bar's. */
+  value: (t: number) => ExValue;
+  color?: string;
+  pane?: number;
+  line?: number;
+  /** Clicking toggles this key (a series or an overlay). */
+  key?: string;
+  /** Also a row in the touch value box (`true`, or a value for the box only). */
+  box?: boolean | ((t: number) => ExValue);
+  title?: string;
+}
+
+export interface ExMode {
+  /** Accessible name. */
+  label: string;
+  options: Option[];
+  value: string;
+  onChange: (v: string) => void;
+}
+
+export type ExBoxRow = [label: string, value: string, color?: string];
+
+export interface ExChartProps {
+  /** Chart id: remembers hidden series (store `hidden["ex.<id>"]`) and the legend's collapse. Use the same id in
+   *  `useExPref(id, "interval", …)` for the interval and modes. */
+  id: string;
+  series: ExSeries[];
+  /** Pane heights relative to each other (stretch factors). Default pane 0: 1, others 0.25. */
+  paneStretch?: number[];
+  /** Interval text toggles at the left of the toolbar (`Line 1m 5m 15m 1H`). */
+  intervals?: Option[];
+  interval?: string;
+  onInterval?: (v: string) => void;
+  /** The rest of the intervals, behind `More ▾` (a short menu); the button shows the chosen one when it is
+   *  among them (`4H ▾`). */
+  moreIntervals?: Option[];
+  /** Text-toggle groups at the right of the toolbar (`Today 24h`, `Area Candles`). */
+  modes?: ExMode[];
+  /** Content at the left of the toolbar, before the intervals. */
+  toolbarLeft?: ReactNode;
+  /** ⤢: `true` opens the built-in fullscreen (ChartFullscreen with this chart in it); a function handles it. */
+  fullscreen?: boolean | (() => void);
+  /** Title of the fullscreen header (symbol, chart name). */
+  title?: ReactNode;
+  /** Chip row under the chart: `true` = a chip per toggleable series; or the chips to show (overlay keys too). */
+  chips?: boolean | (Chip | "|")[];
+  /** Plot height (px or CSS length), toolbar and chips excluded. Ignored with `fill`. Default 300. */
+  height?: number | string;
+  /** The chart fills its parent's height (flex column). */
+  fill?: boolean;
+  /** Data is on its way: the old bars go at once and "Loading" shows in the plot. ExChart also does this by
+   *  itself when `interval` changes and the data has not changed yet. */
+  loading?: boolean;
+  /** Shown in the plot when there is no data and nothing is loading. Default "No data". */
+  emptyText?: string;
+  markers?: ExMarker[];
+  priceLines?: ExPriceLine[];
+  /** More legend items (`Fills B3 @ 2,480.64`, `Band ±215.73`). */
+  legendExtra?: ExLegendItem[];
+  /** The touch value box's rows for bar time `t`; default from the series and legend items. */
+  boxRows?: (t: number) => ExBoxRow[];
+  /** Touch layout (long-press tracking, value box, pinch). Default: a coarse pointer. */
+  touch?: boolean;
+  /** Bars in view after a (re)load; default all of them, fitted. */
+  initialBars?: number;
+  /** A change of this value resets the view (a new symbol). */
+  resetKey?: string | number;
+  /** Controlled hidden keys (else per-id in the store). */
+  hidden?: string[];
+  onToggle?: (key: string) => void;
+  /** The hovered bar's time (ms), null when the crosshair leaves. */
+  onCrosshair?: (t: number | null) => void;
+  /** The chart's API once created (null on unmount), for anything this wrapper does not cover. */
+  chartRef?: (c: IChartApi | null) => void;
+  className?: string;
+  style?: CSSProperties;
+  /** @internal set on the copy inside the fullscreen overlay. */
+  inFullscreen?: boolean;
+  onCloseFullscreen?: () => void;
+}
+
+// ================================ helpers ================================
+
+const sec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
+const STYLE = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted, large: LineStyle.LargeDashed } as const;
+const isOhlc = (p: ExPoint | ExOhlc): p is ExOhlc => (p as ExOhlc).open !== undefined;
+const coarse = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+
+/** Decimals format.price shows for a price of this size. */
+function priceDecimals(v: number): number {
+  const a = Math.abs(v);
+  return a >= 1000 ? 2 : a >= 10 ? 3 : a >= 1 ? 4 : a >= 0.01 ? 5 : 7;
+}
+/** Price precision as format.price picks it. */
+function minMoveFor(v: number): number {
+  const a = Math.abs(v);
+  return a >= 1000 ? 0.01 : a >= 10 ? 0.001 : a >= 1 ? 0.0001 : a >= 0.01 ? 0.00001 : 0.0000001;
+}
+const defaultFormat = (s: ExSeries) => s.format ?? (s.kind === "candles" ? (v: number) => fmtPrice(v) : (v: number) => num(v, 2));
+
+function chartOptions(touch: boolean, tz: TzMode, step: number): DeepPartial<ChartOptions> {
+  return {
+    autoSize: true,
+    layout: {
+      background: { type: ColorType.Solid, color: PLOT_BG },
+      textColor: C.muted,
+      fontFamily: SANS,
+      fontSize: touch ? 10 : 11,
+      // the attribution is a link in the footer / About (TvAttribution), as the licence allows
+      attributionLogo: false,
+      panes: { separatorColor: C.rule, separatorHoverColor: "rgba(126,166,246,0.18)", enableResize: false },
+    },
+    grid: { vertLines: { visible: false }, horzLines: { color: GRID } },
+    crosshair: {
+      mode: CrosshairMode.Normal,
+      vertLine: { color: CROSSHAIR, style: LineStyle.Dashed, width: 1, labelBackgroundColor: C.raised },
+      horzLine: { color: CROSSHAIR, style: LineStyle.Dashed, width: 1, labelBackgroundColor: C.raised },
+    },
+    rightPriceScale: { borderVisible: false, minimumWidth: touch ? 52 : 64, entireTextOnly: true, scaleMargins: { top: 0.2, bottom: 0.08 } },
+    leftPriceScale: { visible: false },
+    timeScale: {
+      borderVisible: true,
+      borderColor: C.rule,
+      timeVisible: true,
+      secondsVisible: step < 60_000,
+      rightOffset: touch ? 3 : 5,
+      minBarSpacing: 0.3,
+      tickMarkFormatter: (t: Time, kind: number) => tickLabel((t as number) * 1000, tz, kind),
+    },
+    localization: { timeFormatter: (t: Time) => barLabel((t as number) * 1000, tz, step, touch) },
+    // desktop: drag pans, the wheel zooms; touch: a sideways drag pans, a pinch zooms, a vertical swipe scrolls
+    // the page, and a long press holds the crosshair until the next tap
+    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: { mouseWheel: !touch, pinch: true, axisPressedMouseMove: { time: true, price: !touch }, axisDoubleClickReset: true },
+    kineticScroll: { touch: true, mouse: false },
+    trackingMode: { exitMode: TrackingModeExitMode.OnNextTap },
+  };
+}
+
+function seriesOptions(s: ExSeries, lastValue: boolean, visible: boolean): Record<string, unknown> {
+  const fmt = defaultFormat(s);
+  const color = s.color ?? C.ink;
+  const [up, down] = s.colors ?? [UP, DOWN];
+  const width = s.width ?? (s.kind === "baseline" ? 2 : 1.5);
+  const common: Record<string, unknown> = {
+    visible,
+    lastValueVisible: lastValue,
+    priceLineVisible: lastValue,
+    priceLineStyle: LineStyle.Dotted,
+    priceFormat: { type: "custom", formatter: fmt, minMove: 0.01 },
+    ...(s.scale && s.scale !== "right" ? { priceScaleId: s.scale } : null),
+  };
+  let o: Record<string, unknown>;
+  switch (s.kind) {
+    case "line":
+      o = { color, lineWidth: width, lineStyle: STYLE[s.lineStyle ?? "solid"], crosshairMarkerRadius: 3 };
+      break;
+    case "area":
+      o = { lineColor: color, topColor: rgba(color, 0.18), bottomColor: rgba(color, 0.0), lineWidth: width, crosshairMarkerRadius: 3 };
+      break;
+    case "baseline":
+      o = {
+        baseValue: { type: "price", price: s.base ?? 0 },
+        lineWidth: width,
+        topLineColor: up,
+        topFillColor1: rgba(up, 0.16),
+        topFillColor2: rgba(up, 0.02),
+        bottomLineColor: down,
+        bottomFillColor1: rgba(down, 0.02),
+        bottomFillColor2: rgba(down, 0.16),
+        crosshairMarkerRadius: 3,
+      };
+      break;
+    case "histogram":
+      o = { color: s.color ?? rgba(C.ink2, 0.4) };
+      break;
+    case "candles":
+      o = { upColor: up, downColor: down, borderVisible: false, wickUpColor: up, wickDownColor: down };
+      break;
+  }
+  return { ...common, ...o, ...s.options };
+}
+
+const DEF = { line: LineSeries, area: AreaSeries, baseline: BaselineSeries, histogram: HistogramSeries, candles: CandlestickSeries } as const;
+
+/** Lightweight Charts' point for ours, cached by object so a live tail converts once. */
+const conv = new WeakMap<object, unknown>();
+function toLwc(p: ExPoint | ExOhlc): unknown {
+  let v = conv.get(p);
+  if (v) return v;
+  if (isOhlc(p)) v = { time: sec(p.time), open: p.open, high: p.high, low: p.low, close: p.close };
+  else if (p.value == null || !Number.isFinite(p.value)) v = { time: sec(p.time) };
+  else v = p.color ? { time: sec(p.time), value: p.value, color: p.color } : { time: sec(p.time), value: p.value };
+  conv.set(p, v);
+  return v;
+}
+
+/** The index from which `next` differs from `prev` when it only grew or changed its tail; -1 for a reset. */
+function tailFrom(prev: readonly object[] | null, next: readonly object[]): number {
+  if (!prev || !prev.length || !next.length) return -1;
+  if (next.length < prev.length || next.length > prev.length + 5) return -1;
+  if (prev[0] !== next[0]) return -1;
+  const k = prev.length - 2;
+  if (k > 0 && prev[k] !== next[k]) return -1;
+  return Math.max(0, prev.length - 1);
+}
+
+/** The bar size of a series: the smallest gap among its last points. */
+function stepOf(data: readonly { time: number }[]): number {
+  let step = Infinity;
+  for (let i = Math.max(1, data.length - 30); i < data.length; i++) {
+    const d = data[i]!.time - data[i - 1]!.time;
+    if (d > 0 && d < step) step = d;
+  }
+  return Number.isFinite(step) ? step : 60_000;
+}
+
+interface Live {
+  def: ExSeries;
+  api: ISeriesApi<SeriesType>;
+  data: readonly (ExPoint | ExOhlc)[] | null;
+  byTime: Map<number, ExPoint | ExOhlc>;
+  sig: string;
+}
+
+/** Hover state outside React's render path: only the legend and the box re-render on a crosshair move. */
+interface Hover {
+  t: number | null;
+  x: number;
+  v: number; // bumps when data changes, so the legend reads the new latest bar
+}
+function hoverStore() {
+  let cur: Hover = { t: null, x: 0, v: 0 };
+  const subs = new Set<() => void>();
+  return {
+    get: () => cur,
+    set: (h: Partial<Hover>) => {
+      cur = { ...cur, ...h };
+      subs.forEach((f) => f());
+    },
+    sub: (f: () => void) => {
+      subs.add(f);
+      return () => void subs.delete(f);
+    },
+  };
+}
+type HoverStore = ReturnType<typeof hoverStore>;
+
+// ================================ component ================================
+
+/**
+ * One chart: series in panes, a toolbar, a legend per pane, the right axis, `>>`, gestures, and optionally
+ * chips and fullscreen. Data goes in with each series (`series[i].data`), times in ms.
+ */
+export function ExChart(p: ExChartProps) {
+  const touch = p.touch ?? coarse();
+  const tz = useStore((s) => s.tz);
+  const host = useRef<HTMLDivElement>(null);
+  const plot = useRef<HTMLDivElement>(null);
+  const chart = useRef<IChartApi | null>(null);
+  const live = useRef(new Map<string, Live>());
+  const markersApi = useRef(new Map<string, ISeriesMarkersPluginApi<Time>>());
+  const lines = useRef<[ISeriesApi<SeriesType>, IPriceLine][]>([]);
+  const hov = useMemo(hoverStore, []);
+  const [paneTops, setPaneTops] = useState<number[]>([0]);
+  const [axisW, setAxisW] = useState(64);
+  const [axisH, setAxisH] = useState(26);
+  const [away, setAway] = useState(false); // panned away from the latest bar
+  const [dense, setDense] = useState(false); // bars under 5 px apart: no markers
+  const [awaiting, setAwaiting] = useState(false);
+  const [fs, setFs] = useState(false);
+  const [closed, setClosed] = useExPref<boolean>(p.id, "legendClosed", false);
+
+  // hidden keys: controlled, or per id in the store
+  const defaults = useMemo(() => p.series.filter((s) => s.hiddenByDefault).map((s) => s.key), [p.series]);
+  const own = useExHidden(p.id, defaults);
+  const hidden = p.hidden ?? own.hidden;
+  const toggle = p.onToggle ?? own.toggle;
+  const off = useCallback((k: string | undefined) => k != null && hidden.includes(k), [hidden]);
+
+  const step = useMemo(() => stepOf(p.series[0]?.data ?? []), [p.series]);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  const cbs = useRef(p);
+  cbs.current = p;
+
+  // ---- mount ----
+  useLayoutEffect(() => {
+    const el = host.current!;
+    const c = createChart(el, chartOptions(touch, tz, stepRef.current));
+    chart.current = c;
+    cbs.current.chartRef?.(c);
+    const onMove = (e: MouseEventParams<Time>) => {
+      const t = e.time == null ? null : (e.time as number) * 1000;
+      hov.set({ t, x: e.point?.x ?? 0 });
+      cbs.current.onCrosshair?.(t);
+    };
+    c.subscribeCrosshairMove(onMove);
+    const ts = c.timeScale();
+    const onRange = () => {
+      const r = ts.getVisibleLogicalRange();
+      setAway(ts.scrollPosition() < -2);
+      if (r) setDense(ts.width() / Math.max(1, r.to - r.from) < 5);
+    };
+    ts.subscribeVisibleLogicalRangeChange(onRange);
+    const measure = () => {
+      const top = el.getBoundingClientRect().top;
+      setPaneTops(c.panes().map((pn) => (pn.getHTMLElement()?.getBoundingClientRect().top ?? top) - top));
+      setAxisW(c.priceScale("right", 0).width() || 64);
+      setAxisH(ts.height() || 26);
+    };
+    const ro = new ResizeObserver(() => requestAnimationFrame(measure));
+    ro.observe(el);
+    ts.subscribeSizeChange(measure);
+    const liveMap = live.current;
+    const mk = markersApi.current;
+    return () => {
+      ro.disconnect();
+      c.unsubscribeCrosshairMove(onMove);
+      ts.unsubscribeVisibleLogicalRangeChange(onRange);
+      ts.unsubscribeSizeChange(measure);
+      c.remove();
+      chart.current = null;
+      liveMap.clear();
+      mk.clear();
+      lines.current = [];
+      cbs.current.chartRef?.(null);
+    };
+    // the layout (touch) is fixed per mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    chart.current?.applyOptions(chartOptions(touch, tz, step));
+  }, [tz, step, touch]);
+
+  // ---- series: structure, options, data ----
+  const structure = p.series.map((s) => `${s.key}:${s.kind}:${s.pane ?? 0}:${s.scale ?? ""}`).join("|");
+  const ivRef = useRef(p.interval);
+  const dataRefs = useRef<unknown[]>([]);
+  const needFit = useRef(true);
+  const resetRef = useRef(p.resetKey);
+
+  const fitView = useCallback(() => {
+    const c = chart.current;
+    if (!c) return;
+    let n = 0;
+    for (const l of live.current.values()) n = Math.max(n, l.data?.length ?? 0);
+    if (!n) return;
+    const want = cbs.current.initialBars;
+    if (want && n > want) c.timeScale().setVisibleLogicalRange({ from: n - want, to: n - 1 + (touch ? 3 : 5) });
+    else c.timeScale().fitContent();
+  }, [touch]);
+
+  useLayoutEffect(() => {
+    const c = chart.current;
+    if (!c) return;
+    const map = live.current;
+    // structure changed: rebuild every series (and the panes), keeping the view
+    const keys = new Set(p.series.map((s) => s.key));
+    const sameStructure = map.size === p.series.length && [...map.keys()].every((k) => keys.has(k)) && [...map.values()].every((l) => {
+      const s = p.series.find((x) => x.key === l.def.key)!;
+      return s.kind === l.def.kind && (s.pane ?? 0) === (l.def.pane ?? 0) && (s.scale ?? "") === (l.def.scale ?? "");
+    });
+    if (!sameStructure) {
+      const view = map.size ? c.timeScale().getVisibleLogicalRange() : null;
+      for (const l of map.values()) c.removeSeries(l.api);
+      map.clear();
+      markersApi.current.clear();
+      lines.current = [];
+      while (c.panes().length > 1) c.removePane(c.panes().length - 1);
+      const firstInPane = new Set<number>();
+      for (const s of p.series) {
+        const pane = s.pane ?? 0;
+        const lv = s.lastValue ?? (s.kind !== "histogram" && !firstInPane.has(pane));
+        firstInPane.add(pane);
+        const api = c.addSeries(DEF[s.kind] as never, seriesOptions(s, lv, !off(s.key)) as never, pane) as ISeriesApi<SeriesType>;
+        if (s.margins) api.priceScale().applyOptions({ scaleMargins: s.margins });
+        else if (pane > 0 && !s.scale) api.priceScale().applyOptions({ scaleMargins: { top: 0.25, bottom: 0 } });
+        if (s.scale && s.scale !== "right") api.priceScale().applyOptions({ visible: false });
+        map.set(s.key, { def: s, api, data: null, byTime: new Map(), sig: "" });
+      }
+      if (view) needFit.current = false;
+      requestAnimationFrame(() => {
+        if (view && chart.current) chart.current.timeScale().setVisibleLogicalRange(view);
+      });
+    }
+    // pane heights; a pane whose series are all hidden folds away
+    const panes = c.panes();
+    panes.forEach((pn, i) => {
+      const inPane = p.series.filter((s) => (s.pane ?? 0) === i);
+      const allOff = i > 0 && inPane.length > 0 && inPane.every((s) => off(s.key));
+      pn.setStretchFactor(allOff ? 0.001 : (p.paneStretch?.[i] ?? (i === 0 ? 1 : 0.25)));
+    });
+
+    // options (cheap signature compare; functions by identity are not compared)
+    const firstInPane = new Set<number>();
+    for (const s of p.series) {
+      const l = map.get(s.key)!;
+      const pane = s.pane ?? 0;
+      const lv = s.lastValue ?? (s.kind !== "histogram" && !firstInPane.has(pane));
+      firstInPane.add(pane);
+      const sig = JSON.stringify([s.color, s.colors, s.width, s.lineStyle, s.base, lv, off(s.key), s.options, s.margins]);
+      if (sig !== l.sig) {
+        l.api.applyOptions(seriesOptions(s, lv, !off(s.key)) as never);
+        if (s.margins) l.api.priceScale().applyOptions({ scaleMargins: s.margins });
+        l.sig = sig;
+      }
+      l.def = s;
+    }
+
+    // interval switched and the data is still the old one: clear at once, wait for the new
+    const refs = p.series.map((s) => s.data);
+    const dataSame = refs.length === dataRefs.current.length && refs.every((r, i) => r === dataRefs.current[i]);
+    let wait = awaiting;
+    if (p.interval !== ivRef.current) {
+      ivRef.current = p.interval;
+      needFit.current = true;
+      if (dataSame && refs.some((r) => r.length)) wait = true;
+    } else if (wait && !dataSame) wait = false;
+    if (p.resetKey !== resetRef.current) {
+      resetRef.current = p.resetKey;
+      needFit.current = true;
+    }
+    dataRefs.current = refs;
+    if (wait !== awaiting) setAwaiting(wait);
+    const blank = wait || !!p.loading;
+
+    // data
+    let changed = false;
+    for (const s of p.series) {
+      const l = map.get(s.key)!;
+      const data = blank ? EMPTY : (s.data as readonly (ExPoint | ExOhlc)[]);
+      if (data === l.data) continue;
+      changed = true;
+      const from = tailFrom(l.data, data);
+      if (from < 0) {
+        l.api.setData(data.map(toLwc) as never);
+        l.byTime = new Map(data.map((d) => [d.time, d]));
+        if (s.kind === "candles" && data.length) {
+          const mm = minMoveFor((data[data.length - 1] as ExOhlc).close);
+          l.api.applyOptions({ priceFormat: { type: "custom", formatter: defaultFormat(s), minMove: mm } } as never);
+        }
+      } else {
+        for (let i = from; i < data.length; i++) {
+          if (l.data && data[i] === l.data[i]) continue;
+          l.api.update(toLwc(data[i]!) as never);
+          l.byTime.set(data[i]!.time, data[i]!);
+        }
+      }
+      l.data = data;
+    }
+    if (changed) {
+      if (blank) needFit.current = true;
+      else if (needFit.current && [...map.values()].some((l) => l.data?.length)) {
+        needFit.current = false;
+        fitView();
+      }
+      hov.set({ v: hov.get().v + 1 });
+    }
+  });
+
+  // ---- markers (one plugin per series), hidden while bars are dense ----
+  useLayoutEffect(() => {
+    const map = live.current;
+    const by = new Map<string, SeriesMarker<Time>[]>();
+    if (!dense && !awaiting && !p.loading)
+      for (const m of p.markers ?? []) {
+        // a marker needs its bar in the series (a fill before the first bar, or in a bar not drawn yet, waits)
+        if (off(m.key) || off(m.series) || !map.get(m.series)?.byTime.has(m.time)) continue;
+        const list = by.get(m.series) ?? [];
+        list.push({
+          time: sec(m.time),
+          position: m.position ?? (m.price != null ? "atPriceMiddle" : "inBar"),
+          price: m.price,
+          color: m.color,
+          shape: m.shape ?? "circle",
+          size: m.size ?? 0.7,
+          text: m.text,
+        } as SeriesMarker<Time>);
+        by.set(m.series, list);
+      }
+    for (const [k, l] of map) {
+      const list = (by.get(k) ?? []).sort((a, b) => (a.time as number) - (b.time as number));
+      let api = markersApi.current.get(k);
+      if (!api && !list.length) continue;
+      if (!api) markersApi.current.set(k, (api = createSeriesMarkers(l.api, [], { autoScale: false })));
+      api.setMarkers(list);
+    }
+  }, [p.markers, dense, awaiting, p.loading, off, structure]);
+
+  // ---- price lines ----
+  useLayoutEffect(() => {
+    for (const [s, pl] of lines.current) s.removePriceLine(pl);
+    lines.current = [];
+    if (awaiting || p.loading) return;
+    for (const pl of p.priceLines ?? []) {
+      const l = live.current.get(pl.series);
+      if (!l || off(pl.key) || !Number.isFinite(pl.price)) continue;
+      lines.current.push([
+        l.api,
+        l.api.createPriceLine({
+          price: pl.price,
+          color: pl.color,
+          lineWidth: (pl.width ?? 1) as 1,
+          lineStyle: STYLE[pl.style ?? "dashed"],
+          title: pl.title ?? "",
+          axisLabelVisible: pl.axisLabel ?? true,
+          ...(pl.labelColor && { axisLabelColor: pl.labelColor }),
+          ...(pl.labelTextColor && { axisLabelTextColor: pl.labelTextColor }),
+        }),
+      ]);
+    }
+  }, [p.priceLines, awaiting, p.loading, off, structure]);
+
+  // re-measure the panes when their layout may have changed
+  const hiddenKey = hidden.join("|");
+  useEffect(() => {
+    const c = chart.current;
+    const el = host.current;
+    if (!c || !el) return;
+    const id = requestAnimationFrame(() => {
+      const top = el.getBoundingClientRect().top;
+      setPaneTops(c.panes().map((pn) => (pn.getHTMLElement()?.getBoundingClientRect().top ?? top) - top));
+      setAxisW(c.priceScale("right", 0).width() || 64);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [structure, hiddenKey, p.paneStretch?.join(",")]);
+
+  // ---- legend model ----
+  const lookup = useCallback((key: string, t: number) => live.current.get(key)?.byTime.get(t), []);
+  const latest = useCallback(() => {
+    let t = -Infinity;
+    for (const s of p.series) {
+      const d = s.data;
+      if (d.length) t = Math.max(t, d[d.length - 1]!.time);
+    }
+    return Number.isFinite(t) ? t : null;
+  }, [p.series]);
+
+  const legend = useMemo(
+    () => buildLegend(p.series, p.legendExtra ?? [], lookup, touch, tz, step),
+    [p.series, p.legendExtra, lookup, touch, tz, step],
+  );
+
+  const boxRows = useCallback(
+    (t: number): ExBoxRow[] => {
+      if (p.boxRows) return p.boxRows(t);
+      const rows: ExBoxRow[] = [["Time", boxLabel(t, tz, step)]];
+      for (const s of p.series) {
+        if (s.box === false || off(s.key)) continue;
+        const pt = lookup(s.key, t);
+        const fmt = defaultFormat(s);
+        if (s.kind === "candles") {
+          if (!pt || !isOhlc(pt)) continue;
+          const dir = pt.close >= pt.open ? UP : DOWN;
+          rows.push(["Open", fmt(pt.open)], ["High", fmt(pt.high)], ["Low", fmt(pt.low)], ["Close", fmt(pt.close)]);
+          const priceLike = !s.format || s.format === fmtPrice;
+          rows.push(["Chg", priceLike ? num(pt.close - pt.open, priceDecimals(pt.close), true) : fmt(pt.close - pt.open), dir]);
+          if (priceLike) {
+            rows.push(["%Chg", pctText((pt.close - pt.open) / pt.open), dir]);
+            rows.push(["Range", num(((pt.high - pt.low) / pt.low) * 100, 2) + "%"]);
+          }
+        } else {
+          const v = pt && !isOhlc(pt) ? pt.value : null;
+          rows.push([s.label, v == null ? "--" : fmt(v), s.signColor ? signColor(v) : (s.color ?? C.ink)]);
+        }
+      }
+      for (const it of p.legendExtra ?? []) {
+        if (!it.box || off(it.key)) continue;
+        const r = (typeof it.box === "function" ? it.box : it.value)(t);
+        const [txt, col] = Array.isArray(r) ? r : [r, undefined];
+        rows.push([it.label, txt, col ?? it.color]);
+      }
+      return rows;
+    },
+    [p.boxRows, p.series, p.legendExtra, tz, step, off, lookup],
+  );
+
+  // ---- chips ----
+  const chipItems: (Chip | "|")[] | null =
+    p.chips === true
+      ? p.series.filter((s) => s.toggle !== false).map((s) => ({ key: s.key, label: s.label, color: s.kind === "candles" ? undefined : s.color }))
+      : p.chips || null;
+
+  const anyData = p.series.some((s) => s.data.length);
+  const showLoading = awaiting || !!p.loading;
+  const hasToolbar = !!(p.intervals?.length || p.modes?.length || p.fullscreen || p.toolbarLeft || p.inFullscreen);
+  const onFs = () => {
+    if (typeof p.fullscreen === "function") return p.fullscreen();
+    goFullscreen();
+    setFs(true);
+  };
+
+  const plotStyle: CSSProperties = p.fill || p.inFullscreen ? { flex: 1, minHeight: 0 } : { height: p.height ?? 300 };
+
+  return (
+    <div className={"ex-chart" + (touch ? " touch" : "") + (p.fill || p.inFullscreen ? " fill" : "") + (p.className ? " " + p.className : "")} style={p.style}>
+      {hasToolbar && (
+        <div className="ex-tb">
+          <div className="ex-tb-scroll">
+            {p.toolbarLeft}
+            {!!p.intervals?.length && (
+              <TextToggle className="ex-iv" label="Interval" options={p.intervals} value={p.interval ?? ""} onChange={(v) => p.onInterval?.(v)} />
+            )}
+          </div>
+          {!!p.moreIntervals?.length && (
+            <MoreIntervals options={p.moreIntervals} value={p.interval ?? ""} onChange={(v) => p.onInterval?.(v)} />
+          )}
+          <span className="ex-tb-gap" />
+          {p.modes?.map((m) => <TextToggle key={m.label} label={m.label} options={m.options} value={m.value} onChange={m.onChange} />)}
+          {p.inFullscreen ? (
+            <button type="button" className="ex-icon" onClick={p.onCloseFullscreen} title="Close" aria-label="Close fullscreen">
+              <CloseIcon />
+            </button>
+          ) : (
+            p.fullscreen && (
+              <button type="button" className="ex-icon" onClick={onFs} title="Fullscreen" aria-label="Fullscreen">
+                <FsIcon />
+              </button>
+            )
+          )}
+        </div>
+      )}
+      <div className="ex-plot" ref={plot} style={plotStyle}>
+        <div className="ex-host" ref={host} />
+        {!showLoading && anyData && (
+          <LegendLayer
+            model={legend}
+            hov={hov}
+            latest={latest}
+            tops={paneTops}
+            off={off}
+            toggle={toggle}
+            touch={touch}
+            closed={closed}
+            setClosed={setClosed}
+            axisW={axisW}
+          />
+        )}
+        {touch && !showLoading && <ValueBox hov={hov} rows={boxRows} axisW={axisW} top={(paneTops[0] ?? 0) + 30} host={plot} />}
+        {showLoading ? (
+          <div className="ex-center" style={{ right: axisW }}>
+            Loading
+          </div>
+        ) : (
+          !anyData && (
+            <div className="ex-center" style={{ right: axisW }}>
+              {p.emptyText ?? "No data"}
+            </div>
+          )
+        )}
+        {away && !showLoading && (
+          <button
+            type="button"
+            className="ex-live"
+            style={{ right: axisW + 8, bottom: axisH + 8 }}
+            onClick={() => chart.current?.timeScale().scrollToRealTime()}
+            title="Back to the latest bar"
+            aria-label="Back to the latest bar"
+          >
+            »
+          </button>
+        )}
+      </div>
+      {chipItems && <ChipRow items={chipItems} isOn={(k) => !off(k)} onToggle={toggle} />}
+      {fs && !p.inFullscreen && (
+        <ChartFullscreen title={p.title} onClose={() => setFs(false)}>
+          <ExChart {...p} inFullscreen onCloseFullscreen={() => setFs(false)} fullscreen={false} chartRef={undefined} />
+        </ChartFullscreen>
+      )}
+    </div>
+  );
+}
+
+const EMPTY: readonly (ExPoint | ExOhlc)[] = [];
+
+function pctText(r: number): string {
+  if (!Number.isFinite(r)) return "--";
+  return (r > 0 ? "+" : "") + num(r * 100, 2, false) + "%";
+}
+
+// ================================ legend ================================
+
+interface LegendEntry {
+  key?: string;
+  label: string;
+  color?: string;
+  value: (t: number) => ExValue;
+  title?: string;
+}
+type LegendModel = { pane: number; lines: LegendEntry[][] }[];
+
+function buildLegend(
+  series: ExSeries[],
+  extra: ExLegendItem[],
+  lookup: (key: string, t: number) => ExPoint | ExOhlc | undefined,
+  touch: boolean,
+  tz: TzMode,
+  step: number,
+): LegendModel {
+  const panes = new Map<number, Map<number, LegendEntry[]>>();
+  const add = (pane: number, line: number, e: LegendEntry) => {
+    let m = panes.get(pane);
+    if (!m) panes.set(pane, (m = new Map()));
+    const l = m.get(line) ?? [];
+    l.push(e);
+    m.set(line, l);
+  };
+  // touch: the clock only for intraday bars (the value box has the date)
+  add(0, 1, { label: "", color: C.muted, value: (t) => [touch && step < 86_400_000 ? barLabel(t, tz, step, touch).split(" ").pop()! : barLabel(t, tz, step, touch), C.muted] });
+  const seen = new Set<number>();
+  for (const s of series) {
+    const pane = s.pane ?? 0;
+    const first = !seen.has(pane);
+    seen.add(pane);
+    if (s.legend === false) continue;
+    const line = typeof s.legend === "number" ? s.legend : pane === 0 && !first ? 2 : 1;
+    const fmt = defaultFormat(s);
+    const key = s.toggle === false ? undefined : s.key;
+    if (s.kind === "candles") {
+      const bar = (t: number) => {
+        const p = lookup(s.key, t);
+        return p && isOhlc(p) ? p : null;
+      };
+      const dir = (b: ExOhlc) => (b.close >= b.open ? UP : DOWN);
+      const f = (pick: (b: ExOhlc) => number) => (t: number): ExValue => {
+        const b = bar(t);
+        return b ? [fmt(pick(b)), dir(b)] : "--";
+      };
+      add(pane, line, { label: touch ? "O" : "Open", value: f((b) => b.open) });
+      add(pane, line, { label: touch ? "H" : "High", value: f((b) => b.high) });
+      add(pane, line, { label: touch ? "L" : "Low", value: f((b) => b.low) });
+      add(pane, line, { label: touch ? "C" : "Close", value: f((b) => b.close) });
+      const priceLike = !s.format || s.format === fmtPrice;
+      if (!touch && !priceLike)
+        add(pane, line, {
+          label: "Chg",
+          value: (t) => {
+            const b = bar(t);
+            return b ? [fmt(b.close - b.open), dir(b)] : "--";
+          },
+        });
+      if (!touch && priceLike) {
+        add(pane, line, {
+          label: "Chg",
+          value: (t) => {
+            const b = bar(t);
+            return b ? [pctText((b.close - b.open) / b.open), dir(b)] : "--";
+          },
+        });
+        add(pane, line, {
+          label: "Range",
+          value: (t) => {
+            const b = bar(t);
+            return b ? [num(((b.high - b.low) / b.low) * 100, 2) + "%", dir(b)] : "--";
+          },
+        });
+      }
+      continue;
+    }
+    add(pane, line, {
+      key,
+      label: s.label,
+      color: s.kind === "baseline" || s.kind === "histogram" ? undefined : s.color,
+      value: (t) => {
+        const p = lookup(s.key, t);
+        const v = p && !isOhlc(p) ? p.value : null;
+        if (v == null) return "--";
+        return [fmt(v), s.signColor || s.kind === "baseline" ? signColor(v) : s.kind === "histogram" ? C.ink : (s.color ?? C.ink)];
+      },
+    });
+  }
+  for (const it of extra) add(it.pane ?? 0, it.line ?? 2, { key: it.key, label: it.label, color: it.color, value: it.value, title: it.title });
+  return [...panes.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([pane, m]) => ({ pane, lines: [...m.entries()].sort((a, b) => a[0] - b[0]).map(([, l]) => l) }));
+}
+
+const LegendLayer = memo(function LegendLayer({
+  model,
+  hov,
+  latest,
+  tops,
+  off,
+  toggle,
+  touch,
+  closed,
+  setClosed,
+  axisW,
+}: {
+  model: LegendModel;
+  hov: HoverStore;
+  latest: () => number | null;
+  tops: number[];
+  off: (k: string | undefined) => boolean;
+  toggle: (k: string) => void;
+  touch: boolean;
+  closed: boolean;
+  setClosed: (v: boolean) => void;
+  axisW: number;
+}) {
+  const h = useSyncExternalStore(hov.sub, hov.get);
+  const t = h.t ?? latest();
+  if (t == null) return null;
+  return (
+    <>
+      {model.map(({ pane, lines }) => {
+        if (tops[pane] == null) return null;
+        // a folded pane (every series hidden) shows no legend
+        return (
+          <div key={pane} className="ex-legend" style={{ top: tops[pane]! + 4, maxWidth: `calc(100% - ${axisW + 16}px)` }}>
+            {lines.map((items, i) => {
+              if (pane === 0 && i > 0 && closed) return null;
+              const shown = touch ? items.filter((it) => !off(it.key)) : items;
+              if (!shown.length) return null;
+              return (
+                <div key={i} className="ex-lg-line">
+                  {pane === 0 && lines.length > 1 && (
+                    <span
+                      className={"ex-chev" + (i === 0 ? (closed ? " closed" : "") : " blank")}
+                      onClick={i === 0 ? () => setClosed(!closed) : undefined}
+                      role={i === 0 ? "button" : undefined}
+                      aria-label={i === 0 ? (closed ? "Show all legend lines" : "Show the first legend line only") : undefined}
+                    >
+                      {i === 0 ? "⌄" : ""}
+                    </span>
+                  )}
+                  {shown.map((it, j) => {
+                    const r = it.value(t);
+                    const [txt, col] = Array.isArray(r) ? r : [r, undefined];
+                    const isOff = off(it.key);
+                    return (
+                      <span
+                        key={j}
+                        className={"ex-lg-it" + (it.key ? " tog" : "") + (isOff ? " off" : "")}
+                        onClick={it.key ? () => toggle(it.key!) : undefined}
+                        title={it.title ?? (it.key ? "Click to hide or show" : undefined)}
+                      >
+                        {it.label && <span className="ex-lg-l">{it.label}</span>}
+                        <span className="ex-lg-v" style={{ color: col ?? it.color ?? C.ink }}>
+                          {txt}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
+// ================================ More ▾ ================================
+
+function MoreIntervals({ options, value, onChange }: { options: Option[]; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const cur = options.find((o) => o.value === value);
+  return (
+    <div className="ex-more" ref={box}>
+      <button type="button" className={"ex-more-btn" + (cur ? " on" : "")} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)}>
+        {cur ? cur.label : "More"} <span className="ex-caret">▾</span>
+      </button>
+      {open && (
+        <div className="ex-more-menu" role="menu">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={o.value === value}
+              className={o.value === value ? "on" : ""}
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================================ touch value box ================================
+
+function ValueBox({
+  hov,
+  rows,
+  axisW,
+  top,
+  host,
+}: {
+  hov: HoverStore;
+  rows: (t: number) => ExBoxRow[];
+  axisW: number;
+  top: number;
+  host: { current: HTMLDivElement | null };
+}) {
+  const h = useSyncExternalStore(hov.sub, hov.get);
+  if (h.t == null) return null;
+  const w = host.current?.clientWidth ?? 0;
+  // on the side away from the finger
+  const left = h.x > (w - axisW) / 2;
+  return (
+    <div className="ex-box fig" style={{ top, ...(left ? { left: 6 } : { right: axisW + 6 }) }}>
+      {rows(h.t).map(([l, v, c], i) => (
+        <div key={i}>
+          <span>{l}</span>
+          <span style={{ color: c ?? C.ink }}>{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ================================ icons ================================
+
+function FsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" />
+    </svg>
+  );
+}
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M2 2l10 10M12 2L2 12" />
+    </svg>
+  );
+}
+
+// ================================ data helpers ================================
+
+/** Candles → ExOhlc points (the same objects: a Candle already is one). */
+export const candlePoints = <T extends ExOhlc>(bars: readonly T[]): readonly T[] => bars;
+
+const volCache = [new WeakMap<object, ExPoint>(), new WeakMap<object, ExPoint>()];
+/**
+ * A volume histogram from candles, coloured by the bar's direction at 45 % alpha; `quote` multiplies by the
+ * close (quote volume). Cached per candle object, so a live tail keeps earlier points' identity.
+ */
+export function volumePoints(bars: readonly (ExOhlc & { volume: number })[], quote = false): ExPoint[] {
+  const cache = volCache[quote ? 1 : 0]!;
+  return bars.map((b) => {
+    let p = cache.get(b);
+    if (!p) cache.set(b, (p = { time: b.time, value: quote ? b.volume * b.close : b.volume, color: rgba(b.close >= b.open ? UP : DOWN, 0.45) }));
+    return p;
+  });
+}
+
+const closeCache = new WeakMap<object, ExPoint>();
+/** A line on closes (the `Line` interval mode), cached per candle. */
+export function closePoints(bars: readonly ExOhlc[]): ExPoint[] {
+  return bars.map((b) => {
+    let p = closeCache.get(b);
+    if (!p) closeCache.set(b, (p = { time: b.time, value: b.close }));
+    return p;
+  });
+}

@@ -44,6 +44,24 @@ export function usdShort(v: number | null | undefined): string {
   return signed(s, v, false);
 }
 
+/**
+ * Large aggregates the exchange way, uppercase suffix: 950.12, 9,501.00 → 9.50K, 267.20M, 1.23B, 4.10T.
+ * `d` decimals in every range (under a thousand too); `sign` adds + to a positive figure. For volumes,
+ * notionals and counts in legends, ticker strips and lists. Unknown is the dash.
+ */
+export function compact(v: number | null | undefined, d = 2, sign = false): string {
+  if (v == null || !Number.isFinite(v)) return DASH;
+  const a = Math.abs(v);
+  let s: string;
+  if (a >= 1e12) s = fmtFixed(a / 1e12, d) + "T";
+  else if (a >= 1e9) s = fmtFixed(a / 1e9, d) + "B";
+  else if (a >= 1e6) s = fmtFixed(a / 1e6, d) + "M";
+  else if (a >= 1e3) s = fmtFixed(a / 1e3, d) + "K";
+  else s = fmtFixed(a, d);
+  if (Number(s.replace(/[^0-9.]/g, "")) === 0) return s;
+  return signed(s, v, sign);
+}
+
 /** USD always signed (PnL, gaps, transfers). */
 export const pnl = (v: number | null | undefined) => usd(v, true);
 

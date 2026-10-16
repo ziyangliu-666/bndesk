@@ -1,0 +1,669 @@
+/* ex/: exchange-style chart frame and controls, in bndesk's pure-black palette (styles.css tokens). */
+
+/* ---------- chart frame ---------- */
+.ex-chart {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+}
+.ex-chart.fill {
+  height: 100%;
+  min-height: 0;
+}
+.ex-tb {
+  position: relative;
+  z-index: 6;
+  min-width: 0;
+  flex: none;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.ex-chart.touch .ex-tb {
+  height: 40px;
+  padding: 0 4px 0 2px;
+}
+.ex-tb-gap {
+  flex: 1;
+}
+/* intervals (and left content) scroll sideways inside the toolbar rather than widen the page */
+.ex-tb-scroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ex-tb-scroll::-webkit-scrollbar {
+  display: none;
+}
+.ex-more {
+  position: relative;
+  flex: none;
+}
+.ex-more-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 3px 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ex-more-btn:hover,
+.ex-more-btn[aria-expanded="true"] {
+  color: var(--ink-2);
+}
+.ex-more-btn.on {
+  color: var(--ink);
+}
+.ex-caret {
+  font-size: 10px;
+}
+.ex-chart.touch .ex-more-btn {
+  font-size: 13px;
+  padding: 8px 7px;
+}
+.ex-more-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(44px, auto));
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--raised);
+}
+.ex-more-menu button {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.ex-chart.touch .ex-more-menu button {
+  height: 40px;
+  font-size: 13px;
+}
+.ex-more-menu button:hover {
+  color: var(--ink);
+}
+.ex-more-menu button.on {
+  color: var(--ink);
+  background: #232a35;
+}
+.ex-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ex-icon:hover {
+  color: var(--ink);
+}
+.ex-chart.touch .ex-icon {
+  width: 40px;
+  height: 40px;
+}
+.ex-plot {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+}
+.ex-host {
+  position: absolute;
+  inset: 0;
+}
+.ex-chart.touch .ex-host {
+  /* a vertical swipe scrolls the page; lightweight-charts takes the sideways drags and the pinch */
+  touch-action: pan-y;
+}
+
+/* in-plot legend: grey label, value in the series colour, on a scrim only behind the text */
+.ex-legend {
+  position: absolute;
+  left: 6px;
+  z-index: 3;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 18px;
+}
+.ex-chart.touch .ex-legend {
+  font-size: 11px;
+  line-height: 16px;
+  left: 4px;
+}
+.ex-lg-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  padding: 0 4px 0 2px;
+  border-radius: 2px;
+  background: rgba(7, 9, 12, 0.82);
+  pointer-events: auto;
+}
+.ex-chart.touch .ex-lg-line {
+  column-gap: 8px;
+}
+.ex-lg-it {
+  display: inline-flex;
+  gap: 4px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.ex-lg-it.tog {
+  cursor: pointer;
+}
+.ex-lg-it.tog:hover .ex-lg-l {
+  color: var(--ink-2);
+}
+.ex-lg-it.off {
+  opacity: 0.4;
+}
+.ex-lg-it.off .ex-lg-v {
+  text-decoration: line-through;
+}
+.ex-lg-l {
+  color: var(--muted);
+}
+.ex-chev {
+  width: 12px;
+  flex: none;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transform: translateY(-2px);
+}
+.ex-chev.closed {
+  transform: rotate(-90deg);
+}
+.ex-chev.blank {
+  cursor: default;
+}
+
+/* touch value box, on the side away from the finger */
+.ex-box {
+  position: absolute;
+  z-index: 5;
+  min-width: 132px;
+  max-width: 60%;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 11px;
+  line-height: 17px;
+  pointer-events: none;
+}
+.ex-box div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: nowrap;
+}
+.ex-box div span:first-child {
+  color: var(--muted);
+}
+
+.ex-center {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 26px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* >> back to the latest bar */
+.ex-live {
+  position: absolute;
+  z-index: 4;
+  width: 24px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ex-live:hover {
+  color: var(--ink);
+}
+.ex-chart.touch .ex-live {
+  width: 32px;
+  height: 28px;
+}
+
+/* ---------- text toggles (intervals, modes) ---------- */
+.ex-tt {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.ex-tt button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 3px 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ex-tt button:hover {
+  color: var(--ink-2);
+}
+.ex-tt button.on {
+  color: var(--ink);
+}
+.ex-chart.touch .ex-tt button {
+  font-size: 13px;
+  padding: 8px 7px;
+}
+.ex-tt-div {
+  width: 1px;
+  height: 12px;
+  margin: 0 6px;
+  background: var(--rule);
+}
+.ex-tt button:focus-visible,
+.ex-tab:focus-visible,
+.ex-chip:focus-visible,
+.ex-icon:focus-visible,
+.ex-live:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ---------- tabs: ink + short accent underline ---------- */
+.ex-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  height: 40px;
+}
+.ex-tabs.sm {
+  gap: 16px;
+  height: 32px;
+}
+.ex-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ex-tabs.sm .ex-tab {
+  font-size: 12px;
+}
+.ex-tab:hover {
+  color: var(--ink-2);
+}
+.ex-tab.on {
+  color: var(--ink);
+}
+.ex-tab.on::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 16px;
+  height: 2px;
+  margin-left: -8px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.ex-tab-n {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ex-tabs-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---------- chip row: flat, segmented ---------- */
+.ex-chips {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ex-chips::-webkit-scrollbar {
+  display: none;
+}
+.ex-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #10141a;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ex-chip:hover {
+  color: var(--ink-2);
+}
+.ex-chip.on {
+  background: #232a35;
+  color: var(--ink);
+}
+.ex-chart.touch .ex-chip,
+.touch .ex-chip {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.ex-chip-sw {
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+}
+.ex-chip:not(.on) .ex-chip-sw {
+  opacity: 0.35;
+}
+.ex-chip-div {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--rule);
+}
+
+/* ---------- ticker strip: label over value ---------- */
+.ex-ticker {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .ex-ticker {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
+.ex-ticker-lead {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-right: 24px;
+}
+.ex-ticker-title {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 16px;
+}
+.ex-ticker-big {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+  color: var(--ink);
+}
+.ex-ticker-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 16px;
+}
+.ex-ticker-grp {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  height: 32px;
+  padding: 0 20px;
+  border-left: 1px solid var(--rule);
+}
+.ex-ticker-lead + .ex-ticker-grp,
+.ex-ticker-grp:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+.ex-pair {
+  display: flex;
+  flex-direction: column;
+}
+.ex-pair-l {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.ex-pair-l.dotted {
+  text-decoration: underline dotted rgba(138, 148, 165, 0.6);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.ex-pair-v {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink);
+}
+.ex-ticker.md .ex-pair-v {
+  font-size: 14px;
+  line-height: 20px;
+}
+.ex-ticker .up {
+  color: var(--up);
+}
+.ex-ticker .down {
+  color: var(--down);
+}
+.ex-ticker .warn {
+  color: var(--warn);
+}
+.ex-ticker .crit {
+  color: var(--crit);
+}
+.ex-ticker .muted {
+  color: var(--muted);
+}
+
+/* ---------- footer ---------- */
+.ex-foot {
+  flex: none;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--ground);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.ex-foot-vr {
+  flex: none;
+  width: 1px;
+  height: 12px;
+  background: var(--rule);
+}
+.ex-foot-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ex-foot-conn.up {
+  color: var(--up);
+}
+.ex-foot-conn.warn,
+.ex-warn {
+  color: var(--warn);
+}
+.ex-foot-conn.crit {
+  color: var(--crit);
+}
+.ex-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ex-ink {
+  color: var(--ink);
+}
+.ex-foot-tz {
+  display: inline-flex;
+  gap: 2px;
+}
+.ex-foot-tz button {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ex-foot-tz button.on {
+  color: var(--ink);
+}
+.ex-marq {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ex-marq-in {
+  display: inline-flex;
+  animation: ex-marq 60s linear infinite;
+}
+.ex-marq:hover .ex-marq-in {
+  animation-play-state: paused;
+}
+.ex-marq-copy {
+  display: inline-flex;
+}
+.ex-marq-it {
+  padding: 0 11px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ex-marq-it .up {
+  color: var(--up);
+}
+.ex-marq-it .down {
+  color: var(--down);
+}
+@keyframes ex-marq {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ex-marq-in {
+    animation: none;
+  }
+  .ex-marq-copy {
+    display: none;
+  }
+}
+.ex-tv {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+}
+.ex-tv:hover {
+  color: var(--ink);
+}
+
+/* ---------- fullscreen ---------- */
+.ex-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.ex-fs-head {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule);
+}
+.ex-fs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
