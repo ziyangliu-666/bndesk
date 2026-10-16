@@ -467,6 +467,7 @@ pub fn page_html(error: &str) -> String {
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>bndesk</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%230B0E11%22/%3E%3Crect x=%227%22 y=%229%22 width=%2218%22 height=%225%22 fill=%22%232EBD85%22/%3E%3Crect x=%227%22 y=%2218%22 width=%2218%22 height=%225%22 fill=%22%23F6465D%22/%3E%3C/svg%3E">
 <style>
 html,body{{height:100%;margin:0;background:#000;color:#f5f7fa;font:14px "IBM Plex Sans",system-ui,sans-serif}}
 main{{height:100%;display:grid;place-items:center}}
@@ -523,11 +524,11 @@ mod tests {
         // sha256 of the login page bodies
         assert_eq!(
             sha256_hex(&page_html("")),
-            "02548f38e7433aa18bfe0e5242718b90285d5a52b9f72cefdaf7200798eb92a2"
+            "797d2a88533294e9d83265105715c57bf8a7cc33e789ae22a06e58aeec5fc9d9"
         );
         assert_eq!(
             sha256_hex(&page_html("Wrong password.")),
-            "90a21a7719f45ff7b71d94fef4b8d61ee9f5a6a146f8f145d73c100e057d0b5e"
+            "642f5b0739a79e1360b59a2b2fc0c0260298eaf021648febdeedc8166cb3994f"
         );
     }
 
