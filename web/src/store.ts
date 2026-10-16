@@ -129,7 +129,10 @@ function upsertFills(cur: Fill[], incoming: Fill[]): { fills: Fill[]; add: Fill[
     const merged = add.concat(next);
     // keep newest first even if a late fill arrives out of order
     merged.sort((a, b) => b.ts - a.ts);
-    return { fills: merged.slice(0, MAX_FILLS), add, update, remove: merged.slice(MAX_FILLS) };
+    // listeners hear of the rows they have: added ones that made the cut, held ones that did not
+    const dropped = merged.slice(MAX_FILLS);
+    const gone = new Set(dropped.map((f) => f.id));
+    return { fills: merged.slice(0, MAX_FILLS), add: add.filter((f) => !gone.has(f.id)), update, remove: dropped.filter((f) => idx.has(f.id)) };
   }
   return { fills: next, add, update, remove: [] };
 }

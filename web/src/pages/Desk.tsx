@@ -15,7 +15,7 @@ import "./desk/desk.css";
 
 const LADDER_KEY = "desk.ladder";
 
-function lastLadder(): Instrument | null {
+function readLadder(): Instrument | null {
   try {
     const v = JSON.parse(localStorage.getItem(LADDER_KEY) ?? "null") as Instrument | null;
     return v && typeof v.symbol === "string" ? v : null;
@@ -23,12 +23,17 @@ function lastLadder(): Instrument | null {
     return null;
   }
 }
+/** The last instrument picked, read once and kept here as it changes (not read from storage in a selector,
+ *  which runs on every store update). */
+let lastPicked: Instrument | null | undefined;
+const lastLadder = () => (lastPicked === undefined ? (lastPicked = readLadder()) : lastPicked);
 
 /** The ladder's instrument with nothing picked: the last one picked while it is still quoted, else the one with
  *  the most open orders. */
 function useLadderInstrument(sel: Instrument | null): Instrument | null {
   useEffect(() => {
     if (!sel) return;
+    lastPicked = sel;
     try {
       localStorage.setItem(LADDER_KEY, JSON.stringify(sel));
     } catch {

@@ -42,7 +42,27 @@ function emit(k: string) {
   listeners.get(k)?.forEach((f) => f());
 }
 
+/** When each instrument's stats last came, local clock: stats older than STALE_MS are dropped (shown as --, not
+ *  as live), and an instrument nobody shows any more forgets its stats. */
+const got = new Map<string, number>();
+const STALE_MS = 60_000;
+let sweeper: ReturnType<typeof setInterval> | undefined;
+function sweep() {
+  const now = Date.now();
+  for (const [k, t] of got)
+    if (now - t > STALE_MS) {
+      got.delete(k);
+      if (data.delete(k)) emit(k);
+    }
+  if (!got.size) {
+    clearInterval(sweeper);
+    sweeper = undefined;
+  }
+}
+
 function put(k: string, x: { c: number; o: number; h: number; l: number; v: number; q: number; E: number }) {
+  got.set(k, Date.now());
+  sweeper ??= setInterval(sweep, 5000);
   data.set(k, {
     last: x.c,
     open: x.o,
@@ -171,7 +191,16 @@ function retain(k: string) {
 function release(k: string) {
   const n = (refs.get(k) ?? 0) - 1;
   if (n > 0) refs.set(k, n);
-  else refs.delete(k);
+  else {
+    refs.delete(k);
+    // its stream stops: what it last said would read as live on a later mount (a quick re-subscribe, a list
+    // re-filtered, keeps it)
+    setTimeout(() => {
+      if (refs.has(k)) return;
+      data.delete(k);
+      got.delete(k);
+    }, 5000);
+  }
   if (MOCK) {
     if (!refs.size) {
       clearInterval(mockTimer);
