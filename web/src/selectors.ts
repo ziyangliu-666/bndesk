@@ -55,34 +55,6 @@ export function useHedgePnl(): (r: SymbolRow) => number | null {
 /** The legs at call time, for AG Grid getters. */
 export const legPnlNow = () => legPnl(useStore.getState().snap?.exposure.hedge_day?.legs);
 
-export interface InstrumentPnl {
-  symbol: string;
-  venue: Venue;
-  /** What it made today (instPnl): a spot market's Trading PnL, a perp's hedge leg. USDT. */
-  pnl: number;
-  fills: number;
-}
-
-/**
- * Each instrument's P&L today (instPnl: Trading PnL, or a perp's hedge leg), largest first by size: the instruments that traded today or carry a
- * P&L (dust left out). `limit` caps the list.
- */
-export function dayPnlList(symbols: readonly SymbolRow[] | undefined, legs: ReadonlyMap<string, number | null>, limit = Infinity): InstrumentPnl[] {
-  return (symbols ?? [])
-    .map((r) => ({ r, pnl: instPnl(r, legs) }))
-    .filter(({ r, pnl }) => !r.dust && (r.fills_day > 0 || Math.abs(pnl) >= 0.005))
-    .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
-    .slice(0, limit)
-    .map(({ r, pnl }) => ({ symbol: r.symbol, venue: r.venue, pnl, fills: r.fills_day }));
-}
-
-/** dayPnlList from the store (re-derived when the symbols or the legs change). */
-export function useDayPnlList(limit = Infinity): InstrumentPnl[] {
-  const symbols = useStore((s) => s.snap?.symbols);
-  const legs = useLegPnl();
-  return useMemo(() => dayPnlList(symbols, legs, limit), [symbols, legs, limit]);
-}
-
 const key = (symbol: string, venue: Venue) => `${venue}:${symbol}`;
 
 /** Fills counted as "recent" for the busiest ranking. */

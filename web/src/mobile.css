@@ -212,29 +212,7 @@ html.is-phone body {
   color: var(--warn);
 }
 .m-pill.stale {
-  color: var(--down);
-}
-.m-led {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  border-radius: 50%;
-  background: currentColor;
-}
-.m-led.live {
-  background: var(--up);
-}
-.m-led.lag,
-.m-led.reconnecting,
-.m-led.connecting {
-  background: var(--warn);
-}
-.m-led.reconnecting,
-.m-led.connecting {
-  animation: pulse 1s ease-in-out infinite;
-}
-.m-led.stale {
-  background: var(--down);
+  color: var(--crit);
 }
 /* ---- page ---- */
 .m-main {
@@ -252,12 +230,6 @@ html.is-phone body {
   padding: 72px 24px;
   color: var(--ink-2);
   text-align: center;
-}
-.m-waiting .m-led {
-  width: 9px;
-  height: 9px;
-  color: var(--warn);
-  animation: pulse 1s ease-in-out infinite;
 }
 .m-loading {
   height: 40svh;
@@ -333,34 +305,6 @@ html.is-phone body {
 .m-tab:active {
   opacity: 0.6;
 }
-.m-badge {
-  position: absolute;
-  top: -3px;
-  left: 30px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  border-radius: 9px;
-  border: 2px solid var(--ground);
-  box-sizing: content-box;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  /* warnings only: a quiet count in ink on a raised disc with a muted ring (amber read as an exchange's
-     yellow); a critical alert makes it red */
-  background: var(--raised);
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--muted);
-}
-.m-badge.crit {
-  box-shadow: none;
-  background: var(--crit);
-  color: #fff;
-}
-
 /* ---- section: heading over rows on the ground; a full-width hairline above each but the first ----
    No cards. A section's body (.m-body) bleeds to the screen edges so tap highlights do; everything inside it
    pads itself back to the page's left line, and rows are split by rules inset to that line. */
@@ -518,14 +462,10 @@ a.m-row:active,
   margin: 0 -4px;
   padding: 0 4px;
 }
-/* a defined term: dotted underline, the phone's sign that a tap explains it. Whole px, so it never falls
-   between device pixels */
+/* a defined term: a plain label; a tap opens its definition sheet (no underline: decoration on every label
+   read as noise) */
 .m-defined {
-  text-decoration: underline dotted;
-  text-decoration-color: rgba(138, 148, 165, 0.6);
-  text-decoration-thickness: 1px;
-  text-decoration-skip-ink: none;
-  text-underline-offset: 3px;
+  text-decoration: none;
 }
 /* labels that clip for an ellipsis keep room below the text for the underline (no change to the layout) */
 .m-split-label,
@@ -1200,10 +1140,6 @@ a.m-row:active,
   gap: 12px;
   padding: 4px 0 14px;
 }
-.m-status-head .m-led {
-  width: 12px;
-  height: 12px;
-}
 .m-status-word {
   font-size: 20px;
   font-weight: 500;
@@ -1214,12 +1150,6 @@ a.m-row:active,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .m-led.live,
-  .m-led.reconnecting,
-  .m-led.connecting,
-  .m-waiting .m-led {
-    animation: none;
-  }
   .m-app .m-main * {
     transition: none;
   }

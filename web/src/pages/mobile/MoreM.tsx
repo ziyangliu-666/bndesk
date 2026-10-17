@@ -58,7 +58,7 @@ export function MoreM() {
         <Row
           dense
           title="Data"
-          value={<span className={fresh.state === "live" ? "up" : "warn-text"}>{fresh.state === "live" ? "Live" : fresh.state === "connecting" ? "Connecting" : fresh.state === "reconnecting" ? "Disconnected" : "Stale"}</span>}
+          value={<span className={fresh.state === "live" ? "" : "warn-text"}>{fresh.state === "live" ? "Live" : fresh.state === "connecting" ? "Connecting" : fresh.state === "reconnecting" ? "Disconnected" : "Stale"}</span>}
           valueSub={fresh.age != null ? `last update ${Math.max(0, Math.round(fresh.age / 1000))} s ago` : undefined}
         />
         {session?.next_event_at != null && (

@@ -422,12 +422,6 @@ kbd {
 .state.na {
   color: var(--muted);
 }
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
 .fee {
   margin-right: 10px;
 }

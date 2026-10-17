@@ -40,21 +40,24 @@ const WORD: Record<Fresh, string> = {
 };
 
 function pillText(state: Fresh, age: number | null): string {
-  if (state === "lag" && age != null) return `Lag ${span(age)}`;
-  if (state === "stale" && age != null) return `Stale ${span(age)}`;
+  if ((state === "lag" || state === "stale") && age != null) return `Stale ${span(age)}`;
+  if (state === "reconnecting") return "Disconnected";
   return WORD[state];
 }
 
-/** Always in the top bar: the connection's state in a word, with a dot. Tap for details and Reconnect now. */
+/** In the top bar only while the figures are not live: how stale they are, or that the connection is down, in
+ *  words (no dot). Tap for details and Reconnect now. Nothing at all while updates arrive. */
 export function StatusPill() {
   const { state, age } = useFreshness();
   const [open, setOpen] = useState(false);
+  if (state === "live" && !open) return null;
   return (
     <>
-      <UnstyledButton className={"m-pill m-fig " + state} onClick={() => setOpen(true)} aria-label={`Connection: ${pillText(state, age)}`}>
-        <span className={"m-led " + state} />
-        {pillText(state, age)}
-      </UnstyledButton>
+      {state !== "live" && (
+        <UnstyledButton className={"m-pill m-fig " + state} onClick={() => setOpen(true)} aria-label={`Connection: ${pillText(state, age)}`}>
+          {pillText(state, age)}
+        </UnstyledButton>
+      )}
       <StatusSheet opened={open} onClose={() => setOpen(false)} />
     </>
   );
@@ -84,7 +87,6 @@ function StatusSheet({ opened, onClose }: { opened: boolean; onClose: () => void
   return (
     <Sheet opened={opened} onClose={onClose} title="Connection">
       <div className="m-status-head">
-        <span className={"m-led " + state} />
         <div>
           <div className="m-status-word">{WORD[state]}</div>
           <div className="m-status-why">{why}</div>

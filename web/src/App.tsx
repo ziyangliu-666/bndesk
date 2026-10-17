@@ -2,9 +2,8 @@ import { Suspense, useDeferredValue, useEffect } from "react";
 import { Header, PAGE_KEYS } from "./components/Header";
 import { AlertBanner } from "./components/AlertBanner";
 import { DemoNotice } from "./components/DemoNotice";
-import { deskPage, selectInstrument, useStore } from "./store";
+import { deskPage, useStore } from "./store";
 import { StatusFooter } from "./components/ex/StatusFooter";
-import type { Venue } from "./protocol";
 import { useIsMobile } from "./hooks";
 import { MobileShell } from "./components/mobile/MobileShell";
 import { LoadBoundary } from "./components/LoadBoundary";
@@ -94,9 +93,8 @@ function DesktopApp() {
           </LoadBoundary>
         )}
       </main>
-      <StatusFooter onInstrument={openFromFooter} />
+      <StatusFooter />
     </div>
   );
 }
 
-const openFromFooter = (symbol: string, venue: Venue) => selectInstrument({ symbol, venue });

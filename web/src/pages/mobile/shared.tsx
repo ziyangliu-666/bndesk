@@ -14,7 +14,6 @@ import {
   tone,
   useMoney,
 } from "../../components/mobile";
-import { Dot } from "../../components/ui";
 import { bps, hms, int, num, price, stepName } from "../../format";
 import { useQty } from "../../mask";
 import { usePageVisible } from "../../hooks";
@@ -413,7 +412,6 @@ export function FeedRow({ f, now, alerts }: { f: Feed; now: number; alerts?: rea
     (why.length ? `\n\nAlert: ${why.map((a) => a.text).join("; ")}.` : "");
   return (
     <ListRow
-      dot={<Dot ok={st === "up"} warn={st === "silent" || st === "flapping"} />}
       title={f.name}
       tone={st === "down" ? "crit" : bad ? "warn" : undefined}
       subtitle={[KIND[f.kind], detail].filter(Boolean).join(" · ")}
@@ -531,13 +529,12 @@ export function KillBar({ e }: { e: Engine }) {
   );
 }
 
-/** Engine state in a word with its dot: "running", "down", "killed". */
+/** Engine state in a word: "running", "down", "killed". */
 export function EngineState({ e }: { e: Engine }) {
   const word = !e.up ? "down" : e.kill ? "killed" : e.state;
   const ok = e.up && !e.kill && e.state === "running";
   return (
     <span className={"m-ops-state " + (ok ? "" : !e.up || e.kill ? "m-ops-crit" : "warn-text")}>
-      <Dot ok={ok} warn={e.up && !e.kill} />
       {word}
     </span>
   );

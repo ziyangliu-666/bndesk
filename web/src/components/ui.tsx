@@ -62,11 +62,7 @@ export function LevelIcon({ level, size = 14 }: { level: "info" | "warn" | "crit
   return <IconInfoCircle size={size} color={C.ink2} stroke={2} aria-label="info" />;
 }
 
-export function Dot({ ok, warn }: { ok: boolean; warn?: boolean }) {
-  return <span className="dot" style={{ background: ok ? C.up : warn ? C.warn : C.crit }} />;
-}
-
-/** State word with a dot so it never relies on color alone. */
+/** A state in a word: quiet when all is well, in the warning colours otherwise (the word carries it, no dot). */
 export function StateTag({ state }: { state: string }) {
   const s = state.toLowerCase();
   const ok = ["up", "running", "live", "ok", "connected"].includes(s);
@@ -74,7 +70,6 @@ export function StateTag({ state }: { state: string }) {
   const warn = ["reconnecting", "degraded", "paused", "cooldown", "stale"].includes(s);
   return (
     <span className={"state " + (ok ? "ok" : na ? "na" : warn ? "warn" : "bad")}>
-      {!na && <Dot ok={ok} warn={warn} />}
       {na ? "--" : state}
     </span>
   );

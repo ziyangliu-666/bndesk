@@ -11,7 +11,7 @@ import { titleOf } from "../../pages/mobile";
 import { StatusPill, useFreshness } from "./StatusPill";
 
 /** Sticky top bar: the page title (below a tab's own page, the back chevron and the title are one button),
- *  the alerts bell with its count, and the status pill; while amounts are hidden, a button that shows them
+ *  the alerts bell with its count, and the connection only while it is not live; while amounts are hidden, a button that shows them
  *  again; while the figures are stale, a line saying how old they are; while a critical alert is active, one
  *  line with it (every page). */
 export function TopBar({ route }: { route: Route }) {
@@ -73,7 +73,8 @@ function AsOf() {
   );
 }
 
-/** The alerts bell: a count badge (red when one is critical); a tap opens Alerts over the current tab. */
+/** The alerts bell, the active count as a plain figure beside it (red when one is critical); a tap opens Alerts
+ *  over the current tab. */
 function Bell({ route }: { route: Route }) {
   const { n, crit } = useAlertCount();
   const here = route.page === "alerts" && !route.detail;
@@ -85,7 +86,7 @@ function Bell({ route }: { route: Route }) {
       onClick={() => !here && navigate({ page: "alerts" })}
     >
       <IconBell size={22} stroke={1.6} />
-      {n > 0 && <span className={"m-badge" + (crit ? " crit" : "")}>{n > 99 ? "99+" : n}</span>}
+      {n > 0 && <span className={"m-bell-n m-fig" + (crit ? " crit" : "")}>{n > 99 ? "99+" : n}</span>}
     </UnstyledButton>
   );
 }

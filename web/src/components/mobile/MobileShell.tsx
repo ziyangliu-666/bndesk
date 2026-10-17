@@ -34,7 +34,6 @@ export function MobileShell() {
       <main className="m-main" key={hashOf(route)}>
         {!ready ? (
           <div className="m-waiting">
-            <span className="m-led" />
             Waiting for the first snapshot from the server
           </div>
         ) : (
