@@ -8,6 +8,9 @@ simulate = false            # real public market data + synthetic accounts, no k
 day_start = "00:00"         # UTC, start of the PnL day
 fair_halflife_s = 120
 mark_max_spread_bps = 100  # wider books are valued at the reference-implied fair, not their mid
+# keep_fine_days = 7        # 5 s rows this long, then one a minute
+# keep_days = 365
+# mm_horizon_s = 60         # market making marks each fill this long after it: 1, 10, 60 or 300
 
 # Instruments to track besides those discovered from balances, positions and fills.
 # A reference is optional: with one, markouts are also shown net of the reference's move.
