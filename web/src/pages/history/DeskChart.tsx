@@ -271,6 +271,7 @@ export function DeskChart({
       onInterval={onInterval}
       modes={modes}
       fullscreen
+      legendRest="names"
       title="Desk PnL"
       loading={loading}
       emptyText={error ? "Could not load the history" : "No data in this range"}

@@ -9,7 +9,6 @@ import { AccountsGrid } from "../../components/AccountsGrid";
 import { AlertsList } from "../../components/AlertsList";
 import { OrdersGrid } from "./OrdersGrid";
 import { useHide } from "../../mask";
-import { int } from "../../format";
 
 type Tab = "inventory" | "orders" | "fills" | "accounts" | "alerts";
 const TABS: Tab[] = ["inventory", "orders", "fills", "accounts", "alerts"];
@@ -20,10 +19,6 @@ export function BottomPanel({ sel }: { sel: Instrument | null }) {
   const [basis, setBasis] = useExPref<MarkoutBasis>("desk.bottom", "basis", "net", ["net", "fast", "raw"]);
   const [scope, setScope] = useExPref<string>("desk.bottom", "scope", "all", ["all", "one"]);
   const hide = useHide();
-  const nSym = useStore((s) => (dust ? s.snap?.symbols.filter((r) => !r.dust || r.fills_day > 0).length : s.snap?.symbols.length));
-  const nOrders = useStore((s) => s.snap?.orders.length);
-  const nFills = useStore((s) => s.snap?.summary.fills_day);
-  const nAcc = useStore((s) => s.snap?.accounts.length);
   const alerts = useStore((s) => s.snap?.alerts);
   const hiddenAlerts = useStore((s) => s.hiddenAlerts);
   const nAlerts = useMemo(() => (alerts ?? []).filter((a) => a.active && !isHidden(a, hiddenAlerts)).length, [alerts, hiddenAlerts]);
@@ -57,10 +52,10 @@ export function BottomPanel({ sel }: { sel: Instrument | null }) {
       <div className="dk-head">
         <Tabs
           items={[
-            { value: "inventory", label: "Inventory", count: nSym },
-            { value: "orders", label: "Open orders", count: nOrders },
-            { value: "fills", label: "Fills", count: nFills == null ? null : int(nFills), title: "Today's fills" },
-            { value: "accounts", label: "Accounts", count: nAcc },
+            { value: "inventory", label: "Inventory" },
+            { value: "orders", label: "Open orders" },
+            { value: "fills", label: "Fills", title: "Today's fills" },
+            { value: "accounts", label: "Accounts" },
             { value: "alerts", label: "Alerts", count: nAlerts || null, title: "Active alerts" },
           ]}
           value={tab}

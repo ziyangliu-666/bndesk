@@ -135,6 +135,7 @@ export function AccountsChart({ accounts, only }: { accounts: Account[]; only?: 
         height={only ? 200 : 204}
         fullscreen
         chips={!only}
+        legendRest={only ? "values" : "names"}
         emptyText="No points yet today"
       />
     </div>

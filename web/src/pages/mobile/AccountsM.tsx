@@ -25,7 +25,6 @@ export function AccountsM() {
   const money = useAmt();
   const hide = useHide();
   const open = sm ? sm.equity - sm.pnl_day : null;
-  const nPos = (accounts ?? []).reduce((n, a) => n + a.positions.length, 0);
 
   return (
     <>
@@ -50,7 +49,7 @@ export function AccountsM() {
         items={[
           { value: "accounts", label: "Accounts" },
           { value: "spot", label: "Spot" },
-          { value: "futures", label: "Futures", count: nPos || null },
+          { value: "futures", label: "Futures" },
           { value: "exposure", label: "Exposure" },
         ]}
         value={tab}

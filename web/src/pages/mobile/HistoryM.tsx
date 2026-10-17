@@ -232,6 +232,7 @@ function DeskHistory() {
           resetKey={range + view}
           rightOffset={0.6}
           fullscreen
+          legendRest="names"
           intervals={RANGES}
           interval={range}
           onInterval={(v) => setRange(v as Range)}

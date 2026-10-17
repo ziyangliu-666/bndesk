@@ -26,7 +26,6 @@ type Tab = "orders" | "quotes" | "rates";
 export function OrdersM() {
   const from = useStore((s) => s.route);
   const [tab, setTab] = useExPref<Tab>("m-orders", "tab", "orders", ["orders", "quotes", "rates"]);
-  const n = useStore((s) => s.snap?.orders.length ?? 0);
   const accounts = useLive((s) => s.snap?.accounts, 1000) ?? NO_ACCOUNTS;
   const trading = accounts.filter((a) => a.role !== "master" && (a.open_orders > 0 || a.inventory_value > 1));
   // the busiest rate, so the tab says when a limit is near
@@ -37,7 +36,7 @@ export function OrdersM() {
     <>
       <PageTabs
         items={[
-          { value: "orders", label: "Open orders", count: n || null },
+          { value: "orders", label: "Open orders" },
           { value: "quotes", label: "Quotes" },
           { value: "rates", label: worst >= 0.8 ? <span className={worst >= 1 ? "crit-text" : "warn-text"}>Rate limits</span> : "Rate limits" },
         ]}

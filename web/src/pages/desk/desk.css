@@ -80,17 +80,12 @@
   margin-left: auto;
   align-self: center;
 }
+/* "Perp" after a perp's symbol: plain muted text, no plate (a spot name needs no tag) */
 .dk-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 4px;
-  border-radius: 2px;
-  background: var(--raised);
+  margin-left: 5px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 400;
-  line-height: 16px;
-  vertical-align: 1px;
 }
 .dk-empty {
   padding: 24px 16px;
@@ -332,8 +327,6 @@
   align-self: flex-start;
 }
 .dk-info-it > span.dotted {
-  text-decoration: underline dotted rgba(138, 148, 165, 0.6);
-  text-underline-offset: 3px;
   cursor: help;
 }
 .dk-info-it > b {

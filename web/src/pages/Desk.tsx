@@ -1,7 +1,7 @@
 // The desktop Desk, laid out as an exchange's trade page: the ticker strip on top; the quote ladder at the left,
 // the chart in the centre, the instruments list and the latest fills at the right; the tabbed panel under the
 // chart. Picking an instrument (any row) turns the ticker, chart and ladder into that instrument's; Esc, the ✕
-// in the name slot or the pinned Desk row go back to the desk as a whole.
+// in the name slot or "← Desk" over the chart go back to the desk as a whole.
 import { useEffect, useMemo } from "react";
 import { selectInstrument, useStore, type Instrument } from "../store";
 import { DeskTicker, InstrumentTicker } from "../components/KeyStrip";
@@ -95,7 +95,7 @@ export function Desk() {
               <div className="dk-name-row">
                 <NamePicker sel={sel}>
                   <span className="dk-name-big">{sel.symbol}</span>
-                  <span className="dk-tag">{sel.venue === "usdm" ? "Perp" : "Spot"}</span>
+                  {sel.venue === "usdm" && <span className="dk-tag">Perp</span>}
                 </NamePicker>
                 <button type="button" className="dk-x" onClick={() => selectInstrument(null)} title="Back to the desk (Esc)" aria-label="Back to the desk">
                   ✕

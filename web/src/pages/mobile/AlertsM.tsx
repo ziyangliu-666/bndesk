@@ -31,8 +31,8 @@ export function AlertsM() {
       <PageTabs
         items={[
           { value: "active", label: "Active", count: active.length || null },
-          { value: "cleared", label: "Cleared today", count: cleared.length || null },
-          { value: "hidden", label: "Hidden", count: hidden.length || null },
+          { value: "cleared", label: "Cleared today" },
+          { value: "hidden", label: "Hidden" },
         ]}
         value={tab}
         onChange={setTab}

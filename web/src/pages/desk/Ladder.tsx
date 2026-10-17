@@ -147,7 +147,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
         {inst && (
           <button type="button" className="dk-lad-sym" onClick={() => selectInstrument(inst)} title="Open this instrument">
             {inst.symbol}
-            <span className="dk-tag">{inst.venue === "usdm" ? "Perp" : "Spot"}</span>
+            {inst.venue === "usdm" && <span className="dk-tag">Perp</span>}
           </button>
         )}
       </div>

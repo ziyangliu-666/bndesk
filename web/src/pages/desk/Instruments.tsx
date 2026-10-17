@@ -1,5 +1,6 @@
 // The Desk's instruments list, the market list's place on an exchange's trade page: search, filter tabs,
-// sortable columns, the Desk pinned on top to go back. A click picks the instrument.
+// sortable columns (no desk total: the head carries it; Esc or the ✕ by the name go back). A click picks the
+// instrument.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl, usd } from "../../format";
@@ -43,13 +44,6 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
     });
     return out;
   }, [rows, q, filter, sort, hide]);
-  // the desk's row: the spot inventory's value and the Trading PnL, as the Inventory tab's total
-  const desk = useMemo(() => {
-    let v = 0;
-    let t = 0;
-    for (const r of rows ?? []) if (r.venue === "spot") (v += r.inv_value), (t += r.trading_pnl);
-    return { v, t };
-  }, [rows]);
 
   // a pick from elsewhere (a fill, a grid row, the footer) brings its row into view
   const body = useRef<HTMLDivElement>(null);
@@ -57,11 +51,6 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
   useEffect(() => {
     body.current?.querySelector(".dk-mk-row.sel")?.scrollIntoView({ block: "nearest" });
   }, [selKey]);
-
-  const counts = useMemo(() => {
-    const r = rows ?? [];
-    return { held: r.filter(held).length, quoted: r.filter(quoted).length, perp: r.filter((x) => x.venue === "usdm").length };
-  }, [rows]);
 
   const sortedBy = hide && sort.k !== "symbol" ? "symbol" : sort.k;
   const head = (k: SortKey, label: string, title: string) => (
@@ -97,9 +86,9 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         className="dk-mk-tabs"
         items={[
           { value: "all", label: "All" },
-          { value: "held", label: "Held", count: counts.held, title: "Inventory worth 1 USDT or more" },
-          { value: "quoted", label: "Quoted", count: counts.quoted, title: "With resting orders of ours" },
-          { value: "perp", label: "Perp", count: counts.perp, title: "USD-M perpetuals" },
+          { value: "held", label: "Held", title: "Inventory worth 1 USDT or more" },
+          { value: "quoted", label: "Quoted", title: "With resting orders of ours" },
+          { value: "perp", label: "Perp", title: "USD-M perpetuals" },
         ]}
         value={filter}
         onChange={setFilter}
@@ -110,11 +99,6 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         {head("pnl", "Trading PnL", "Today, USDT: market making + inventory PnL. A perp is the hedge: its leg's P&L, marked hedge")}
       </div>
       <div className="dk-mk-body" ref={body}>
-        <button type="button" className={"dk-mk-row pin" + (sel ? "" : " sel")} onClick={() => selectInstrument(null)} title="The desk as a whole (Esc)">
-          <span className="dk-mk-sym">Desk</span>
-          <span className="fig">{maskNode(hide, usd(desk.v))}</span>
-          <span className={"fig " + (hide ? "" : desk.t > 0.005 ? "up" : desk.t < -0.005 ? "down" : "")}>{maskNode(hide, pnl(desk.t))}</span>
-        </button>
         {list.map((r) => {
           const perp = r.venue === "usdm";
           const tp = perp ? hedgeOf(r) : r.trading_pnl;

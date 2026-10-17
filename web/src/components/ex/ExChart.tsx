@@ -1032,6 +1032,7 @@ export function ExChart(p: ExChartProps) {
             setClosed={setClosed}
             axisW={axisW}
             names={p.legendRest === "names"}
+            chipRow={!!chipItems}
           />
         )}
         {touch && !showLoading && <ValueBox hov={hov} rows={boxRows} axisW={axisW} axisH={axisH} top={paneTops[0] ?? 0} host={plot} />}
@@ -1216,8 +1217,10 @@ const LegendLayer = memo(function LegendLayer({
   setClosed,
   axisW,
   names,
+  chipRow,
 }: {
   names: boolean;
+  chipRow: boolean;
   model: LegendModel;
   hov: HoverStore;
   latest: () => number | null;
@@ -1235,8 +1238,8 @@ const LegendLayer = memo(function LegendLayer({
   if (t == null) return null;
   // at rest with names only: each series' name and key, no figures, no clock, no chevron
   const rest = names && h.t == null;
-  // a phone has the names in its chips under the chart: nothing over the plot at rest
-  if (rest && touch) return null;
+  // the names are in the chip row under the chart (the phone's, History's): nothing over the plot at rest
+  if (rest && chipRow) return null;
   return (
     <>
       {model.map(({ pane, lines }) => {
