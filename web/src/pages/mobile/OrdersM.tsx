@@ -47,7 +47,7 @@ export function OrdersM() {
         <OpenOrders accounts={trading} all={accounts} />
       ) : cur === "quotes" ? (
         <section className="o-qmap mk-quotes">
-          <QuotesFull ms={250} />
+          <QuotesFull ms={125} />
         </section>
       ) : (
         <Rates accounts={trading} />

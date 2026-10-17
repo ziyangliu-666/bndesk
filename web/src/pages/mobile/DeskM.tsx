@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { isHidden, openMarkets, serverNow, useStore } from "../../store";
@@ -8,7 +8,7 @@ import { LevelIcon } from "../../components/ui";
 import { DefinedLabel, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
 import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { SeriesKey } from "../../components/ex";
-import type { Account, Exposure, SymbolRow } from "../../protocol";
+import type { Account, Exposure, Fill, SymbolRow } from "../../protocol";
 import { FillRow, InstName, useFillSheet } from "./shared";
 import { instPnl, unpriced, useLegPnl } from "../../selectors";
 import { useHide } from "../../mask";
@@ -18,17 +18,18 @@ import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
 
-/** How often the Desk takes the store's figures: twice a second is live to the eye, and a slow phone keeps up. */
-const PAGE_MS = 500;
-/** The quotes block moves faster: its dots are the point of it (a canvas redraw, no list to re-render). */
-const QUOTES_MS = 250;
+/** The day's figures follow every message (8 a second); lists and the chart a little slower. */
+const FIG_MS = 125;
+const PAGE_MS = 250;
+/** The quotes block moves with every message: its dots are the point of it (a canvas redraw, no list to re-render). */
+const QUOTES_MS = 125;
 
 // Desk, the phone's home: what the day made and how it got there (hero, chart, the parts), where we quote now,
 // how close to the limits, who made it, the latest fills.
 export function DeskM() {
-  // the page redraws at most twice a second (useLive hands its values over together)
-  const sm = useLive((s) => s.snap?.summary, PAGE_MS);
-  const exposure = useLive((s) => s.snap?.exposure, PAGE_MS);
+  // the day's figures follow every message; the lists, chart and quotes take theirs 4 times a second
+  const sm = useLive((s) => s.snap?.summary, FIG_MS);
+  const exposure = useLive((s) => s.snap?.exposure, FIG_MS);
   const accounts = useLive((s) => s.snap?.accounts, PAGE_MS);
   // the movers and the latest fills hold still under a resting finger
   const [held, hold] = useHold();
@@ -41,6 +42,26 @@ export function DeskM() {
   const fill = useFillSheet();
   const o10 = useSticky(accounts ?? [], (a) => [a.orders_10s, a.orders_10s_limit]);
   const o1d = useSticky(accounts ?? [], (a) => [a.orders_1d, a.orders_1d_limit]);
+  // the parts with values of their own keep their element while the day's figures move 8 times a second
+  const chartEl = useMemo(() => <DeskChart ms={PAGE_MS} />, []);
+  const quotesEl = useMemo(
+    () => (
+      <Section
+        title="Quotes"
+        right={
+          <UnstyledButton className="m-link" onClick={() => openMarkets("quotes")}>
+            All
+          </UnstyledButton>
+        }
+        card={false}
+        className="dk-quotes"
+      >
+        <QuoteLegend short className="dk-qlegend" />
+        <QuotesMini n={8} ms={QUOTES_MS} />
+      </Section>
+    ),
+    [],
+  );
   if (!sm || !exposure) return null;
   const p = sm.pnl;
   const hedge = exposure.hedge_day?.hedge_pnl ?? null;
@@ -55,7 +76,7 @@ export function DeskM() {
       <DeskHero v={sm.pnl_day} since={`since ${hm(sm.day_start, tz)}${zone}`} h1={sm.pnl_1h} equity={equity} />
 
       <section className="dk-chart-sec">
-        <DeskChart ms={PAGE_MS} />
+        {chartEl}
       </section>
 
       <Section title="Day PnL split" right="USDT">
@@ -78,19 +99,7 @@ export function DeskM() {
         />
       </Section>
 
-      <Section
-        title="Quotes"
-        right={
-          <UnstyledButton className="m-link" onClick={() => openMarkets("quotes")}>
-            All
-          </UnstyledButton>
-        }
-        card={false}
-        className="dk-quotes"
-      >
-        <QuoteLegend short className="dk-qlegend" />
-        <QuotesMini n={8} ms={QUOTES_MS} />
-      </Section>
+      {quotesEl}
 
       <Section title="Risk" className="dk-risk">
         <ExposureBar x={exposure} />
@@ -133,9 +142,7 @@ export function DeskM() {
       {fills && fills.length > 0 && (
         <div className="m-hold" {...hold}>
           <Section title="Latest fills" link={{ label: "All", to: { page: "fills" } }}>
-            {fills.slice(0, 5).map((f) => (
-              <FillRow key={f.id} f={f} onOpen={fill.open} />
-            ))}
+            <LatestFills fills={fills} onOpen={fill.open} />
           </Section>
         </div>
       )}
@@ -218,7 +225,17 @@ function PartRows({ rows }: { rows: Part[] }) {
  * (marked "hedge"), so the two biggest contributors are here whichever they are. With amounts hidden the
  * ranking would give the winners away: the busiest instruments by fills instead.
  */
-function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
+const LatestFills = memo(function LatestFills({ fills, onOpen }: { fills: Fill[]; onOpen: (f: Fill) => void }) {
+  return (
+    <>
+      {fills.slice(0, 5).map((f) => (
+        <FillRow key={f.id} f={f} onOpen={onOpen} />
+      ))}
+    </>
+  );
+});
+
+const Movers = memo(function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
   const [side, setSide] = useState<"best" | "worst">("best");
   const money = useMoney();
   const hide = useHide();
@@ -278,7 +295,7 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
       {list.length === 0 && <div className="m-empty">{side === "best" ? "Nothing has made money today yet." : "Nothing has lost money today."}</div>}
     </Section>
   );
-}
+});
 
 // ---- the most urgent warning, one line (critical alerts are pinned under the top bar on every page) ----
 

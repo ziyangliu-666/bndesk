@@ -44,7 +44,7 @@ export function InstrumentsM() {
           onChange={setView}
         />
       </div>
-      {view === "list" ? <MarketList /> : <section className="mk-quotes"><QuotesFull ms={250} /></section>}
+      {view === "list" ? <MarketList /> : <section className="mk-quotes"><QuotesFull ms={125} /></section>}
     </>
   );
 }

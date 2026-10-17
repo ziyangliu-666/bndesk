@@ -193,7 +193,7 @@ function Band({ symbol, venue }: { symbol: string; venue: Venue }) {
 // ---- tabs ----
 
 function QuotesTab({ r }: { r: SymbolRow }) {
-  const orders = useLive((s) => s.snap?.orders, 500);
+  const orders = useLive((s) => s.snap?.orders, 250);
   const ours = (orders ?? []).filter((o) => o.symbol === r.symbol && o.venue === r.venue);
   const bids = ours.filter((o) => o.side === "buy").sort((a, b) => b.price - a.price);
   const asks = ours.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price);
@@ -265,7 +265,7 @@ function LadderCell({ o, max, side, qd }: { o: OpenOrder | undefined; max: numbe
 
 function FillsTab({ r }: { r: SymbolRow }) {
   const [held, hold] = useHold();
-  const all = useLive((s) => s.snap?.fills, 500, held);
+  const all = useLive((s) => s.snap?.fills, 250, held);
   const mine = useMemo(() => (all ?? []).filter((f) => f.symbol === r.symbol && f.venue === r.venue), [all, r.symbol, r.venue]);
   const fill = useFillSheet();
   useNow(1000);
