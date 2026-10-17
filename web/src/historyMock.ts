@@ -199,7 +199,7 @@ export function dayBars(dayStart: number, from: number, equity0: number): DayBar
   return b;
 }
 
-function history(from: number, to: number, step: number): History {
+function history(from: number, to: number, step: number, perDay = false): History {
   const now = nowMin();
   extendDesk(now);
   const sm = step / 60;
@@ -215,8 +215,42 @@ function history(from: number, to: number, step: number): History {
   const [bpi, bre, bmm, bhe, brb] = [base(desk.pi), base(desk.re), base(desk.mm), base(desk.he), base(desk.rb)];
   const bars: HistBar[] = [];
   let prev = 0;
+  // equity: today's opening equity (the snapshot's) moved by the P&L since
+  const snap = useStore.getState().snap;
+  const dToday = minuteOf(snap?.summary.day_start ?? Date.now());
+  const eq0 = (snap ? snap.summary.equity - snap.summary.pnl_day : 45_000) - (dToday > 0 ? tot(dToday - 1) : 0);
+  // per day: each figure from its day's start, as the desk stores it (the split null before it was recorded)
+  const dayBase = (m: number, xs: number[] | null) => {
+    const d = Math.floor(m / 1440) * 1440;
+    return d > 0 ? (xs ? xs[d - 1]! : tot(d - 1)) : 0;
+  };
+  const daySplit = (e: number, xs: number[]) => (e >= minuteOf(RECORDED_FROM) ? xs[e]! - dayBase(e, xs) : null);
   for (let s = m0; s <= m1; s += sm) {
     const e = Math.min(m1, s + sm - 1);
+    if (perDay) {
+      const b = dayBase(s, null);
+      const first = s % 1440 === 0;
+      let o = first ? 0 : tot(s - 1) - b;
+      let h = o;
+      let l = o;
+      let vol = 0;
+      let fills = 0;
+      for (let m = s; m <= e; m++) {
+        const v = tot(m) - b;
+        h = Math.max(h, v + desk.hx[m]!);
+        l = Math.min(l, v - desk.lx[m]!);
+        vol += desk.vol[m]!;
+        fills += desk.fills[m]!;
+      }
+      const c = tot(e) - b;
+      o = Math.min(Math.max(o, l), h);
+      bars.push({
+        t: ORIGIN + s * MIN, o, h: Math.max(h, c), l: Math.min(l, c), c,
+        pi: daySplit(e, desk.pi), realized: daySplit(e, desk.re), mm: daySplit(e, desk.mm), hedge: daySplit(e, desk.he), rebates: daySplit(e, desk.rb),
+        inventory: desk.inv[e]!, futures: desk.fut[e]!, equity: eq0 + tot(e), volume: vol, fills,
+      });
+      continue;
+    }
     let h = prev;
     let l = prev;
     let vol = 0;
@@ -243,6 +277,7 @@ function history(from: number, to: number, step: number): History {
       rebates: split(e, desk.rb, brb),
       inventory: desk.inv[e]!,
       futures: desk.fut[e]!,
+      equity: eq0 + tot(e),
       volume: vol,
       fills,
     });
@@ -475,7 +510,7 @@ export function mockApi(path: string, q: Record<string, string | number>): unkno
   const n = (k: string) => Number(q[k]);
   switch (path) {
     case "/api/history":
-      return history(n("from"), n("to"), n("step"));
+      return history(n("from"), n("to"), n("step"), q.per === "day");
     case "/api/klines":
       return klines(String(q.symbol), String(q.venue), String(q.interval), n("from"), n("to"));
     case "/api/fills":

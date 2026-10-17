@@ -48,7 +48,7 @@ import { barLabel, boxLabel, tickLabel } from "./time";
 import { ChipRow, SeriesKey, TextToggle, useScrollFade, type Chip, type Option } from "./controls";
 import { useExHidden, useExPref } from "./prefs";
 import { ChartFullscreen, goFullscreen } from "./fullscreen";
-import { AxisGuard, FillRings, type Ring } from "./rings";
+import { AxisGuard, DayDividers, FillRings, type Ring } from "./rings";
 import "./ex.css";
 
 // ================================ public types ================================
@@ -235,6 +235,13 @@ export interface ExChartProps {
   rightOffset?: number;
   /** A change of this value resets the view (a new symbol). */
   resetKey?: string | number;
+  /** The legend while nothing is hovered: each line's value at the latest bar (default), or the series' names
+   *  only, where the page's header already carries the values. */
+  legendRest?: "values" | "names";
+  /** Day starts (ms) on a chart that runs over several days: a faint rule at each. */
+  dividers?: readonly number[];
+  /** Called when the view comes within a few dozen bars of the first one (load older data). */
+  onNearStart?: () => void;
   /** Controlled hidden keys (else per-id in the store). */
   hidden?: string[];
   onToggle?: (key: string) => void;
@@ -253,6 +260,8 @@ export interface ExChartProps {
 
 // ================================ helpers ================================
 
+/** The rule at each day start on a chart over several days: there, not loud. */
+const DIVIDER = rgba(C.ink2, 0.18);
 const sec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 const STYLE = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted, large: LineStyle.LargeDashed, sparse: LineStyle.SparseDotted } as const;
 const isOhlc = (p: ExPoint | ExOhlc): p is ExOhlc => (p as ExOhlc).open !== undefined;
@@ -378,11 +387,18 @@ const DEF = { line: LineSeries, area: AreaSeries, baseline: BaselineSeries, hist
 
 /** Lightweight Charts' point for ours, cached by object so a live tail converts once. */
 const conv = new WeakMap<object, unknown>();
+/** A point's colour that leaves the segment to the next point undrawn (a line, an area, a baseline): where a
+ *  figure restarts (a new day), so the drop to 0 is not drawn as a move. */
+export const GAP = "transparent";
+const GAP_COLORS = Object.fromEntries(
+  ["color", "lineColor", "topColor", "bottomColor", "topLineColor", "bottomLineColor", "topFillColor1", "topFillColor2", "bottomFillColor1", "bottomFillColor2"].map((k) => [k, GAP]),
+);
 function toLwc(p: ExPoint | ExOhlc): unknown {
   let v = conv.get(p);
   if (v) return v;
   if (isOhlc(p)) v = { time: sec(p.time), open: p.open, high: p.high, low: p.low, close: p.close };
   else if (p.value == null || !Number.isFinite(p.value)) v = { time: sec(p.time) };
+  else if (p.color === GAP) v = { time: sec(p.time), value: p.value, ...GAP_COLORS };
   else v = p.color ? { time: sec(p.time), value: p.value, color: p.color } : { time: sec(p.time), value: p.value };
   conv.set(p, v);
   return v;
@@ -458,6 +474,7 @@ export function ExChart(p: ExChartProps) {
   const live = useRef(new Map<string, Live>());
   const markersApi = useRef(new Map<string, ISeriesMarkersPluginApi<Time>>());
   const ringsApi = useRef(new Map<string, FillRings>());
+  const dividersApi = useRef<DayDividers | null>(null);
   const lines = useRef<[ISeriesApi<SeriesType>, IPriceLine][]>([]);
   const hov = useMemo(hoverStore, []);
   const [paneTops, setPaneTops] = useState<number[]>([0]);
@@ -537,6 +554,7 @@ export function ExChart(p: ExChartProps) {
       // the latest bar once it is out of sight
       setAway(cbs.current.view ? moved.current : ts.scrollPosition() < -2);
       if (r) setDense(ts.width() / Math.max(1, r.to - r.from) < 5);
+      if (r && r.from < 40 && moved.current) cbs.current.onNearStart?.();
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
     const measure = () => {
@@ -695,6 +713,9 @@ export function ExChart(p: ExChartProps) {
         guarded.add(pane);
         map.get(s.key)!.api.attachPrimitive(new AxisGuard(() => tagPrices(pane)));
       }
+      const first = map.values().next().value;
+      dividersApi.current = null;
+      if (first) first.api.attachPrimitive((dividersApi.current = new DayDividers(DIVIDER)));
       if (view) needFit.current = false;
       requestAnimationFrame(() => {
         if (view && chart.current) chart.current.timeScale().setVisibleLogicalRange(view);
@@ -780,6 +801,10 @@ export function ExChart(p: ExChartProps) {
       hov.set({ v: hov.get().v + 1 });
       setDrawn((n) => n + 1);
     }
+  });
+
+  useLayoutEffect(() => {
+    dividersApi.current?.set(awaiting || p.loading ? [] : (p.dividers ?? []).map(sec));
   });
 
   // the wait for a new interval's data never outlasts 4 s: then it shows what there is
@@ -1006,6 +1031,7 @@ export function ExChart(p: ExChartProps) {
             closed={closed}
             setClosed={setClosed}
             axisW={axisW}
+            names={p.legendRest === "names"}
           />
         )}
         {touch && !showLoading && <ValueBox hov={hov} rows={boxRows} axisW={axisW} axisH={axisH} top={paneTops[0] ?? 0} host={plot} />}
@@ -1071,6 +1097,8 @@ interface LegendEntry {
   stroke?: Stroke;
   value: (t: number) => ExValue;
   title?: string;
+  /** A series' own entry (its name stays in a names-only legend at rest). */
+  series?: boolean;
 }
 type LegendModel = { pane: number; lines: LegendEntry[][] }[];
 
@@ -1157,6 +1185,7 @@ function buildLegend(
     }
     add(pane, line, {
       key,
+      series: true,
       label: s.label,
       color: s.kind === "baseline" || s.kind === "histogram" ? undefined : s.color,
       stroke: s.kind === "line" && !touch ? (s.lineStyle ?? "solid") : undefined,
@@ -1186,7 +1215,9 @@ const LegendLayer = memo(function LegendLayer({
   closed,
   setClosed,
   axisW,
+  names,
 }: {
+  names: boolean;
   model: LegendModel;
   hov: HoverStore;
   latest: () => number | null;
@@ -1202,6 +1233,10 @@ const LegendLayer = memo(function LegendLayer({
   const h = useSyncExternalStore(hov.sub, hov.get);
   const t = h.t ?? latest();
   if (t == null) return null;
+  // at rest with names only: each series' name and key, no figures, no clock, no chevron
+  const rest = names && h.t == null;
+  // a phone has the names in its chips under the chart: nothing over the plot at rest
+  if (rest && touch) return null;
   return (
     <>
       {model.map(({ pane, lines }) => {
@@ -1210,12 +1245,12 @@ const LegendLayer = memo(function LegendLayer({
         return (
           <div key={pane} className="ex-legend" style={{ top: tops[pane]! + 4, maxWidth: `calc(100% - ${axisW + 16}px)` }}>
             {lines.map((items, i) => {
-              if (pane === 0 && i > 0 && closed) return null;
-              const shown = touch ? items.filter((it) => !off(it.key)) : items;
+              if (pane === 0 && i > 0 && closed && !rest) return null;
+              const shown = (touch ? items.filter((it) => !off(it.key)) : items).filter((it) => !rest || it.series);
               if (!shown.length) return null;
               return (
                 <div key={i} className="ex-lg-line">
-                  {pane === 0 && lines.length > 1 && (
+                  {pane === 0 && lines.length > 1 && !rest && (
                     <span
                       className={"ex-chev" + (i === 0 ? (closed ? " closed" : "") : " blank")}
                       onClick={i === 0 ? () => setClosed(!closed) : undefined}
@@ -1240,10 +1275,12 @@ const LegendLayer = memo(function LegendLayer({
                         title={it.title ?? (it.key ? "Click to hide or show" : undefined)}
                       >
                         {it.stroke && it.color && <SeriesKey color={it.color} stroke={it.stroke} on={!isOff} />}
-                        {it.label && <span className="ex-lg-l">{it.label}</span>}
-                        <span className="ex-lg-v" style={{ color: col ?? it.color ?? C.ink }}>
-                          {txt}
-                        </span>
+                        {it.label && <span className={"ex-lg-l" + (rest ? " rest" : "")}>{it.label}</span>}
+                        {!rest && (
+                          <span className="ex-lg-v" style={{ color: col ?? it.color ?? C.ink }}>
+                            {txt}
+                          </span>
+                        )}
                       </span>
                     );
                   })}

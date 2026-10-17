@@ -13,6 +13,7 @@ export interface HistBar {
   rebates: number | null; // market-maker rebates, cumulative like pi
   inventory: number | null;
   futures: number | null;
+  equity?: number | null; // equity of all accounts, last in the bar
   volume: number;
   fills: number;
 }

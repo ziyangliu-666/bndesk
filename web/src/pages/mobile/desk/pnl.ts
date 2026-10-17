@@ -3,12 +3,12 @@
 // (`keep`), so ExChart only updates the tail.
 import type { HistBar } from "../../../api";
 import type { DayBars, Fill, SeriesPoint } from "../../../protocol";
-import type { ExOhlc, ExPoint } from "../../../components/ex";
+import { GAP, type ExOhlc, type ExPoint } from "../../../components/ex";
 import { MIN, bucket, todayRows } from "../../desk/model";
 import { rebatesAt, withFills, type TodayMinutes } from "../../desk/pnlData";
 
-export type PnlIv = "line" | "1m" | "5m" | "15m";
-export const PNL_STEP: Record<PnlIv, number> = { line: 60_000, "1m": 60_000, "5m": 300_000, "15m": 900_000 };
+export type PnlIv = "line" | "1m" | "5m" | "15m" | "1h";
+export const PNL_STEP: Record<PnlIv, number> = { line: 60_000, "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000 };
 
 
 /** One bar of the chart: Day PnL as OHLC, the parts at the bar's close, the notional filled in it. */
@@ -81,7 +81,7 @@ export function todayBars(
   });
 }
 
-/** The last 24 h from /api/history (already bars of the step). */
+/** Bars from /api/history (the days before today, already bars of the step). */
 export function histBars(bars: readonly HistBar[] | undefined): PnlBar[] {
   return (bars ?? []).map((b) => ({
     time: b.t,
@@ -119,9 +119,11 @@ export function keep<T extends ExPoint | ExOhlc>(prev: readonly T[] | undefined,
 }
 
 /** ExChart's series data from the bars; `line`: Day PnL as a line on the finest points (`fine`). */
-export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: number; v: number }[] | null, prev: PnlData | null, volColor: string): PnlData {
+export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: number; v: number }[] | null, prev: PnlData | null, volColor: string, ends?: ReadonlySet<number>): PnlData {
   if (!bars.length) return EMPTY;
-  const pts = (f: (b: PnlBar) => number | null) => bars.map((b) => ({ time: b.time, value: f(b) }));
+  // a line stops at each day's last bar (`ends`): the figures restart at 0 with the next day
+  const pts = (f: (b: PnlBar) => number | null) =>
+    bars.map((b) => (ends?.has(b.time) ? { time: b.time, value: f(b), color: GAP } : { time: b.time, value: f(b) }));
   const main: ExPoint[] | ExOhlc[] = line
     ? fine
       ? fine.map((p) => ({ time: p.t, value: p.v }))

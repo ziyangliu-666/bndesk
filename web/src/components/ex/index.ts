@@ -2,6 +2,7 @@
 // presentational controls in bndesk's palette.
 export {
   ExChart,
+  GAP,
   volumePoints,
   closePoints,
   candlePoints,

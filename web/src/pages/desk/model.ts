@@ -24,6 +24,8 @@ export interface Row {
   vol: number;
   /** Fills in the bar; null where the fills tape does not reach back. */
   fills: number | null;
+  /** Rebates so far in the day, where the row carries them (days before today). */
+  reb?: number | null;
 }
 
 const minute = (ms: number) => Math.floor(ms / MIN) * MIN;

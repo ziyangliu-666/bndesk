@@ -1,7 +1,8 @@
 // The phone Desk's P&L chart: Day PnL (a baseline at zero for Line, candles for 1m 5m 15m) with the split as
 // lines (Trading, market making, inventory PnL, the hedge, rebates, other: the desktop's palette and strokes),
-// notional filled in a volume pane, Today (the trading day so far) or 24h (the rolling last 24 hours). Long-press
-// reads a bar, ⤢ opens #/chart/m-desk.
+// notional filled in a volume pane. Today from the store; the days before from /api/history, a pan away (loaded
+// further back as the view nears the first bar), each day from its own start with a faint rule between days.
+// Long-press reads a bar, ⤢ opens #/chart/m-desk.
 import { useMemo, useRef } from "react";
 import { compact, pnl } from "../../../format";
 import { ExChart, useExPref, type ExSeries } from "../../../components/ex";
@@ -9,7 +10,8 @@ import { C, PNL_COLORS as P, PNL_STROKES as S, rgba } from "../../../components/
 import { useLive } from "../../../components/mobile";
 import { useStore } from "../../../store";
 import { maskFormat } from "../../../mask";
-import { useLast24h, useTodayMinutes } from "../../desk/pnlData";
+import { useTodayMinutes } from "../../desk/pnlData";
+import { dayEnds, pastStep, usePast } from "../../desk/past";
 import { PNL_STEP, histBars, todayBars, toChart, type PnlData, type PnlIv } from "./pnl";
 
 const IVS: { value: PnlIv; label: string }[] = [
@@ -17,45 +19,43 @@ const IVS: { value: PnlIv; label: string }[] = [
   { value: "1m", label: "1m" },
   { value: "5m", label: "5m" },
   { value: "15m", label: "15m" },
+  { value: "1h", label: "1H" },
 ];
-const RANGES = [
-  { value: "today", label: "Today", title: "The trading day so far" },
-  { value: "24h", label: "24h", title: "The last 24 hours, ending now" },
-];
-// bars in view after a load: the whole day for Line and 15m, the last two hours or so otherwise
-const VIEW: Record<PnlIv, number | undefined> = { line: undefined, "1m": 90, "5m": 96, "15m": undefined };
+// bars in view after a load at most: the last two hours or so at 1m and 5m; else the day so far
+const VIEW: Record<PnlIv, number | undefined> = { line: undefined, "1m": 90, "5m": 96, "15m": undefined, "1h": undefined };
 const VOL = rgba(C.ink2, 0.38);
 
 /** The Desk chart. `ms`: how often it takes the store's figures (the page's own pace). */
 export function DeskChart({ ms }: { ms: number }) {
   const [iv, setIv] = useExPref<PnlIv>("m-desk", "interval", "line", IVS.map((i) => i.value));
-  const [range, setRange] = useExPref<string>("m-desk", "range", "today", ["today", "24h"]);
   const hide = useStore((s) => s.hideAmounts);
   const dayStart = useLive((s) => s.snap?.summary.day_start, ms);
-  const day = range === "today";
-  const bars = useLive((s) => (day ? s.snap?.bars : undefined), ms, false, range);
-  const series = useLive((s) => (day ? s.snap?.series : undefined), ms, false, range);
-  const fills = useLive((s) => (day ? s.snap?.fills : undefined), ms, false, range);
+  const bars = useLive((s) => s.snap?.bars, ms);
+  const series = useLive((s) => s.snap?.series, ms);
+  const fills = useLive((s) => s.snap?.fills, ms);
   const step = PNL_STEP[iv];
-
-  // the last 24 h (rolling, ending now): /api/history in bars of the interval, the desktop's own
-  const last24 = useLast24h(day ? null : step);
-  // today's rebates and fill counts by minute
-  const mins = useTodayMinutes(day ? dayStart : null);
+  // today's rebates and fill counts by minute; the days before at the interval
+  const mins = useTodayMinutes(dayStart);
+  const past = usePast(pastStep(step), dayStart ?? 0);
+  const pastBars = useMemo(() => histBars(past.bars), [past.bars]);
 
   const prev = useRef<{ k: string; d: PnlData } | null>(null);
-  const k = `${range}:${iv}`;
+  const k = iv;
+  const nToday = useRef(0);
   const data = useMemo(() => {
-    const list = day ? (dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : []) : histBars(last24.bars);
-    const d = toChart(list, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL);
+    const today = dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : [];
+    nToday.current = today.length;
+    const all = pastBars.length ? pastBars.concat(today) : today;
+    const ends = dayEnds(all.map((b) => b.time), dayStart ?? 0);
+    const d = toChart(all, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL, ends);
     prev.current = { k, d };
     return d;
-  }, [day, dayStart, bars, series, fills, step, last24.bars, iv, k, mins]);
+  }, [dayStart, bars, series, fills, step, pastBars, iv, k, mins]);
 
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
   const vol = maskFormat(hide, (v: number) => compact(v));
-  const label = day ? "Day PnL" : "PnL 24h";
+  const label = "Day PnL";
   // at rest the legend has two lines: Day PnL, then Trading, Hedge and Rebates (with Other they make Day PnL); the
   // two parts of Trading and Other are a chip away
   const line = (key: keyof typeof P, label: string, pts: PnlData["mm"]): ExSeries => ({
@@ -82,8 +82,9 @@ export function DeskChart({ ms }: { ms: number }) {
     ...(data.rebates.length ? [line("reb", "Rebates", data.rebates), line("other", "Other", data.other)] : []),
     { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 1, color: VOL, data: data.vol, format: vol, lastValue: false },
   ];
-  // the last 24 h of another interval is still the old one: blank, and fit the view when the new one comes
-  const loading = !day && last24.loading;
+  // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)
+  const view = Math.max(Math.min(VIEW[iv] ?? Infinity, nToday.current), 30);
+  const todayFirst = data.bars.find((b) => b.time >= (dayStart ?? 0))?.time ?? "";
 
   return (
     <ExChart
@@ -95,13 +96,13 @@ export function DeskChart({ ms }: { ms: number }) {
       intervals={IVS}
       interval={iv}
       onInterval={(v) => setIv(v as PnlIv)}
-      modes={[{ label: "Range", value: range, onChange: setRange, options: RANGES }]}
-      loading={loading}
-      emptyText={last24.error && !day ? "Could not load the last 24 h" : "No P&L yet today"}
+      emptyText="No P&L yet today"
       height={300}
-      initialBars={VIEW[iv]}
-      // and again when earlier bars arrive (the first snapshot carries the last minutes only)
-      resetKey={`${k}:${data.bars[0]?.time ?? ""}`}
+      initialBars={view}
+      resetKey={`${k}:${todayFirst}:${past.bars.length > 0}`}
+      dividers={past.days}
+      onNearStart={past.loadOlder}
+      legendRest="names"
       fullscreen
       touch
       chips={[...s.slice(1, -1).map((x) => ({ key: x.key, label: x.label, color: x.color, stroke: x.lineStyle })), "|", { key: "vol", label: "Vol" }]}

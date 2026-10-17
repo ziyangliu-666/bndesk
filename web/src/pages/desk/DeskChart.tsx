@@ -1,12 +1,15 @@
-// The Desk's centre chart with nothing picked: tabs P&L | Equity | Exposure on ExChart, today's minute bars
-// (5 s on Line), intervals, Today | 24h, and legends that show each line's value.
+// The Desk's centre chart with nothing picked: tabs P&L | Equity | Exposure on ExChart. Today from the snapshot
+// (minute bars, 5 s on Line), the days before from /api/history at the interval, loaded further back as the
+// view nears the first bar; Day PnL and its parts restart at each day start, marked by a faint rule. The view
+// opens on today. The legend names the lines at rest (the header has the figures) and reads a hovered bar.
 import { useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from "../../theme";
-import { ExChart, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
+import { ExChart, GAP, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
 import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
-import { histRows, rebatesAt, useLast24h, useTodayMinutes, withFills } from "./pnlData";
+import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
+import { dayEnds, pastStep, usePast } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
 
 type Tab = "pnl" | "equity" | "exposure";
@@ -22,19 +25,18 @@ const IVS = [
   { value: "5m", label: "5m" },
   { value: "15m", label: "15m" },
   { value: "1h", label: "1H" },
+  { value: "4h", label: "4H" },
+  { value: "1d", label: "1D" },
 ];
 const IV_VALUES = IVS.map((i) => i.value);
-const STEP: Record<string, number> = { line: 0, "1m": MIN, "5m": 5 * MIN, "15m": 15 * MIN, "1h": 60 * MIN };
-const RANGE = [
-  { value: "today", label: "Today", title: "The trading day so far" },
-  { value: "24h", label: "24h", title: "The last 24 hours, ending now" },
-];
+const STEP: Record<string, number> = { line: 0, "1m": MIN, "5m": 5 * MIN, "15m": 15 * MIN, "1h": 60 * MIN, "4h": 240 * MIN, "1d": 1440 * MIN };
 const STYLE = [
   { value: "area", label: "Area" },
   { value: "candles", label: "Candles" },
 ];
 
 const VOL = rgba(C.ink2, 0.38);
+const NO_ENDS = new Set<number>();
 const NET = C.ink;
 
 export function DeskChart({ head }: { head?: ReactNode }) {
@@ -54,7 +56,6 @@ export function DeskChart({ head }: { head?: ReactNode }) {
 function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const id = "desk." + tab;
   const [iv, setIv] = useExPref<string>(id, "interval", "1m", IV_VALUES);
-  const [range, setRange] = useExPref<string>("desk", "range", "today", ["today", "24h"]);
   const [style, setStyle] = useExPref<string>("desk.pnl", "style", "area", ["area", "candles"]);
   const bars = useStore((s) => s.snap?.bars);
   const series = useStore((s) => s.snap?.series);
@@ -63,25 +64,20 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? 0);
   const exposure = useStore((s) => (tab === "exposure" ? s.snap?.exposure : undefined));
   const step = STEP[iv] ?? MIN;
-  // 24h (the P&L tab only): the rolling last 24 h from /api/history, in bars of the interval (Line: minutes)
-  const r24 = tab === "pnl" && range === "24h";
-  const last24 = useLast24h(r24 ? step || MIN : null);
   const stable = useRef(new Stable()).current;
   // today's rebates and fill counts by minute (the snapshot's minute bars do not carry them)
-  const mins = useTodayMinutes(tab === "pnl" && !r24 ? dayStart : null);
+  const mins = useTodayMinutes(tab === "pnl" ? dayStart : null);
+  // the days before today at the interval (Line: minutes)
+  const past = usePast(pastStep(step), dayStart);
 
-  // minute rows (the volume pane at every interval), and the 5 s rows for Line
-  const minRows = useMemo(
-    () => (r24 ? histRows(last24.bars) : withFills(todayRows(bars, series, fills, dayStart, MIN), mins)),
-    [r24, last24.bars, bars, series, fills, dayStart, mins],
+  // today's minute rows (the volume pane at every interval), and the 5 s rows for Line; the past days before
+  const minRows = useMemo(() => withFills(todayRows(bars, series, fills, dayStart, MIN), mins), [bars, series, fills, dayStart, mins]);
+  const today = useMemo(
+    () => (step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)),
+    [step, minRows, bars, series, fills, dayStart],
   );
-  const rows = useMemo(
-    () => (r24 ? minRows : step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)),
-    [r24, step, minRows, bars, series, fills, dayStart],
-  );
-  // 24h: the rebates are in the bars themselves
-  const rebByT = useMemo(() => new Map(r24 ? last24.bars.filter((b) => b.rebates != null).map((b) => [b.t, b.rebates!] as const) : []), [r24, last24.bars]);
-  const volRows = step === 0 && !r24 ? minRows : rows;
+  const rows = useMemo(() => (past.rows.length ? past.rows.concat(today) : today), [past.rows, today]);
+  const volRows = useMemo(() => (step === 0 ? (past.rows.length ? past.rows.concat(minRows) : minRows) : rows), [step, past.rows, minRows, rows]);
   const volByT = useMemo(() => new Map(volRows.map((r) => [r.t, r])), [volRows]);
 
   // the axis, tags and legend read ••• with Hide amounts (ExChart re-reads a format that prints otherwise)
@@ -90,10 +86,12 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const fBig = money((v) => compact(v));
   // exposure is signed (long +, short −), on the axis, the tags and the legend
   const fSigned = money((v) => compact(v, 2, true));
+  // P&L lines stop at each day's last bar: the figures restart at 0 with the next day (step < 1 day)
+  const ends = useMemo(() => (tab === "pnl" && step < 1440 * MIN ? dayEnds(rows.map((r) => r.t), dayStart) : NO_ENDS), [tab, step, rows, dayStart]);
   const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
     stable.get(
       k + iv,
-      list.map((r) => ({ time: r.t, value: pick(r) })),
+      list.map((r) => (list === rows && ends.has(r.t) ? { time: r.t, value: pick(r), color: GAP } : { time: r.t, value: pick(r) })),
       sameValue,
     );
 
@@ -107,11 +105,11 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     format: fBig,
     lastValue: false,
     // on Line the bars are 5 s and the volume minutes: its legend reads the minute of the bar (below)
-    legend: step === 0 && !r24 ? false : undefined,
+    legend: step === 0 ? false : undefined,
   };
-  const volAt = (t: number) => volByT.get(step === 0 && !r24 ? Math.floor(t / MIN) * MIN : t);
+  const volAt = (t: number) => volByT.get(step === 0 ? Math.floor(t / MIN) * MIN : t);
   const volLegend: ExLegendItem[] =
-    step === 0 && !r24 && tab !== "equity" && tab !== "exposure"
+    step === 0 && tab !== "equity" && tab !== "exposure"
       ? [{ pane: 1, key: "vol", label: "Vol(USDT)", value: (t) => { const r = volAt(t); return r ? [fBig(r.vol), C.ink] : "--"; } }]
       : [];
 
@@ -119,7 +117,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   let extra: ExLegendItem[] = [];
   let stretch = [1, 0.22];
   if (tab === "pnl") {
-    const dayLabel = r24 ? "PnL 24h" : "Day PnL";
+    const dayLabel = "Day PnL";
     const day: ExSeries =
       style === "candles"
         ? {
@@ -137,8 +135,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         : { key: "day", kind: "baseline", label: dayLabel, toggle: false, format: fPnl, signColor: true, data: pts("day", (r) => r.c) };
     const has = (k: "mm" | "hedge") => rows.some((r) => r[k] != null);
     // rebates at a row: the last minute's figure inside it; Other is what the parts leave of Day PnL
-    const rebAt = (r: Row) => (r24 ? (rebByT.get(r.t) ?? null) : rebatesAt(mins, r.t, step));
-    const anyReb = r24 ? rebByT.size > 0 : mins.reb.t.length > 0;
+    const rebAt = (r: Row) => (r.reb !== undefined ? r.reb : r.t >= dayStart ? rebatesAt(mins, r.t, step) : null);
+    const anyReb = mins.reb.t.length > 0 || past.rows.some((r) => r.reb != null);
     const P = PNL_COLORS;
     const S = PNL_STROKES;
     list = [
@@ -217,7 +215,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       ];
   }
 
-  // Today fits the day so far; a few wide bars get one bar of room after the last, not five
+  // a few wide bars get one bar of room after the last, not five
   const right = step >= 15 * MIN ? 1 : step >= 5 * MIN ? 2 : undefined;
 
   return (
@@ -231,16 +229,18 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       intervals={IVS}
       interval={iv}
       onInterval={setIv}
-      modes={tab === "pnl" ? [
-        { label: "Style", value: style, onChange: setStyle, options: STYLE },
-        { label: "Range", value: range, onChange: setRange, options: RANGE },
-      ] : []}
+      modes={tab === "pnl" ? [{ label: "Style", value: style, onChange: setStyle, options: STYLE }] : []}
       legendExtra={extra}
+      legendRest="names"
       fullscreen
       rightOffset={right}
-      resetKey={r24 ? "24h" : "today"}
-      loading={r24 && last24.loading}
-      emptyText={r24 && last24.error ? "Could not load the last 24 h" : "No data yet today"}
+      // the view opens on today; the days before are a pan (or a zoom) away
+      initialBars={Math.max(today.length, 30)}
+      dividers={step < 1440 * MIN ? past.days : undefined}
+      onNearStart={past.loadOlder}
+      // fitted again when the days before first come in under today's bars
+      resetKey={past.rows.length > 0 ? "past" : "today"}
+      emptyText="No data yet today"
       style={{ flex: 1, minHeight: 0 }}
     />
   );

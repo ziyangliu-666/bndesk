@@ -165,3 +165,55 @@ export class AxisGuard implements ISeriesPrimitive<Time> {
     }
   }
 }
+
+/**
+ * A faint vertical rule at each day start (`times`, seconds): where a chart that runs over several days restarts
+ * its day figures, so the drop back to 0 reads as a new day. Drawn on the boundary before the day's first bar.
+ */
+export class DayDividers implements ISeriesPrimitive<Time> {
+  private chart: IChartApi | null = null;
+  private update: (() => void) | null = null;
+  private times: UTCTimestamp[] = [];
+  private readonly views: readonly IPrimitivePaneView[];
+
+  constructor(private readonly color: string) {
+    this.views = [{ zOrder: () => "bottom", renderer: () => ({ draw: (t: CanvasRenderingTarget2D) => this.draw(t) }) }];
+  }
+
+  attached(p: SeriesAttachedParameter<Time, SeriesType>) {
+    this.chart = p.chart as unknown as IChartApi;
+    this.update = p.requestUpdate;
+  }
+
+  detached() {
+    this.chart = null;
+    this.update = null;
+  }
+
+  set(times: UTCTimestamp[]) {
+    if (times.length === this.times.length && times.every((t, i) => t === this.times[i])) return;
+    this.times = times;
+    this.update?.();
+  }
+
+  paneViews() {
+    return this.views;
+  }
+
+  private draw(target: CanvasRenderingTarget2D) {
+    const c = this.chart;
+    if (!c || !this.times.length) return;
+    const ts = c.timeScale();
+    const range = ts.getVisibleLogicalRange();
+    const half = range ? ts.width() / Math.max(1, range.to - range.from) / 2 : 0;
+    target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hr, bitmapSize }) => {
+      ctx.fillStyle = this.color;
+      const w = Math.max(1, Math.floor(hr));
+      for (const t of this.times) {
+        const x = ts.timeToCoordinate(t);
+        if (x == null) continue;
+        ctx.fillRect(Math.round((x - half) * hr), 0, w, bitmapSize.height);
+      }
+    });
+  }
+}
