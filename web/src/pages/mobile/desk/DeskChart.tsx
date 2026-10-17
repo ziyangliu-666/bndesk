@@ -68,6 +68,8 @@ export function DeskChart({ ms }: { ms: number }) {
     color: P[key],
     lineStyle: S[key],
     width: 1.5,
+    pane: 1,
+    margins: { top: 0.12, bottom: 0.08 },
     data: pts,
     format: money,
     signColor: false,
@@ -83,7 +85,7 @@ export function DeskChart({ ms }: { ms: number }) {
     line("inv", "Inv", data.inv),
     line("hedge", "Hedge", data.hedge),
     ...(data.rebates.length ? [line("reb", "Rebates", data.rebates), line("other", "Other", data.other)] : []),
-    { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 1, color: VOL, data: data.vol, format: vol, lastValue: false },
+    { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 2, color: VOL, data: data.vol, format: vol, lastValue: false },
   ];
   // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)
   const view = Math.max(Math.min(VIEW[iv] ?? Infinity, nToday.current), 30);
@@ -95,12 +97,12 @@ export function DeskChart({ ms }: { ms: number }) {
       title="Desk PnL"
       className="dk-chart"
       series={s}
-      paneStretch={[1, 0.24]}
+      paneStretch={[1, 0.5, 0.2]}
       intervals={IVS}
       interval={iv}
       onInterval={(v) => setIv(v as PnlIv)}
       emptyText="No P&L yet today"
-      height={300}
+      height={360}
       initialBars={view}
       resetKey={`${k}:${todayFirst}:${past.bars.length > 0}`}
       dividers={past.days}

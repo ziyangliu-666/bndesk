@@ -149,20 +149,21 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     const S = PNL_STROKES;
     list = [
       day,
-      { key: "trading", kind: "line", label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, data: pts("trading", (r) => r.trading) },
+      { key: "trading", kind: "line", pane: 1, label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("trading", (r) => r.trading) },
       ...(has("mm")
         ? [
-            { key: "mm", kind: "line", label: "Market making", color: P.mm, lineStyle: S.mm, width: 1.5, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
-            { key: "inv", kind: "line", label: "Inventory PnL", color: P.inv, lineStyle: S.inv, width: 1.5, format: fPnl, data: pts("invp", (r) => (r.trading != null && r.mm != null ? r.trading - r.mm : null)) } as ExSeries,
+            { key: "mm", kind: "line", pane: 1, label: "Market making", color: P.mm, lineStyle: S.mm, width: 1.5, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
+            { key: "inv", kind: "line", pane: 1, label: "Inventory PnL", color: P.inv, lineStyle: S.inv, width: 1.5, format: fPnl, data: pts("invp", (r) => (r.trading != null && r.mm != null ? r.trading - r.mm : null)) } as ExSeries,
           ]
         : []),
-      ...(has("hedge") ? [{ key: "hedge", kind: "line", label: "Hedge", color: P.hedge, width: 1.5, lineStyle: S.hedge, format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
+      ...(has("hedge") ? [{ key: "hedge", kind: "line", pane: 1, label: "Hedge", color: P.hedge, width: 1.5, lineStyle: S.hedge, format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
       ...(anyReb
         ? [
-            { key: "reb", kind: "line", label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries,
+            { key: "reb", kind: "line", pane: 1, label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries,
             {
               key: "other",
               kind: "line",
+              pane: 1,
               label: "Other",
               color: P.other,
               width: 1.5,
@@ -175,12 +176,14 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
             } as ExSeries,
           ]
         : []),
-      vol,
+      { ...vol, pane: 2 },
     ];
+    // the P&L alone in the main pane (its scale fits the bars in view); its parts below on their own scale
+    stretch = [1, 0.5, 0.2];
     extra = [
-      ...volLegend,
+      ...volLegend.map((x) => ({ ...x, pane: 2 })),
       {
-        pane: 1,
+        pane: 2,
         label: "Fills",
         color: C.ink2,
         value: (t) => {
