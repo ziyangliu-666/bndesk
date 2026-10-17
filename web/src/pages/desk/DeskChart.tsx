@@ -9,7 +9,7 @@ import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from
 import { ExChart, GAP, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
 import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
-import { dayEnds, pastStep, usePast } from "./past";
+import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
 
 type Tab = "pnl" | "equity" | "exposure";
@@ -76,7 +76,10 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     () => (step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)),
     [step, minRows, bars, series, fills, dayStart],
   );
-  const rows = useMemo(() => (past.rows.length ? past.rows.concat(today) : today), [past.rows, today]);
+  // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
+  const offAt = useDayOffsets(tab === "pnl" ? dayStart : null);
+  const perDay = useMemo(() => (past.rows.length ? past.rows.concat(today) : today), [past.rows, today]);
+  const rows = useMemo(() => (offAt ? perDay.map((r) => runOn(r, offAt(r.t))) : perDay), [perDay, offAt]);
   const volRows = useMemo(() => (step === 0 ? (past.rows.length ? past.rows.concat(minRows) : minRows) : rows), [step, past.rows, minRows, rows]);
   const volByT = useMemo(() => new Map(volRows.map((r) => [r.t, r])), [volRows]);
 
@@ -87,7 +90,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   // exposure is signed (long +, short −), on the axis, the tags and the legend
   const fSigned = money((v) => compact(v, 2, true));
   // P&L lines stop at each day's last bar: the figures restart at 0 with the next day (step < 1 day)
-  const ends = useMemo(() => (tab === "pnl" && step < 1440 * MIN ? dayEnds(rows.map((r) => r.t), dayStart) : NO_ENDS), [tab, step, rows, dayStart]);
+  const ends = useMemo(() => (tab === "pnl" && !offAt && step < 1440 * MIN ? dayEnds(rows.map((r) => r.t), dayStart) : NO_ENDS), [tab, offAt, step, rows, dayStart]);
   const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
     stable.get(
       k + iv,
@@ -117,7 +120,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   let extra: ExLegendItem[] = [];
   let stretch = [1, 0.22];
   if (tab === "pnl") {
-    const dayLabel = "Day PnL";
+    const dayLabel = offAt ? "Cumulative PnL" : "Day PnL";
     const day: ExSeries =
       style === "candles"
         ? {
@@ -135,7 +138,12 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         : { key: "day", kind: "baseline", label: dayLabel, toggle: false, format: fPnl, signColor: true, data: pts("day", (r) => r.c) };
     const has = (k: "mm" | "hedge") => rows.some((r) => r[k] != null);
     // rebates at a row: the last minute's figure inside it; Other is what the parts leave of Day PnL
-    const rebAt = (r: Row) => (r.reb !== undefined ? r.reb : r.t >= dayStart ? rebatesAt(mins, r.t, step) : null);
+    const rebAt = (r: Row) => {
+      if (r.reb !== undefined) return r.reb;
+      if (r.t < dayStart) return null;
+      const v = rebatesAt(mins, r.t, step);
+      return v == null ? null : v + (offAt ? offAt(r.t).reb : 0);
+    };
     const anyReb = mins.reb.t.length > 0 || past.rows.some((r) => r.reb != null);
     const P = PNL_COLORS;
     const S = PNL_STROKES;
@@ -244,4 +252,20 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       style={{ flex: 1, minHeight: 0 }}
     />
   );
+}
+
+/** A row's P&L figures run on from the earlier days' closes (`o`). */
+function runOn(r: Row, o: DayOffset): Row {
+  const add = (v: number | null | undefined, d: number) => (v == null ? v : v + d);
+  return {
+    ...r,
+    o: r.o + o.c,
+    h: r.h + o.c,
+    l: r.l + o.c,
+    c: r.c + o.c,
+    trading: add(r.trading, o.trading) ?? null,
+    mm: add(r.mm, o.mm) ?? null,
+    hedge: add(r.hedge, o.hedge) ?? null,
+    reb: r.reb === undefined ? undefined : add(r.reb, o.reb),
+  };
 }

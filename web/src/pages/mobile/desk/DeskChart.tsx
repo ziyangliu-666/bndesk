@@ -11,8 +11,8 @@ import { useLive } from "../../../components/mobile";
 import { useStore } from "../../../store";
 import { maskFormat } from "../../../mask";
 import { useTodayMinutes } from "../../desk/pnlData";
-import { dayEnds, pastStep, usePast } from "../../desk/past";
-import { PNL_STEP, histBars, todayBars, toChart, type PnlData, type PnlIv } from "./pnl";
+import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
+import { PNL_STEP, histBars, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
 
 const IVS: { value: PnlIv; label: string }[] = [
   { value: "line", label: "Line" },
@@ -38,6 +38,8 @@ export function DeskChart({ ms }: { ms: number }) {
   const mins = useTodayMinutes(dayStart);
   const past = usePast(pastStep(step), dayStart ?? 0);
   const pastBars = useMemo(() => histBars(past.bars), [past.bars]);
+  // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
+  const offAt = useDayOffsets(dayStart);
 
   const prev = useRef<{ k: string; d: PnlData } | null>(null);
   const k = iv;
@@ -45,17 +47,18 @@ export function DeskChart({ ms }: { ms: number }) {
   const data = useMemo(() => {
     const today = dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : [];
     nToday.current = today.length;
-    const all = pastBars.length ? pastBars.concat(today) : today;
-    const ends = dayEnds(all.map((b) => b.time), dayStart ?? 0);
+    const perDay = pastBars.length ? pastBars.concat(today) : today;
+    const all = offAt ? perDay.map((b) => runOn(b, offAt(b.time))) : perDay;
+    const ends = offAt ? new Set<number>() : dayEnds(all.map((b) => b.time), dayStart ?? 0);
     const d = toChart(all, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL, ends);
     prev.current = { k, d };
     return d;
-  }, [dayStart, bars, series, fills, step, pastBars, iv, k, mins]);
+  }, [dayStart, bars, series, fills, step, pastBars, iv, k, mins, offAt]);
 
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
   const vol = maskFormat(hide, (v: number) => compact(v));
-  const label = "Day PnL";
+  const label = offAt ? "Cumulative PnL" : "Day PnL";
   // at rest the legend has two lines: Day PnL, then Trading, Hedge and Rebates (with Other they make Day PnL); the
   // two parts of Trading and Other are a chip away
   const line = (key: keyof typeof P, label: string, pts: PnlData["mm"]): ExSeries => ({
@@ -108,4 +111,22 @@ export function DeskChart({ ms }: { ms: number }) {
       chips={[...s.slice(1, -1).map((x) => ({ key: x.key, label: x.label, color: x.color, stroke: x.lineStyle })), "|", { key: "vol", label: "Vol" }]}
     />
   );
+}
+
+/** A bar's P&L figures run on from the earlier days' closes (`o`). */
+function runOn(b: PnlBar, o: DayOffset): PnlBar {
+  const add = (v: number | null, d: number) => (v == null ? v : v + d);
+  return {
+    ...b,
+    open: b.open + o.c,
+    high: b.high + o.c,
+    low: b.low + o.c,
+    close: b.close + o.c,
+    trading: add(b.trading, o.trading),
+    mm: add(b.mm, o.mm),
+    inv: add(b.inv, o.trading - o.mm),
+    hedge: add(b.hedge, o.hedge),
+    rebates: add(b.rebates, o.reb),
+    other: add(b.other, o.c - o.trading - o.hedge - o.reb),
+  };
 }

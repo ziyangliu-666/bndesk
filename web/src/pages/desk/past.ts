@@ -132,3 +132,95 @@ export function dayEnds(times: readonly number[], dayStart: number): Set<number>
   for (let i = 0; i + 1 < times.length; i++) if (day(times[i]!) !== day(times[i + 1]!)) out.add(times[i]!);
   return out;
 }
+
+/** What the days before a day add to each P&L figure: the sum of their closing values. */
+export interface DayOffset {
+  c: number;
+  trading: number;
+  mm: number;
+  hedge: number;
+  reb: number;
+}
+const ZERO: DayOffset = { c: 0, trading: 0, mm: 0, hedge: 0, reb: 0 };
+
+interface Closes {
+  /** Day start → the offset of the days before it, ascending by day. */
+  days: [number, DayOffset][];
+  /** All kept days' closes summed: today's offset. */
+  total: DayOffset;
+  subs: Set<() => void>;
+  busy: boolean;
+}
+const closes = new Map<number, Closes>();
+
+async function loadCloses(dayStart: number) {
+  const c = closes.get(dayStart)!;
+  c.busy = true;
+  try {
+    const h = await getJSON<History>("/api/history", { from: dayStart - MAX_BACK, to: dayStart, step: 86_400, per: "day" });
+    const run = { ...ZERO };
+    const days: [number, DayOffset][] = [];
+    for (const b of h.bars.filter((x) => x.t < dayStart).sort((x, y) => x.t - y.t)) {
+      days.push([b.t, { ...run }]);
+      run.c += b.c;
+      run.trading += b.pi ?? 0;
+      run.mm += b.mm ?? 0;
+      run.hedge += b.hedge ?? 0;
+      run.reb += b.rebates ?? 0;
+    }
+    c.days = days;
+    c.total = run;
+  } catch {
+    setTimeout(() => void loadCloses(dayStart), 15_000);
+    return;
+  } finally {
+    c.busy = false;
+  }
+  for (const f of c.subs) f();
+}
+
+/**
+ * The Desk P&L charts run on over the days: each figure there is the sum of the earlier days' closing values plus
+ * the day's own (stored per day, restarting at each day start). Returns the offset of the day holding `t`, or null
+ * until the days' closes are in.
+ */
+export function useDayOffsets(dayStart: number | null | undefined): ((t: number) => DayOffset) | null {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (!dayStart) return;
+    let c = closes.get(dayStart);
+    if (!c) closes.set(dayStart, (c = { days: [], total: ZERO, subs: new Set(), busy: false }));
+    const cb = () => bump((n) => n + 1);
+    c.subs.add(cb);
+    if (!c.days.length && c.total === ZERO && !c.busy) void loadCloses(dayStart);
+    return () => void c.subs.delete(cb);
+  }, [dayStart]);
+  const c = dayStart ? closes.get(dayStart) : undefined;
+  const ready = !!c && (c.days.length > 0 || c.total !== ZERO);
+  const days = c?.days;
+  const total = c?.total;
+  return useMemo(() => {
+    if (!ready || !days || !total || !dayStart) return null;
+    return (t: number) => {
+      if (t >= dayStart) return total;
+      const d = dayStart + Math.floor((t - dayStart) / DAY) * DAY;
+      // the last kept day at or before d (a day without rows adds nothing)
+      let lo = 0;
+      let hi = days.length - 1;
+      let at = -1;
+      while (lo <= hi) {
+        const m = (lo + hi) >> 1;
+        if (days[m]![0] <= d) (at = m), (lo = m + 1);
+        else hi = m - 1;
+      }
+      if (at < 0) return ZERO;
+      const [day, off] = days[at]!;
+      return day === d ? off : nextOff(days, at, total);
+    };
+  }, [ready, days, total, dayStart]);
+}
+
+/** The offset after the kept day at `i` (the day before d had rows, d itself none). */
+function nextOff(days: [number, DayOffset][], i: number, total: DayOffset): DayOffset {
+  return days[i + 1]?.[1] ?? total;
+}
