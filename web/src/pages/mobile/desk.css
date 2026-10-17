@@ -23,77 +23,54 @@
 
 /* hero: Day PnL big at the left, 1h and equity label-over-value at the right */
 .dk-hero {
-  padding: 4px 0 12px;
+  padding: 8px 0 12px;
 }
 .dk-hero-top {
   display: flex;
-  align-items: center;
+  align-items: baseline;
+  gap: 8px;
   min-height: 40px;
+}
+.dk-hero-label {
   font-size: 14px;
   color: var(--ink-2);
 }
-.dk-hero-label .m-info {
-  min-height: 44px;
+.dk-hero-v {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 32px;
+  white-space: nowrap;
+}
+.dk-hero-unit {
+  font-size: 12px;
+  color: var(--muted);
 }
 .dk-eye {
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 44px;
   height: 44px;
-  margin: -2px 0 -2px -6px;
+  margin: -2px -10px -2px auto;
   color: var(--muted);
 }
-.dk-eye:active {
-  opacity: 0.6;
-}
-.dk-hero-row {
+.dk-hero-sub,
+.dk-pace {
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-.dk-hero-main {
-  flex: 1;
-  min-width: 0;
-}
-.dk-hero-v {
-  font-size: 32px;
-  font-weight: 500;
-  line-height: 1.15;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-.dk-hero-v .masked {
-  font-size: 20px;
-}
-.dk-hero-since {
-  margin-left: 4px;
-  font-size: 12px;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  font-size: 13px;
   color: var(--muted);
 }
-.dk-hero-sub {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.dk-hero-sub b,
+.dk-pace b {
+  margin-left: 3px;
+  font-weight: 400;
+  color: var(--ink-2);
 }
-.dk-hero-side {
-  display: flex;
-  gap: 16px;
-  margin: 0 0 1px;
-  text-align: right;
-}
-.dk-hero-side dt {
-  font-size: 12px;
-  color: var(--muted);
-}
-.dk-hero-side dd {
-  margin: 2px 0 0;
-  font-size: 14px;
-  font-weight: 500;
-  white-space: nowrap;
+.dk-pace {
+  padding: 12px var(--m-pad-r) 4px var(--m-pad-l);
 }
 
 /* a chart runs to the screen edges, between two rules */

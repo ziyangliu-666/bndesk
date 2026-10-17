@@ -47,6 +47,8 @@ function EngineSection({ e }: { e: EngineT }) {
         )}
         {stale && <span className="fig warn-text">metrics {num(e.stale_s, 1)} s old</span>}
       </div>
+      {/* two groups, apart: what the engine did, then its money */}
+      <div className="ops-engine-figs">
       <div className="ops-pairs">
         <Pair label="Orders" title="Orders sent by the engine (counter from its metrics)">{int(e.orders)}</Pair>
         <Pair label="Cancels" title="Cancels sent by the engine">{int(e.cancels)}</Pair>
@@ -57,6 +59,8 @@ function EngineSection({ e }: { e: EngineT }) {
         <Pair label="Venue rejects" title="Orders the exchange rejected" tone={e.venue_rejects ? "warn-text" : ""}>
           {int(e.venue_rejects)}
         </Pair>
+      </div>
+      <div className="ops-pairs">
         <Pair label="Realized" title="Realized PnL reported by the engine">
           <Money v={e.realized} sign />
         </Pair>
@@ -64,11 +68,12 @@ function EngineSection({ e }: { e: EngineT }) {
           <Money v={e.unrealized} sign />
         </Pair>
         <Pair label="Fees" title="Fees paid today: a cost, signed as one (rebates are credited apart)">
-          <Money v={e.fees == null ? null : -e.fees} sign />
+          <Money v={e.fees == null ? null : -e.fees} sign color={false} />
         </Pair>
         <Pair label="Loss limit" title="The day's loss that triggers the engine's kill">
           {e.max_loss == null ? "--" : <Money v={e.max_loss} />}
         </Pair>
+      </div>
       </div>
       <div className="ops-engine-tables">
         <table className="ops-table">
@@ -240,7 +245,7 @@ function Checks() {
 }
 
 function Alerts() {
-  const { active, hidden, cleared } = useAlertList();
+  const { active } = useAlertList();
   const [view, setView] = useExPref<AlertView>("system", "alerts", "active", ["active", "hidden", "cleared"]);
   return (
     <section className="ops-panel ops-sys-alerts">
@@ -251,9 +256,10 @@ function Alerts() {
           value={view}
           onChange={setView}
           options={[
-            { value: "active", label: `Active ${active.length}` },
-            { value: "cleared", label: `Cleared today ${cleared.length}` },
-            { value: "hidden", label: `Hidden ${hidden.length}`, title: "Hidden on this browser until they clear" },
+            // a count only where it asks for something: the active alerts
+            { value: "active", label: active.length ? `Active ${active.length}` : "Active" },
+            { value: "cleared", label: "Cleared today" },
+            { value: "hidden", label: "Hidden", title: "Hidden on this browser until they clear" },
           ]}
         />
       </header>
@@ -277,7 +283,7 @@ export function Engine() {
       <section className="ops-panel ops-sys-engines">
         <header className="ops-head">
           <span className="ops-title">
-            Engines <span className="ops-count fig">{engines ? (engDown ? `${engDown} down` : engines.length) : ""}</span>
+            Engines {engDown > 0 && <span className="ops-count fig warn-text">{engDown} down</span>}
           </span>
           <span className="ops-head-right muted">Money in USDT</span>
         </header>
@@ -293,7 +299,7 @@ export function Engine() {
         <section className="ops-panel">
           <header className="ops-head">
             <span className="ops-title">
-              Feeds <span className="ops-count fig">{feeds ? (down ? `${down} down` : `${feeds.length}/${feeds.length}`) : ""}</span>
+              Feeds {down > 0 && <span className="ops-count fig warn-text">{down} down</span>}
             </span>
           </header>
           <Feeds />

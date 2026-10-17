@@ -579,8 +579,6 @@
   color: var(--muted);
 }
 .ex-pair-l.dotted {
-  text-decoration: underline dotted rgba(138, 148, 165, 0.6);
-  text-underline-offset: 3px;
   cursor: help;
 }
 .ex-pair-v {
@@ -608,6 +606,83 @@
   color: var(--muted);
 }
 
+/* ---------- page head: one figure large, its parts in a line, quieter facts at the right ---------- */
+.ex-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ex-head-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
+.ex-head-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.ex-head-l {
+  color: var(--muted);
+}
+.ex-head-big {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 26px;
+  color: var(--ink);
+}
+.ex-head-top .ex-fact {
+  margin-left: 6px;
+}
+.ex-head-parts {
+  display: flex;
+  gap: 14px;
+  line-height: 16px;
+}
+.ex-head-facts {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.ex-head-row {
+  display: flex;
+  gap: 18px;
+  line-height: 16px;
+}
+.ex-fact {
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.ex-fact-l {
+  color: var(--muted);
+}
+.ex-fact-v {
+  color: var(--ink-2);
+}
+.ex-head .up {
+  color: var(--up);
+}
+.ex-head .down {
+  color: var(--down);
+}
+.ex-head .warn {
+  color: var(--warn);
+}
+.ex-head .crit {
+  color: var(--crit);
+}
+
 /* ---------- footer ---------- */
 .ex-foot {
   flex: none;
@@ -624,19 +699,8 @@
   overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
-.ex-foot-vr {
-  flex: none;
-  width: 1px;
-  height: 12px;
-  background: var(--rule);
-}
-.ex-foot-conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.ex-foot-conn.up {
-  color: var(--up);
+.ex-foot-gap {
+  flex: 1;
 }
 .ex-foot-conn.warn,
 .ex-warn {
@@ -644,12 +708,6 @@
 }
 .ex-foot-conn.crit {
   color: var(--crit);
-}
-.ex-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
 .ex-ink {
   color: var(--ink);
@@ -667,69 +725,7 @@
   cursor: pointer;
 }
 .ex-foot-tz button.on {
-  color: var(--ink);
-}
-.ex-marq {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-}
-.ex-marq-l {
-  flex: none;
-  padding-right: 10px;
-  margin-right: 2px;
-  border-right: 1px solid var(--rule);
-  color: var(--muted);
-}
-.ex-marq-clip {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  /* an item scrolling out is gone before it reaches the label (a clear strip, then a fade): a cut word never
-     reads as part of the label */
-  mask-image: linear-gradient(to right, transparent 16px, #000 56px);
-}
-.ex-marq-in {
-  display: inline-flex;
-  animation: ex-marq 60s linear infinite;
-}
-.ex-marq-clip:hover .ex-marq-in {
-  animation-play-state: paused;
-}
-.ex-marq-copy {
-  display: inline-flex;
-}
-.ex-marq-it {
-  padding: 0 11px;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: var(--muted);
-  cursor: pointer;
-}
-.ex-marq-it .up {
-  color: var(--up);
-}
-.ex-marq-it .down {
-  color: var(--down);
-}
-@keyframes ex-marq {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-50%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ex-marq-in {
-    animation: none;
-  }
-  .ex-marq-copy {
-    display: none;
-  }
+  color: var(--ink-2);
 }
 .ex-tv {
   color: var(--muted);

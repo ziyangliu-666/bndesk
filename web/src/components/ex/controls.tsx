@@ -262,3 +262,68 @@ export function TvAttribution({ className }: { className?: string }) {
     </a>
   );
 }
+
+/** One figure in a page head: a label and its value, read inline ("Equity 45,360.24"). */
+export interface Fact {
+  label: ReactNode;
+  value: ReactNode;
+  /** Only for what answers "did we make money" (up / down) or a limit passed (warn / crit). */
+  tone?: Tone;
+  /** The definition, on hover (no underline). */
+  title?: string;
+}
+
+/**
+ * A page head with a hierarchy instead of a strip of equal pairs: one primary figure (`label`, then `value`
+ * large) with a short `aside` after it; its parts as one quiet inline line under it; and secondary facts grouped
+ * at the right, a row each. Values in ink-2 unless a tone says otherwise.
+ */
+export function FigureHead({
+  label,
+  value,
+  tone,
+  title,
+  aside,
+  parts,
+  facts,
+  className,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  tone?: Tone;
+  title?: string;
+  aside?: Fact[];
+  parts?: Fact[];
+  facts?: Fact[][];
+  className?: string;
+}) {
+  const fact = (f: Fact, i: number) => (
+    <span key={i} className="ex-fact" title={f.title}>
+      <span className="ex-fact-l">{f.label}</span>
+      <span className={"ex-fact-v fig " + (f.tone ?? "")}>{f.value}</span>
+    </span>
+  );
+  return (
+    <div className={"ex-head" + (className ? " " + className : "")}>
+      <div className="ex-head-main">
+        <div className="ex-head-top">
+          <span className="ex-head-l" title={title}>
+            {label}
+          </span>
+          <span className={"ex-head-big fig " + (tone ?? "")}>{value}</span>
+          {aside?.map(fact)}
+        </div>
+        {!!parts?.length && <div className="ex-head-parts">{parts.map(fact)}</div>}
+      </div>
+      {!!facts?.length && (
+        <div className="ex-head-facts">
+          {facts.map((row, i) => (
+            <div key={i} className="ex-head-row">
+              {row.map(fact)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

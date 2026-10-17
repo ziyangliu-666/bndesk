@@ -1,17 +1,17 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { isHidden, openMarkets, serverNow, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { hm, int, num } from "../../format";
 import { LevelIcon } from "../../components/ui";
-import { DefinedLabel, KV, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
+import { DefinedLabel, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
 import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { SeriesKey } from "../../components/ex";
 import type { Account, Exposure, SymbolRow } from "../../protocol";
-import { Bps, FillRow, InstName, useFillSheet } from "./shared";
+import { FillRow, InstName, useFillSheet } from "./shared";
 import { instPnl, unpriced, useLegPnl } from "../../selectors";
-import { pctOfMoney, useHide } from "../../mask";
+import { useHide } from "../../mask";
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
@@ -47,23 +47,12 @@ export function DeskM() {
   const zone = tz === "utc" ? " UTC" : "";
   const equity = (accounts ?? []).reduce((s, a) => s + a.equity, 0);
   const mk = sm.markout_net_bps_1h;
-  const ofEquity = equity > 0 ? (sm.pnl_day / (equity - sm.pnl_day)) * 100 : null;
 
   return (
     <>
       <AlertLine />
 
-      <DeskHero
-        v={sm.pnl_day}
-        sub={
-          <>
-            {ofEquity != null && <span className={"fig" + (hide ? " masked" : "")}>{pctOfMoney(ofEquity / 100, hide, 2)} of equity</span>}
-          </>
-        }
-        since={`since ${hm(sm.day_start, tz)}${zone}`}
-        h1={sm.pnl_1h}
-        equity={equity}
-      />
+      <DeskHero v={sm.pnl_day} since={`since ${hm(sm.day_start, tz)}${zone}`} h1={sm.pnl_1h} equity={equity} />
 
       <section className="dk-chart-sec">
         <DeskChart ms={PAGE_MS} />
@@ -122,27 +111,19 @@ export function DeskM() {
             pct
           />
         )}
-      </Section>
 
-      <Section>
-        <KV
-          cols={3}
-          items={[
-            {
-              label: "Fills / h",
-              value: int(sm.fills_1h),
-            },
-            {
-              label: "Spot volume",
-              // as the desktop's ticker writes it: K / M with 2 decimals
-              value: <Money v={sm.volume_day} kind="k" />,
-            },
-            {
-              label: "Markout 10 s",
-              value: <Bps v={mk} />,
-            },
-          ]}
-        />
+        {/* the pace of the day, one quiet line under the limits (not a strip of equal boxes) */}
+        <div className="dk-pace m-fig">
+          <span>
+            Fills / h <b>{int(sm.fills_1h)}</b>
+          </span>
+          <span>
+            Volume <b>{<Money v={sm.volume_day} kind="k" />}</b>
+          </span>
+          <span>
+            Markout 10 s <b>{mk == null ? "--" : `${num(mk, 1, true)} bps`}</b>
+          </span>
+        </div>
       </Section>
 
       <div className="m-hold" {...hold}>
@@ -163,16 +144,18 @@ export function DeskM() {
   );
 }
 
-// ---- hero: Day PnL big, the eye that hides amounts, 1h and equity at the right ----
+// ---- head: Day PnL on one line, clear but not giant; 1h, equity and the day's start a quiet line under it ----
 
-function DeskHero({ v, sub, since, h1, equity }: { v: number; sub: ReactNode; since: string; h1: number; equity: number }) {
+function DeskHero({ v, since, h1, equity }: { v: number; since: string; h1: number; equity: number }) {
   const hide = useStore((s) => s.hideAmounts);
   return (
     <section className="dk-hero">
       <div className="dk-hero-top">
-        <span className="dk-hero-label">
-          Day PnL (USDT) <span className="dk-hero-since">{since}</span>
+        <span className="dk-hero-label">Day PnL</span>
+        <span className="dk-hero-v">
+          <Money v={v} />
         </span>
+        <span className="dk-hero-unit">USDT</span>
         <UnstyledButton
           className="dk-eye"
           aria-label={hide ? "Show amounts" : "Hide amounts"}
@@ -182,27 +165,14 @@ function DeskHero({ v, sub, since, h1, equity }: { v: number; sub: ReactNode; si
           {hide ? <IconEyeOff size={18} stroke={1.75} /> : <IconEye size={18} stroke={1.75} />}
         </UnstyledButton>
       </div>
-      <div className="dk-hero-row">
-        <div className="dk-hero-main">
-          <div className="dk-hero-v">
-            <Money v={v} />
-          </div>
-          <div className="dk-hero-sub">{sub}</div>
-        </div>
-        <dl className="dk-hero-side">
-          <div>
-            <dt>1h PnL</dt>
-            <dd>
-              <Money v={h1} />
-            </dd>
-          </div>
-          <div>
-            <dt>Equity</dt>
-            <dd>
-              <Money v={equity} kind="full" />
-            </dd>
-          </div>
-        </dl>
+      <div className="dk-hero-sub m-fig">
+        <span>
+          1h <b>{<Money v={h1} color={false} />}</b>
+        </span>
+        <span>
+          Equity <b>{<Money v={equity} kind="full" />}</b>
+        </span>
+        <span>{since}</span>
       </div>
     </section>
   );
@@ -231,8 +201,9 @@ function PartRows({ rows }: { rows: Part[] }) {
             <DefinedLabel label={r.label} info={r.info} />
             {r.sub && <span className="dk-part-sub"> {r.sub}</span>}
           </span>
+          {/* the parts in ink: the sign is in the text; Day PnL above carries the colour */}
           <span className={"dk-part-v " + (r.tone ?? "")}>
-            <Money v={r.v} color={r.tone == null} />
+            <Money v={r.v} color={false} />
           </span>
         </div>
       ))}
@@ -291,7 +262,7 @@ function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
             subtitle={
               perp
                 ? `Hedge leg · ${int(r.fills_day)} fills`
-                : `Spot · ${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + " USDT"} · ${int(r.fills_day)} fills`
+                : `${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + " USDT"} · ${int(r.fills_day)} fills`
             }
             primary={
               <>

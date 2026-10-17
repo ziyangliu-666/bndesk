@@ -164,19 +164,29 @@
   font-weight: 500;
   color: var(--ink);
 }
+/* the range's P&L large, then its other figures as a quiet inline run, related ones close together */
 .hx-figs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   padding: 2px 16px 12px;
 }
 .hx-fig {
   display: flex;
-  flex-direction: column;
+  gap: 6px;
+  align-items: baseline;
   min-width: 0;
 }
+.hx-fig .hx-fig-v {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
 .hx-fig.big {
-  grid-column: span 2;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 4px;
 }
 .hx-fig-l {
   font-size: 12px;
@@ -192,14 +202,13 @@
   white-space: nowrap;
 }
 .hx-fig.big .hx-fig-v {
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 22px;
+  line-height: 28px;
   font-weight: 500;
+  color: var(--ink);
 }
+/* a defined term: its title is the definition; a plain label (no underline) */
 .dotted {
-  text-decoration: underline dotted;
-  text-decoration-color: rgba(138, 148, 165, 0.6);
-  text-underline-offset: 3px;
   cursor: help;
 }
 .hx-fig-v.up,
@@ -407,10 +416,7 @@
 }
 .hx-tag {
   margin-left: 8px;
-  padding: 0 5px;
-  border-radius: 2px;
-  background: var(--raised);
-  color: var(--ink-2);
+  color: var(--muted);
   font-size: 12px;
 }
 /* a text button: the chosen day's ✕, its Intraday / Days switch */

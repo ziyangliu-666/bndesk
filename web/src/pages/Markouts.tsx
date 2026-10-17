@@ -4,9 +4,9 @@
 // comes from /api/markouts over all of today's fills (analysis/data.ts) and follows the controls.
 import { useMemo, useState, type ReactNode } from "react";
 import { selectInstrument, useStore } from "../store";
-import { bps, compact, int, pct, signClass } from "../format";
+import { bps, compact, int, pct } from "../format";
 import { C, S1 } from "../theme";
-import { TextToggle, TickerStrip, useExHidden, type TickerItem } from "../components/ex";
+import { FigureHead, TextToggle, useExHidden } from "../components/ex";
 import { maskText, money, useHide } from "../mask";
 import type { MarkoutInst, MarkoutReport } from "../protocol";
 import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, everyLine, hLabel, pathCover, useMarkouts, useView, type SideF, type VenueF, type Weight } from "./analysis/data";
@@ -140,33 +140,43 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** The page's head: the 10 s markout as the one large figure (the horizon the desk reads first), the other
+ *  horizons and the edge in a line under it, the counts and the diagnostics quieter at the right. In ink: these
+ *  are diagnostics, not money made. */
 function Kpis({ r, side, hide }: { r: MarkoutReport | null; side: SideF; hide: boolean }) {
   const l = r ? everyLine(r, side) : null;
   const at = (h: number) => (l ? l.mean[hIdx(r, h)] : null);
-  const mk = (h: number): TickerItem => {
-    const x = at(h);
-    return { label: `Markout ${h} s`, value: bps(x), tone: (signClass(x) || undefined) as TickerItem["tone"] };
-  };
   const adv = l ? l.adverse[hIdx(r, 10)] : null;
-  const items: (TickerItem | "|")[] = [
-    { label: "Fills", value: r ? int(r.fills) : "--" },
-    { label: "Notional", value: r ? maskText(hide, compact(r.notional)) : "--", tone: hide ? "muted" : undefined },
-    { label: "Edge at fill", value: bps(r?.edge) },
-    "|",
-    mk(1),
-    mk(10),
-    mk(60),
-    mk(300),
-    "|",
-    {
-      label: "Markout PnL",
-      title: "Σ notional × 60 s markout, USDT: what the fills were worth a minute later. A diagnostic, not P&L",
-      value: r ? maskText(hide, money(r.pnl, true)) : "--",
-      tone: hide || !r ? (hide ? "muted" : undefined) : ((signClass(r.pnl) || undefined) as TickerItem["tone"]),
-    },
-    { label: "Adverse at 10 s", value: adv == null ? "--" : pct(adv, 1) },
-  ];
-  return <TickerStrip className="an-kpi" size="md" items={items} />;
+  const m10 = at(10);
+  return (
+    <div className="an-kpi">
+      <FigureHead
+        label="Markout 10 s"
+        title={MK_DEF}
+        value={m10 == null ? "--" : `${bps(m10)} bps`}
+        parts={[
+          { label: "Edge at fill", value: bps(r?.edge) },
+          { label: "1 s", value: bps(at(1)) },
+          { label: "60 s", value: bps(at(60)) },
+          { label: "300 s", value: bps(at(300)) },
+        ]}
+        facts={[
+          [
+            { label: "Fills", value: r ? int(r.fills) : "--" },
+            { label: "Notional", value: r ? maskText(hide, compact(r.notional)) : "--" },
+          ],
+          [
+            {
+              label: "Markout PnL",
+              title: "Σ notional × 60 s markout, USDT: what the fills were worth a minute later. A diagnostic, not P&L",
+              value: r ? maskText(hide, money(r.pnl, true)) : "--",
+            },
+            { label: "Adverse at 10 s", value: adv == null ? "--" : pct(adv, 1), title: "Share of the fills whose 10 s markout is below zero" },
+          ],
+        ]}
+      />
+    </div>
+  );
 }
 
 function Path({ r, side, h, onH }: { r: MarkoutReport | null; side: SideF; h: number; onH: (h: number) => void }) {
@@ -196,7 +206,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
     label: `${h} s`,
     title: `Markout ${h} s after the fill, bps`,
     cell: (x) => bps(x.mean[ix(h)]),
-    cls: (x) => "fig " + signClass(x.mean[ix(h)]),
+    cls: () => "fig",
     sort: (x) => x.mean[ix(h)] ?? null,
   });
   const cols: SCol<MarkoutInst>[] = [
@@ -214,7 +224,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
     },
     { key: "f", label: "Fills", cell: (x) => int(x.fills), cls: () => "fig", sort: (x) => x.fills },
     { key: "n", label: "Notional", title: "Filled notional today, USDT", cell: (x) => maskText(hide, compact(x.notional)), cls: () => "fig" + (hide ? " masked" : ""), sort: (x) => x.notional },
-    { key: "e", label: "Edge", title: "Edge at fill, bps", cell: (x) => bps(x.edge), cls: (x) => "fig " + signClass(x.edge), sort: (x) => x.edge },
+    { key: "e", label: "Edge", title: "Edge at fill, bps", cell: (x) => bps(x.edge), cls: () => "fig", sort: (x) => x.edge },
     ...MAIN_H.map(mkCol),
     {
       key: "se",
@@ -229,7 +239,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
       label: "Markout PnL",
       title: "Σ notional × 60 s markout, USDT. A diagnostic, not P&L",
       cell: (x) => maskText(hide, money(x.pnl, true)),
-      cls: (x) => "fig " + (hide ? "masked" : signClass(x.pnl)),
+      cls: () => "fig" + (hide ? " masked" : ""),
       sort: hide ? undefined : (x) => x.pnl,
     },
     { key: "a", label: "Adverse", title: `Share of ${of} whose 10 s markout is below zero`, cell: (x) => (x.adverse10 == null ? "--" : pct(x.adverse10, 0)), cls: () => "fig", sort: (x) => x.adverse10 },

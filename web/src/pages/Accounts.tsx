@@ -14,7 +14,7 @@ import { fPrice, fQtyS, flexCols, maskVF, signCls, DEFAULT_COL } from "../grid";
 import type { Account, HedgeLeg, Position, SymbolRow } from "../protocol";
 import { HedgeBridge } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
-import { ExChart, Tabs, useExPref, type ExSeries } from "../components/ex";
+import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../components/ex";
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
@@ -60,43 +60,46 @@ function Hero() {
   }, [accounts]);
   const pnlDay = summary?.pnl_day ?? t?.pnl;
   const pctDay = t && t.open > 0 && pnlDay != null ? pnlDay / t.open : null;
-  const tone = hide ? "masked" : pnlDay == null ? "" : pnlDay > 0 ? "up" : pnlDay < 0 ? "down" : "";
+  const tone = hide ? undefined : pnlDay == null ? undefined : pnlDay > 0 ? "up" : pnlDay < 0 ? "down" : undefined;
+  // the total value large; Day PnL beside it (the one coloured figure: did we make money); where the value sits
+  // (spot, futures) in a line under it; rebates and transfers quieter at the right
   return (
     <div className="ops-hero">
-      <div className="ops-hero-main">
-        <span className="ops-hero-label">
-          Est. total value (USDT)
-          <button className="ops-eye" type="button" onClick={() => setHide(!hide)} aria-label={hide ? "Show amounts" : "Hide amounts"} title={hide ? "Show amounts" : "Hide amounts"}>
-            {hide ? <IconEyeOff size={14} /> : <IconEye size={14} />}
-          </button>
-        </span>
-        <span className={"ops-hero-value fig" + (hide ? " masked" : "")}>{t ? (amount(t.equity, "money", hide)) : "--"}</span>
-      </div>
-      <div className="ops-pair" title="Equity now − equity at the day start − net transfers in, and that as a share of the equity at the start">
-        <span className="ops-l">Day PnL</span>
-        <span className={"ops-v fig " + tone}>
-          {pnlDay == null ? "--" : amount(pnlDay, "pnlMoney", hide)}
-          {pctDay != null && <span className={"ops-unit " + tone}>({pctOfMoney(pctDay, hide)})</span>}
-        </span>
-      </div>
-      <div className="ops-pairs">
-        <div className="ops-pair" title="Spot: USDT free and in orders plus the other assets at mid">
-          <span className="ops-l">Spot</span>
-          <span className="ops-v">{t ? <Money v={t.spot} /> : "--"}</span>
-        </div>
-        <div className="ops-pair" title="USD-M futures: wallet balance plus unrealized PnL">
-          <span className="ops-l">Futures</span>
-          <span className="ops-v">{t ? <Money v={t.fut} /> : "--"}</span>
-        </div>
-        <div className="ops-pair" title="Market-maker rebates credited today, part of today's PnL">
-          <span className="ops-l">Rebates today</span>
-          <span className="ops-v">{summary ? <Money v={summary.rebates} sign /> : "--"}</span>
-        </div>
-        <div className="ops-pair" title="Net transfers in since the day start (not PnL)">
-          <span className="ops-l">Transfers today</span>
-          <span className="ops-v">{t ? <Money v={t.transfers} sign color={false} /> : "--"}</span>
-        </div>
-      </div>
+      <FigureHead
+        label={
+          <span className="ops-hero-label">
+            Total value (USDT)
+            <button className="ops-eye" type="button" onClick={() => setHide(!hide)} aria-label={hide ? "Show amounts" : "Hide amounts"} title={hide ? "Show amounts" : "Hide amounts"}>
+              {hide ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+            </button>
+          </span>
+        }
+        title="Estimated: every account's equity, spot at mid plus futures margin balance"
+        value={t ? amount(t.equity, "money", hide) : "--"}
+        aside={[
+          {
+            label: "Day PnL",
+            value: (
+              <>
+                {pnlDay == null ? "--" : amount(pnlDay, "pnlMoney", hide)}
+                {pctDay != null && <span className="ops-unit"> {pctOfMoney(pctDay, hide)}</span>}
+              </>
+            ),
+            tone,
+            title: "Equity now − equity at the day start − net transfers in, and that as a share of the equity at the start",
+          },
+        ]}
+        parts={[
+          { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: "Spot: USDT free and in orders plus the other assets at mid" },
+          { label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },
+        ]}
+        facts={[
+          [
+            { label: "Rebates today", value: summary ? <Money v={summary.rebates} sign color={false} /> : "--", title: "Market-maker rebates credited today, part of today's PnL" },
+            { label: "Transfers today", value: t ? <Money v={t.transfers} sign color={false} /> : "--", title: "Net transfers in since the day start (not PnL)" },
+          ],
+        ]}
+      />
     </div>
   );
 }
@@ -202,6 +205,7 @@ function AccountChart() {
         resetKey={mode}
         fill
         fullscreen
+        legendRest="names"
         emptyText="No account series yet"
       />
     </section>
@@ -797,9 +801,6 @@ function Exposure() {
 
 export function Accounts() {
   const [tab, setTab] = useExPref<AssetTab>("assets", "tab", "overview", ["overview", "spot", "futures", "exposure"]);
-  const nAcc = useStore((s) => s.snap?.accounts.length);
-  const nPos = useStore((s) => s.snap?.accounts.reduce((k, a) => k + a.positions.length, 0));
-  const nSpot = useStore((s) => s.snap?.symbols.filter((x) => x.venue === "spot" && Math.abs(x.inv_qty) > 0).length);
   return (
     <div className="page ops-assets">
       <Hero />
@@ -808,9 +809,9 @@ export function Accounts() {
           value={tab}
           onChange={setTab}
           items={[
-            { value: "overview", label: "Overview", count: nAcc ?? null },
-            { value: "spot", label: "Spot", count: nSpot != null ? nSpot + 1 : null },
-            { value: "futures", label: "Futures", count: nPos ?? null },
+            { value: "overview", label: "Overview" },
+            { value: "spot", label: "Spot" },
+            { value: "futures", label: "Futures" },
             { value: "exposure", label: "Exposure & hedge" },
           ]}
         />

@@ -35,6 +35,8 @@
   flex: none;
   height: 52px;
   padding: 0 12px;
+  display: flex;
+  align-items: center;
   border-bottom: 1px solid var(--rule);
 }
 .an-grid {
@@ -88,10 +90,8 @@
 .an-sub .ex-tt button {
   padding: 3px 5px;
 }
+/* a defined term: its title is the definition; a plain label (no underline) */
 .dotted {
-  text-decoration: underline dotted;
-  text-decoration-color: rgba(138, 148, 165, 0.6);
-  text-underline-offset: 3px;
   cursor: help;
 }
 .an-fillbox {

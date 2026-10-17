@@ -39,9 +39,9 @@ function useFitRange(orders: OpenOrder[]): number {
 }
 const tradingAccounts = (accounts: Account[]) => accounts.filter((a) => a.role !== "master" && (a.open_orders > 0 || a.inventory_value > 1));
 
-/** One cell per trading account: name and free USDT, then label-over-value pairs for what can run out (orders per
- *  10 s and per day against Binance's limits, bid use) and the resting notional on each side. Bars are neutral and
- *  turn amber, then red, only near a limit. */
+/** One cell per trading account: name and free USDT, then what can run out as a small table (orders per 10 s and
+ *  per day against Binance's limits, bid use: label, bar, figure) and the resting notional on each side in a quiet
+ *  line. Bars are neutral and turn amber, then red, only near a limit. */
 function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrder[] }) {
   const m = useAmount();
   const hide = useHide();
@@ -57,7 +57,6 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
     }
     return { a, bid, ask, nb, na };
   });
-  const scale = Math.max(1, ...rows.map((r) => Math.max(r.bid, r.ask)));
   return (
     <div className="ops-limits" style={{ gridTemplateColumns: `repeat(${Math.max(1, rows.length)}, minmax(0, 1fr))` }}>
       {rows.length === 0 && <div className="ops-limit muted">No trading accounts</div>}
@@ -75,34 +74,32 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
                 Free {m(a.quote_free)}
               </span>
             </div>
-            <div className="ops-limit-pairs fig">
-              <div title={`Orders placed in the last 10 s, of Binance's ${int(l10)}`}>
-                <span className="ops-l">Orders 10 s</span>
-                <span className={limitTone(r10)}>
-                  {int(a.orders_10s)} / {int(l10)}
-                </span>
-                <LimitBar value={a.orders_10s} limit={l10} />
-              </div>
-              <div title={a.orders_1d_limit ? `${int(a.orders_1d)} of ${int(a.orders_1d_limit)} orders today` : "No daily limit known"}>
-                <span className="ops-l">Orders today</span>
-                <span className={limitTone(r1d)}>{a.orders_1d_limit ? pct(r1d) : "--"}</span>
-                <LimitBar value={a.orders_1d} limit={a.orders_1d_limit} />
-              </div>
-              <div title="Resting bid notional / (free quote + resting bid notional)">
-                <span className="ops-l">Bid use</span>
-                <span className={limitTone(a.utilization)}>{Number.isFinite(a.utilization) ? pct(a.utilization) : "--"}</span>
-                <LimitBar value={a.utilization} limit={1} />
-              </div>
-              <div title={`${nb} resting bids, USDT`}>
-                <span className="ops-l">Bids {nb}</span>
-                <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(bid)}</span>
-                <LimitBar value={bid} limit={scale} empty={hide} neutral />
-              </div>
-              <div title={`${na} resting asks, USDT`}>
-                <span className="ops-l">Asks {na}</span>
-                <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(ask)}</span>
-                <LimitBar value={ask} limit={scale} empty={hide} neutral />
-              </div>
+            {/* what can run out, a row each: label, how near the limit (the bar), the figure */}
+            <div className="ops-limit-rows fig">
+              <span className="ops-l" title={`Orders placed in the last 10 s, of Binance's ${int(l10)}`}>Orders 10 s</span>
+              <LimitBar value={a.orders_10s} limit={l10} />
+              <span className={limitTone(r10)}>
+                {int(a.orders_10s)} / {int(l10)}
+              </span>
+              <span className="ops-l" title={a.orders_1d_limit ? `${int(a.orders_1d)} of ${int(a.orders_1d_limit)} orders today` : "No daily limit known"}>
+                Orders today
+              </span>
+              <LimitBar value={a.orders_1d} limit={a.orders_1d_limit} />
+              <span className={limitTone(r1d)}>{a.orders_1d_limit ? pct(r1d) : "--"}</span>
+              <span className="ops-l" title="Resting bid notional / (free quote + resting bid notional)">
+                Bid use
+              </span>
+              <LimitBar value={a.utilization} limit={1} />
+              <span className={limitTone(a.utilization)}>{Number.isFinite(a.utilization) ? pct(a.utilization) : "--"}</span>
+            </div>
+            {/* the resting notional on each side: a quiet line under the limits */}
+            <div className="ops-limit-rest fig" title="Resting notional of our open orders, USDT">
+              <span>
+                {nb} bids <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(bid)}</span>
+              </span>
+              <span>
+                {na} asks <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(ask)}</span>
+              </span>
             </div>
           </div>
         );

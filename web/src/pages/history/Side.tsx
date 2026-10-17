@@ -1,4 +1,4 @@
-// The History page's right column: the range in figures (label over value), the split, a calendar of the
+// The History page's right column: the range's P&L large with its other figures in a quiet line, the split, a calendar of the
 // last five weeks and the best and worst days; for an instrument, our fills over the range and the market's.
 import { useMemo } from "react";
 import type { HistFill } from "../../api";
@@ -13,7 +13,8 @@ import { hedgePnl, useLegPnl } from "../../selectors";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
-/** Label over value. `title` is a tooltip; `dot` marks a term a trader may not know (dotted, a definition). */
+/** A figure: the big one label over value, the others inline and quieter. `title` is a tooltip; `dot` marks a
+ *  term a trader may not know (its title is the definition). */
 function Fig({ label, value, tone, title, big, dot }: { label: string; value: string; tone?: string; title?: string; big?: boolean; dot?: boolean }) {
   return (
     <div className={"hx-fig" + (big ? " big" : "")}>
@@ -103,7 +104,7 @@ export function DeskSide({
           </div>
           <div className="hx-figs">
             <Fig big label="PnL" value={m(sg(sm.total))} tone={tone(sm.total)} title={summaryNote(sm)} />
-            <Fig label="Average day" value={m(sg(sm.average))} tone={tone(sm.average)} title="Over the finished days (today left out)" />
+            <Fig label="Average day" value={m(sg(sm.average))} title="Over the finished days (today left out)" />
             <Fig label="Days up" value={sm.finished ? `${sm.up} of ${sm.finished} finished` : "--"} title="Finished days that made money, of the finished days with a Day PnL (today is still moving)" />
             <Fig label="Fills" value={rows.length ? int(sm.fills) : "--"} />
             <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title="Filled notional, USDT" />
@@ -129,7 +130,7 @@ export function DeskSide({
                 {meta.long}
               </span>
               <span className="hx-bar-cell">{k !== "pi" && v != null && !hide && <span className="hx-bar" style={{ width: `${(Math.abs(v) / max) * 100}%` }} />}</span>
-              <span className={"fig " + tone(v)}>{m(sg(v))}</span>
+              <span className={"fig" + (hide ? " masked" : "")}>{m(sg(v))}</span>
             </div>
           );
         })}

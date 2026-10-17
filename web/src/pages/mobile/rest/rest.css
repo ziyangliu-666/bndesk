@@ -8,10 +8,7 @@
   color: var(--crit);
 }
 .r-dotted {
-  text-decoration: underline dotted;
-  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
+  text-decoration: none;
 }
 
 /* ---- page tabs: 44 px, the accent underline under the active one ---- */
@@ -204,13 +201,9 @@ button.r-row:active {
 }
 .r-tag {
   flex: none;
-  padding: 0 4px;
-  border-radius: 2px;
-  background: var(--raised);
   font-size: 12px;
   font-weight: 400;
-  line-height: 16px;
-  color: var(--ink-2);
+  color: var(--muted);
 }
 .r-tag.warn {
   color: var(--warn);
@@ -311,9 +304,9 @@ button.r-stat-tap:active {
   gap: 10px;
 }
 .r-big-v {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 500;
-  line-height: 38px;
+  line-height: 32px;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
