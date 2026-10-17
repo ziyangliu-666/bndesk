@@ -1,6 +1,6 @@
 [package]
 name = "desk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Read-only real-time monitor for Binance master and sub-accounts"
 license = "MIT"
