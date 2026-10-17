@@ -502,6 +502,18 @@ account (one line per account, labelled at its end).
 Pure-black ground for long sessions; gains teal-green, losses coral, every signed figure carries
 its sign; amber for warnings only; one accent for selection.
 
+Restraint. Colour means something or is not there: green and red answer whether we made money (Day PnL,
+an instrument's or an account's P&L) or mark buy and sell; edge, markouts, inventory, exposure, volume,
+counts and the parts of a split are ink with their sign in the text. A head has a hierarchy: one figure
+large (Day PnL, the last price, the total value, the 10 s markout), its parts in one line under it, the
+secondary facts grouped and quieter at the right (`FigureHead`), not a strip of equal label-over-value
+boxes. A figure appears once per view: a chart's legend names the lines at rest and reads values on hover
+when the head carries them, and a list does not repeat the head's total. No status dots or pulsing
+indicators (a state is a word, the connection only when stale or lost), nothing that scrolls by itself,
+no count badges on tabs unless the count asks for action, no plates around qualifiers (`Perp` is muted
+text; spot has no tag), no dotted underlines (tooltips and the phone's definition sheets carry the
+definitions). Space groups: related things close, groups apart by space or a single rule.
+
 Trading PnL is market making + inventory PnL, fees included, never the hedge, on every page and size: a
 spot market has one, a perp (the hedge) has none and shows its hedge leg's P&L under a Hedge figure or
 column. Day PnL = Trading PnL + hedge legs + rebates + other. The split has one palette on every chart and
@@ -529,9 +541,9 @@ where the page scrolls); 1200 px and up is unchanged.
 
 ```
 +------------------------------------+
-| Desk                    * Live     |   title, or < and a detail's title; connection state
+| Desk                       bell 2  |   title, or < and a detail's title; Stale / Disconnected only when so
 | ! active alert               >     |
-| Day PnL  +51.44     1h +7.19       |   one hero, a sparkline with its times and range
+| Day PnL +51.44 USDT                |   Day PnL on one line; 1h, equity, day start under it
 | Market making  ----   +9.65        |   the split as a waterfall under it
 | ...                                |
 | Risk: exposure gap, orders         |   limit bars

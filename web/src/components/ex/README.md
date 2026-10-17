@@ -24,7 +24,7 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
   intervals={[{ value: "line", label: "Line" }, { value: "1m", label: "1m" }, ...]}
   moreIntervals={[{ value: "4h", label: "4H" }, ...]}   // behind "More ▾" (phone)
   interval={iv} onInterval={setIv}
-  modes={[{ label: "Range", value: r, onChange: setR, options: [{ value: "today", label: "Today" }, { value: "24h", label: "24h" }] }]}
+  modes={[{ label: "Style", value: st, onChange: setSt, options: [{ value: "area", label: "Area" }, { value: "candles", label: "Candles" }] }]}
   loading={k.loading} emptyText={k.error ?? undefined}
   height={360} initialBars={120} resetKey={symbol}
   fullscreen title={symbol}
@@ -53,7 +53,11 @@ const byBar = useMemo(() => fillsByBar(fills, iv), [fills, iv]);
   on. Markers and price lines with a `key` hide with it. The set is stored per `id` in the store
   (`hidden["ex.<id>"]`), or you can control it with `hidden` and `onToggle`. `useExHidden(id)` gives a
   separate `ChipRow` the same state. A pane whose series are all hidden folds away, legend included.
-- **Legend at rest**: it reads the latest bar; `legendTime` (ms) makes it read another one, such as a day the
+- **Days**: `dividers` (day starts, ms) draws a faint rule at each on a chart that runs over several days;
+  a point with `color: GAP` leaves the segment to the next point undrawn (a figure that restarts at 0);
+  `onNearStart` is called when the view nears the first bar (load older data).
+- **Legend at rest**: `legendRest="names"` names the lines only (values on hover), where the page's head
+  carries the figures; with a chip row it shows nothing over the plot at rest. By default it reads the latest bar; `legendTime` (ms) makes it read another one, such as a day the
   page zoomed to with `view`.
 - **Interval change**: the old bars go at once, and the plot shows only the frame with a small "Loading"
   text. ExChart does this by itself when `interval` changes but `data` does not. `loading` forces it. The
@@ -109,12 +113,13 @@ Helpers: `barStart(ms, interval)`, `aggregate(bars, interval)` and `INTERVAL_MS`
   a divider.
 - `ChipRow`: the chip row under a chart (keys and labels, no plates); `SeriesKey` is its key on its own
   (legends, split lists); `useScrollFade` fades a sideways scroller at the edge it continues past.
-- `TickerStrip`: an optional `lead` slot for the big value, then pairs with a 12 px muted label over a
-  12 px value (`size="md"` makes the value 14 px). `"|"` starts a new group, and `title` puts a dotted
-  definition on a label.
-- `StatusFooter`: the 28 px desktop footer. It shows `● Live / Stale / Disconnected`, feeds n/n, the session
-  countdown, the clock, a UTC | Local toggle, a marquee of each instrument's P&L today (spot: Trading PnL; perp: its hedge leg, marked) (`onInstrument` is
-  called on click), and "Charts by TradingView".
+- `FigureHead`: a page head with a hierarchy: one figure large (`label`, `value`, `tone`, an `aside` beside
+  it), its `parts` as one quiet inline line under it, and `facts` (rows) grouped at the right. Values are
+  ink-2 unless a tone says otherwise; a fact's `title` is its definition (no underline).
+- `TickerStrip`: label-over-value pairs (`"|"` starts a group); prefer `FigureHead` for a page head.
+- `StatusFooter`: the 28 px desktop footer: the clock, UTC | Local and the session in muted text, and
+  "Charts by TradingView". Stale n s, Disconnected or Feeds n/m (in the warning colours) only when they
+  happen; nothing moves or glows while all is well.
 - `useExPref(id, name, default, allowed?)` remembers a chart's interval or mode in localStorage.
 
 ## Format
