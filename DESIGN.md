@@ -479,10 +479,11 @@ interface MarkoutStats {
 ## Web
 
 React 19, TypeScript, Vite. Mantine 8 (layout, controls, theme), AG Grid Community (blotters,
-cell change flash), uPlot and ECharts (live charts), TradingView Lightweight Charts (History),
+cell change flash), TradingView Lightweight Charts (every time chart, in one exchange-style frame), ECharts (Analysis),
 zustand (store fed by the WebSocket). Font: IBM Plex Sans with tabular numerals for figures.
 
-Pages (keys 1 to 6): Desk (default), History, Markouts, Orders, Accounts, Engine.
+Pages (keys 1 to 6): Desk (default), History, Analysis, Orders, Assets, System. The former names
+(`#/markouts`, `#/accounts`, `#/engine`) are kept as aliases.
 
 ```
 +--------------------------------------------------------------------------------------------+
