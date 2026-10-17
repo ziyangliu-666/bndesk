@@ -112,6 +112,8 @@ export interface PnlSummary {
   mm: number; // market making: Σ s q (M(t+60s) − p) − fee, own mid
   mm_spread: number; // the same at h = 0 against the fair at the fill
   inventory: number; // trading − mm
+  mm_unmarked_fills: number; // fills past 60 s with no price 60 s after them (not even from klines): left out of mm
+  mm_unmarked_notional: number; // their notional, USD
 }
 
 export interface OpenOrder {

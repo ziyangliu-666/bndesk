@@ -23,6 +23,11 @@ pub const PATH_MS: [i64; PATH_N] =
     [-10_000, -5_000, -2_000, -1_000, -500, 0, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000];
 /// PATH index of each of HORIZONS (1, 10, 60, 300 s).
 pub const PATH_OF_H: [usize; 4] = [8, 11, 14, 16];
+/// A horizon's mark not taken live this long after t + h never will be (the desk was down, the ring has a
+/// hole): it is due for the kline backfill, and until then the fill has no price at h.
+pub const MARK_GRACE_MS: i64 = 30_000;
+/// `FillRec::bf`: bit j, mark j came from klines; bit BF_NONE + j, klines have no price at t + h_j.
+pub const BF_NONE: usize = 4;
 
 pub fn sign(side: Side) -> f64 {
     if side == Side::Buy { 1.0 } else { -1.0 }
@@ -75,6 +80,19 @@ pub struct FillRec {
     /// mid, as the markouts take it; the ms ring's elsewhere).
     pub pm: [Option<f64>; PATH_N],
     pub pr: [Option<f64>; PATH_N],
+    /// Marks backfilled from klines (bit j) and horizons klines could not price (bit BF_NONE + j).
+    pub bf: u8,
+}
+
+/// A fill's price at a horizon, as market making values it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MarkAt {
+    /// the raw markout, bps (taken live or backfilled)
+    Bps(f64),
+    /// younger than h (plus the grace): valued at the mid now
+    Young,
+    /// h has passed and no price at t + h is known (yet): left out until the backfill brings one
+    Unmarked,
 }
 
 impl FillRec {
@@ -104,6 +122,7 @@ impl FillRec {
             refs: [None; 4],
             pm: [None; PATH_N],
             pr: [None; PATH_N],
+            bf: 0,
         }
     }
 
@@ -135,6 +154,25 @@ impl FillRec {
         Some((raw, net.unwrap_or(raw), fast.unwrap_or(raw), tox))
     }
 
+    /// Horizon j's raw mark, or whether the fill is too young for it or has none.
+    pub fn mark_at(&self, j: usize, now: i64) -> MarkAt {
+        match self.mk_raw.0[j] {
+            Some(b) => MarkAt::Bps(b),
+            None if now < self.ts + HORIZONS[j] * 1000 + MARK_GRACE_MS => MarkAt::Young,
+            None => MarkAt::Unmarked,
+        }
+    }
+
+    /// Klines were asked for horizon j's price and had none.
+    pub fn unpriceable(&self, j: usize) -> bool {
+        self.bf & (1 << (BF_NONE + j)) != 0
+    }
+
+    /// The net marks wait for the reference at t + h: the fill had a reference, and its anchor 1 s after.
+    fn wants_ref(&self) -> bool {
+        self.has_ref && self.refs[3].is_some_and(|x| x != 0.0)
+    }
+
     pub fn matured(&self) -> bool {
         self.mk_raw.0[3].is_some() && (!self.has_ref || self.tox[4].is_some())
     }
@@ -161,6 +199,19 @@ impl FillRec {
         }
     }
 }
+
+/// A fill's horizons (indices into HORIZONS) due for the kline backfill: the instrument's price at t + h, or
+/// (`MarkNeed::reference`) the reference's for the net marks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkNeed {
+    pub id: String,
+    pub key: String,
+    pub ts: i64,
+    pub js: Vec<usize>,
+}
+
+/// TOX_HORIZONS index of each of HORIZONS, where D(h) is kept at that horizon.
+const TOX_OF_H: [Option<usize>; 4] = [Some(2), None, Some(3), Some(4)];
 
 /// Today's fills, oldest first, with markouts filled in as their horizons pass. Takes the market
 /// per call (it lives in its own `RefCell`).
@@ -304,6 +355,82 @@ impl FillBook {
         self.pending = keep;
     }
 
+    /// Fills whose marks are due and missing (`MarkAt::Unmarked`), but for the horizons klines had no price at.
+    pub fn mark_needs(&self, now: i64) -> Vec<MarkNeed> {
+        self.fills
+            .iter()
+            .filter_map(|f| {
+                let js: Vec<usize> =
+                    (0..HORIZONS.len()).filter(|&j| f.mark_at(j, now) == MarkAt::Unmarked && !f.unpriceable(j)).collect();
+                (!js.is_empty()).then(|| MarkNeed { id: f.id.clone(), key: f.key(), ts: f.ts, js })
+            })
+            .collect()
+    }
+
+    /// Backfilled raw marks whose net marks wait for the reference: `key` is the reference's instrument.
+    pub fn ref_needs(&self, m: &Market) -> Vec<MarkNeed> {
+        self.fills
+            .iter()
+            .filter(|f| f.wants_ref())
+            .filter_map(|f| {
+                let js: Vec<usize> = (0..HORIZONS.len()).filter(|&j| f.mk_raw.0[j].is_some() && f.mk.0[j].is_none()).collect();
+                if js.is_empty() {
+                    return None;
+                }
+                let key = m.find(&f.symbol, f.venue).and_then(|i| m.insts[i].ref_).map_or_else(String::new, |r| m.insts[r].key.clone());
+                Some(MarkNeed { id: f.id.clone(), key, ts: f.ts, js })
+            })
+            .collect()
+    }
+
+    /// Book the instrument's price at t + h_j from klines (None: they have none there, and are not asked again).
+    /// The net marks follow at once without a reference, else from `backfill_net`.
+    pub fn backfill_raw(&mut self, id: &str, j: usize, mid: Option<f64>) {
+        let Some(&i) = self.by_id.get(id) else { return };
+        let f = &mut self.fills[i];
+        if f.mk_raw.0[j].is_some() {
+            return;
+        }
+        match mid.filter(|x| *x > 0.0) {
+            None => f.bf |= 1 << (BF_NONE + j),
+            Some(mid) => {
+                let (raw, _) = markout_bps(f.side, f.price, mid, None, None);
+                f.mk_raw.0[j] = Some(raw);
+                f.bf |= 1 << j;
+                if !f.wants_ref() {
+                    f.mk.0[j] = Some(raw);
+                    f.mk_fast.0[j] = Some(raw);
+                }
+            }
+        }
+        self.mark_dirty(id);
+    }
+
+    /// Book the reference at t + h_j for a backfilled raw mark: the net marks (raw without it, as live) and
+    /// D(h) where it is kept.
+    pub fn backfill_net(&mut self, id: &str, j: usize, ref_h: Option<f64>) {
+        let Some(&i) = self.by_id.get(id) else { return };
+        let f = &mut self.fills[i];
+        let Some(raw) = f.mk_raw.0[j] else { return };
+        if f.mk.0[j].is_some() {
+            return;
+        }
+        let s = sign(f.side);
+        let rh = ref_h.filter(|x| *x != 0.0);
+        let net = |rt: Option<f64>| match (rt.filter(|x| *x != 0.0), rh) {
+            (Some(rt), Some(rh)) => raw - s * (rh / rt - 1.0) * 1e4,
+            _ => raw,
+        };
+        f.mk.0[j] = Some(net(f.refs[3]));
+        f.mk_fast.0[j] = Some(net(f.refs[2]));
+        if let (Some(k), Some(r5), Some(rh)) = (TOX_OF_H[j], f.refs[0].filter(|x| *x != 0.0), rh)
+            && f.tox[k].is_none()
+        {
+            f.tox[k] = Some(toxicity_bps(f.side, r5, rh));
+        }
+        self.mark_dirty(id);
+    }
+
     /// The fills added or changed since the last call, in first-change order.
     pub fn take_dirty(&mut self) -> Vec<FillRec> {
         self.dirty_set.clear();
@@ -392,5 +519,79 @@ mod tests {
         assert_eq!(fb.fills.len(), 1);
         assert!(fb.get("a").is_none() && fb.get("b").is_some());
         assert_eq!(fb.get("b").unwrap().proto().side, Side::Sell);
+    }
+
+    #[test]
+    fn mark_at_young_unmarked_backfilled() {
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        let due = 60_000 + MARK_GRACE_MS;
+        assert_eq!(f.mark_at(2, 30_000), MarkAt::Young);
+        assert_eq!(f.mark_at(2, due - 1), MarkAt::Young);    // the live path still has the grace to take it
+        assert_eq!(f.mark_at(2, due), MarkAt::Unmarked);     // never the mid now: the fill is left out
+        f.mk_raw.0[2] = Some(-3.0);
+        assert_eq!(f.mark_at(2, 30_000), MarkAt::Bps(-3.0));
+        assert_eq!(f.mark_at(2, 10 * due), MarkAt::Bps(-3.0));
+    }
+
+    #[test]
+    fn backfill_books_marks_and_their_flags() {
+        let mut m = market();
+        let mut fb = FillBook::new();
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        f.mk_raw.0[0] = Some(1.0);   // 1 s taken live, the desk down from then
+        f.mk.0[0] = Some(1.0);
+        f.mk_fast.0[0] = Some(1.0);
+        fb.add(&mut m, f, false);
+        fb.add(&mut m, FillRec::new("young", 320_000, "acct", "XUSDT", Venue::Spot, Side::Sell, 100.0, 1.0), false);
+        fb.take_dirty();
+        let now = 400_000;
+        // 10, 60, 300 s are due for "a"; "young" only 1 and 10 s
+        let needs = fb.mark_needs(now);
+        assert_eq!(needs.iter().map(|n| (n.id.as_str(), n.js.clone())).collect::<Vec<_>>(),
+                   [("a", vec![1, 2, 3]), ("young", vec![0, 1])]);
+        assert_eq!(needs[0].key, "spot:XUSDT");
+        fb.backfill_raw("a", 2, Some(100.2));
+        fb.backfill_raw("a", 3, None);     // klines have no price there
+        let f = fb.get("a").unwrap();
+        assert_relative_eq!(f.mk_raw.0[2].unwrap(), 20.0, max_relative = 1e-9);
+        assert_eq!((f.mk.0[2], f.mk_fast.0[2]), (f.mk_raw.0[2], f.mk_raw.0[2]));   // no reference: net = raw
+        assert_eq!(f.mark_at(2, now), MarkAt::Bps(f.mk_raw.0[2].unwrap()));
+        assert_eq!((f.bf, f.unpriceable(3), f.mark_at(3, now)), (0b1000_0100, true, MarkAt::Unmarked));
+        assert_eq!(fb.take_dirty().len(), 1);
+        // the unpriceable horizon is not asked again; a mark taken already is not overwritten
+        assert_eq!(fb.mark_needs(now)[0].js, vec![1]);
+        fb.backfill_raw("a", 0, Some(500.0));
+        assert_eq!(fb.get("a").unwrap().mk_raw.0[0], Some(1.0));
+    }
+
+    #[test]
+    fn backfill_net_waits_for_the_reference() {
+        let mut m = market();
+        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        let mut fb = FillBook::new();
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        f.has_ref = true;
+        f.refs = [Some(50.0), Some(50.0), Some(50.0), Some(50.0)];
+        fb.add(&mut m, f, false);
+        fb.add(&mut m, FillRec::new("b", 0, "acct", "XUSDT", Venue::Spot, Side::Sell, 100.0, 1.0), false);
+        fb.backfill_raw("a", 2, Some(100.2));
+        fb.backfill_raw("b", 2, Some(100.2));
+        let a = fb.get("a").unwrap();
+        assert!(a.mk_raw.0[2].is_some() && a.mk.0[2].is_none());   // net still to come
+        let needs = fb.ref_needs(&m);
+        assert_eq!(needs.len(), 1);
+        assert_eq!((needs[0].id.as_str(), needs[0].key.as_str(), needs[0].js.clone()), ("a", "usdm:XUSDT", vec![2]));
+        fb.backfill_net("a", 2, Some(50.05));   // the reference +10 bps
+        let a = fb.get("a").unwrap();
+        assert_relative_eq!(a.mk.0[2].unwrap(), 10.0, max_relative = 1e-9);
+        assert_relative_eq!(a.mk_fast.0[2].unwrap(), 10.0, max_relative = 1e-9);
+        assert_relative_eq!(a.tox[3].unwrap(), -10.0, max_relative = 1e-9);   // D(60 s): the reference went with the buy
+        assert!(fb.ref_needs(&m).is_empty());
+        // without the reference at t + h, net is raw, as live
+        fb.backfill_raw("a", 3, Some(100.1));
+        fb.backfill_net("a", 3, None);
+        let a = fb.get("a").unwrap();
+        assert_eq!(a.mk.0[3], a.mk_raw.0[3]);
+        assert_eq!(a.tox[4], None);
     }
 }

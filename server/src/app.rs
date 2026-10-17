@@ -453,6 +453,11 @@ impl Desk {
                     sf.push(key);
                 }
             }
+            // marks the desk was down for: the backfill task asks klines for them (until then out of market making)
+            let due = fills.mark_needs(CLOCK.now()).len();
+            if due > 0 {
+                info!("{due} fills reloaded with marks due and missing: queued for the kline backfill");
+            }
             let mut pnl = self.pnl.borrow_mut();
             pnl.load_fills(&mut m, fills.fills.iter());
             // today's transfers of the desk's assets, as valued then (rows not valued yet are booked once they are)
@@ -574,7 +579,7 @@ impl Desk {
             self.agg = Some((now, Rc::new(aggregate(&self.fills.borrow().fills, now))));
             let pnl = self.pnl.borrow();
             let mut m = self.market.borrow_mut();
-            self.mm = Rc::new(mm_split(&mut m, &self.fills.borrow().fills, self.cfg.mm_horizon_s, |b| pnl.pos.contains_key(b)));
+            self.mm = Rc::new(mm_split(&mut m, &self.fills.borrow().fills, self.cfg.mm_horizon_s, now, |b| pnl.pos.contains_key(b)));
         }
         let agg = self.agg.as_ref().expect("agg").1.clone();
         let mm = self.mm.clone();
@@ -597,6 +602,8 @@ impl Desk {
         let mut ps = pnl.summary(&mut m);
         ps.mm = mm.total;
         ps.mm_spread = mm.spread;
+        ps.mm_unmarked_fills = mm.unmarked;
+        ps.mm_unmarked_notional = mm.unmarked_notional;
         ps.inventory = ps.trading - mm.total;
         expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge));
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
@@ -1414,8 +1421,8 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     if !simulate {
         let d = desk.borrow();
         let (pnl, store) = (d.pnl.clone(), d.store.clone());
-        tasks.push(tokio::task::spawn_local(backfill::run((d.pnl.clone(), d.market.clone()), public.clone(),
-                                                          move || pnl_flush(&pnl, &store))));
+        tasks.push(tokio::task::spawn_local(backfill::run((d.pnl.clone(), d.market.clone()), (d.fills.clone(), d.market.clone()),
+                                                          public.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
     }
     if desk.borrow().betas.is_some() {
         tasks.push(tokio::task::spawn_local(beta_loop(desk.clone())));

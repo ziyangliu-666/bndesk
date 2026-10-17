@@ -980,6 +980,8 @@ function summary(): Summary {
       floating: p.floating,
       mm: p.mm,
       mm_spread: mmSpread0 + mmLiveSpread,
+      mm_unmarked_fills: 0,
+      mm_unmarked_notional: 0,
       inventory: p.trading - p.mm,
     },
     markout_net_bps_1h: mkNet1h,

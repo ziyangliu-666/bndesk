@@ -33,20 +33,20 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 13] = [
+pub const MIGRATIONS: [(&str, &str, &str); 14] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"), ("fills", "path", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
-    ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"),
+    ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"), ("fills", "bf", "INTEGER"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
-    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path";
+    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
     realized, floating, hedge, mm, rebates";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
 const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
-    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
     futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
@@ -215,7 +215,7 @@ fn parse_path(s: &str, f: &mut FillRec) {
     }
 }
 
-fn fill_params(f: &FillRec) -> [Value; 21] {
+fn fill_params(f: &FillRec) -> [Value; 22] {
     let opt = |v: Option<f64>| v.map_or(Value::Null, Value::Real);
     [
         Value::Text(f.id.clone()), Value::Integer(f.ts), Value::Text(f.account.clone()),
@@ -224,6 +224,7 @@ fn fill_params(f: &FillRec) -> [Value; 21] {
         Value::Integer(f.maker as i64), opt(f.fair), opt(f.edge_bps), opt(f.ref0), Value::Integer(f.has_ref as i64),
         Value::Text(marks_json(&f.mk)), Value::Text(marks_json(&f.mk_raw)), Value::Text(marks_json(&f.mk_fast)),
         Value::Text(keyed_json(&TK, &f.tox, false)), Value::Text(keyed_json(&ref_keys(), &f.refs, true)), path_json(f),
+        Value::Integer(f.bf as i64),
     ]
 }
 
@@ -294,6 +295,7 @@ pub fn row_fill(r: &SqlRow) -> rusqlite::Result<FillRec> {
     if let Some(s) = str_opt(r, 20)?.filter(|s| !s.is_empty()) {
         parse_path(&s, &mut f);
     }
+    f.bf = i64_opt(r, 21)?.unwrap_or(0) as u8;
     Ok(f)
 }
 
@@ -585,6 +587,7 @@ mod tests {
         f.pm[0] = Some(100.6);
         f.pm[16] = Some(100.25);
         f.pr[5] = Some(50.05);
+        f.bf = 0b0100_1000;
         s.put(Row::Fill(Box::new(f.clone())));
         s.put(Row::PnlHour(HourRow { t: 3_600_000, trading: 1.0, hedged: 0.5, factor: 0.25, ref_hedge: 0.1,
                                      factor_hedge: 0.2, fills: 3, volume: 300.0, covered_s: 3600,
@@ -629,6 +632,7 @@ mod tests {
         let l = s.load(0, 1).unwrap();
         assert_eq!(l.fills[0].mk, Marks([Some(2.5), None, None, None]));
         assert_eq!(l.fills[0].tox, [None; 5]);
+        assert_eq!(l.fills[0].bf, 0);
         assert_eq!((l.equity[0].trading, l.equity[0].hedged), (None, None));
         assert_eq!((l.equity[0].realized, l.equity[0].floating, l.equity[0].hedge), (None, None, None));
         let s = Store::new(&p);

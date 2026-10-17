@@ -10,7 +10,7 @@ import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { SeriesKey } from "../../components/ex";
 import type { Account, Exposure, SymbolRow } from "../../protocol";
 import { Bps, FillRow, InstName, useFillSheet } from "./shared";
-import { instPnl, useLegPnl } from "../../selectors";
+import { instPnl, unpriced, useLegPnl } from "../../selectors";
 import { pctOfMoney, useHide } from "../../mask";
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import { DeskChart } from "./desk/DeskChart";
@@ -72,7 +72,7 @@ export function DeskM() {
       <Section title="Day PnL split" right="USDT">
         <PartRows
           rows={[
-            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} USDT.` },
+            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, sub: p.mm_unmarked_fills ? `${int(p.mm_unmarked_fills)} without a 60 s price` : undefined, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} USDT.${unpriced(p, hide)}` },
             { key: "inv", label: "Inventory PnL", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
             { key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge },
             { key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates },

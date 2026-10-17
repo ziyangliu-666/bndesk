@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::accounts::{Account, AccountRef, FutLeg};
 use crate::beta::Betas;
 use crate::config::Config;
-use crate::fills::{FillRec, HK, TK, TOX_HORIZONS};
+use crate::fills::{FillRec, HK, MarkAt, TK, TOX_HORIZONS};
 use crate::market::{Market, STABLES};
 use crate::pnl::OMap;
 use crate::protocol::{self as P, Side, Venue};
@@ -185,17 +185,21 @@ struct Quotes {
 }
 
 /// Market making over today's spot fills of the bases `tracked` takes, in USD at the instrument's own mid:
-/// Σ s q (M(t + h) − p) − fee, the mid now for a fill younger than h; `spread`: the same at h = 0 against
-/// the fair at the fill. By base and by UTC hour (start ms) too.
+/// Σ s q (M(t + h) − p) − fee, the mid now for a fill younger than h (plus MARK_GRACE_MS); `spread`: the same
+/// at h = 0 against the fair at the fill. By base and by UTC hour (start ms) too. A fill past h with no price
+/// at t + h (taken live or backfilled from klines) is left out of all of them, counted in `unmarked` with its
+/// notional (USD): valuing it at the mid now would book hours of inventory moves as market making.
 #[derive(Debug, Default)]
 pub struct MmSplit {
     pub total: f64,
     pub spread: f64,
     pub by_base: HashMap<String, f64>,
     pub by_hour: HashMap<i64, f64>,
+    pub unmarked: i64,
+    pub unmarked_notional: f64,
 }
 
-pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, tracked: impl Fn(&str) -> bool) -> MmSplit {
+pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, tracked: impl Fn(&str) -> bool) -> MmSplit {
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let mut out = MmSplit::default();
     for f in fills.iter().filter(|f| f.venue == Venue::Spot) {
@@ -210,9 +214,14 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, tracked: impl
         let fee = if f.fee != 0.0 && !f.fee_asset.is_empty() { f.fee * m.asset_price(&f.fee_asset).unwrap_or(0.0) } else { 0.0 };
         let notional = f.notional() * qpx;
         let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
-        let gross = match f.mk_raw.0[h] {
-            Some(bps) => notional * bps / 1e4,
-            None => mid.map_or(0.0, |x| s * f.qty * (x - f.price) * qpx),
+        let gross = match f.mark_at(h, now) {
+            MarkAt::Bps(bps) => notional * bps / 1e4,
+            MarkAt::Young => mid.map_or(0.0, |x| s * f.qty * (x - f.price) * qpx),
+            MarkAt::Unmarked => {
+                out.unmarked += 1;
+                out.unmarked_notional += notional;
+                continue;
+            }
         };
         let v = gross - fee;
         out.total += v;
@@ -678,5 +687,31 @@ mod tests {
         assert_eq!((h.residual_drift, h.hedge_pnl, h.price_pnl, h.net), (6.0, Some(0.0), Some(0.0), Some(10.0)));
         assert_eq!((h.offset_factor, h.offset_total), (Some(-0.0), Some(-0.0)));
         assert!(h.legs.is_empty());
+    }
+
+    #[test]
+    fn mm_split_values_young_fills_now_and_leaves_unmarked_ones_out() {
+        let mut info: Info = HashMap::new();
+        info.insert(Venue::Spot, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
+        let mut m = Market::new(info, 120.0, 50.0);
+        m.ensure("AAAUSDT", Venue::Spot, None);
+        m.on_book(Venue::Spot, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));   // mid now 12, hours later
+        let fill = |id: &str, ts: i64| FillRec::new(id, ts, "a", "AAAUSDT", Venue::Spot, Side::Buy, 10.0, 1.0);
+        let now = 10 * 3_600_000;
+        let young = fill("young", now - 20_000);                 // 20 s old: the mid now, +2
+        let mut marked = fill("marked", 0);
+        marked.mk_raw.0[2] = Some(50.0);                         // +0.05 on 10 notional (live or backfilled)
+        let unmarked = fill("unmarked", 3_600_000);              // the desk was down at t + 60 s
+        let fills = vec![marked.clone(), unmarked.clone(), young];
+        let s = mm_split(&mut m, &fills, 60, now, |_| true);
+        assert_relative_eq!(s.total, 2.0 + 0.05, epsilon = 1e-9);
+        assert_eq!((s.unmarked, s.unmarked_notional), (1, 10.0));
+        assert_eq!(s.by_hour.get(&3_600_000), None);
+        // the backfill brings its price: it counts, and nothing is left out
+        let mut back = unmarked;
+        back.mk_raw.0[2] = Some(-20.0);
+        let s = mm_split(&mut m, &[marked, back], 60, now, |_| true);
+        assert_relative_eq!(s.total, 0.05 - 0.02, epsilon = 1e-9);
+        assert_eq!((s.unmarked, s.unmarked_notional), (0, 0.0));
     }
 }

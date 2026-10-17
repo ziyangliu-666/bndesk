@@ -192,7 +192,14 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 - `engine_latency`: an engine latency p99 above `latency_p99_us`.
 - Market making and inventory, in the instrument's own mid (no reference): mm = Σ over today's spot fills of
   s q (M(t + h) − p) − fee, h = `mm_horizon_s` (60; one of the markout horizons 1, 10, 60, 300), the mid
-  now for a fill younger than h; mm_spread the same at h = 0 against the fair at the fill; inventory =
+  now for a fill younger than h (+ 30 s grace). A mark not taken live (the desk was down at t + h) is
+  backfilled from klines by the P&L backfill task, under its weight budget: spot 1 s klines (the close of the
+  second holding t + h, as the 1 s mid ring takes it), else 1 min klines interpolated open → close (h ≥ 60 s
+  only); USD-M instruments, which have no 1 s klines, from the first aggregate trade at or after t + h. The
+  reference at t + h for the net marks and D(h) likewise; without it net = raw, as live. Backfilled marks
+  are stored with the fill (`bf` bit j; bit 4 + j: klines had no price, not asked again). A fill past h + grace
+  with no price at t + h is left out of mm and mm_spread (its move counts in inventory) and counted in
+  mm_unmarked_fills / mm_unmarked_notional; mm_spread the same at h = 0 against the fair at the fill; inventory =
   Π − mm (the opening inventory and each fill's position from h on). Day PnL = mm + inventory + hedge
   legs + rebates + other. Rebates: today's distributions whose description has "MM Rebate", at the asset's
   price when credited; other distributions (airdrops, rewards) are kept in `dividends` and stay in other.
@@ -308,7 +315,8 @@ interface Summary {
          ref_hedge: number; factor_hedge: number;                                                // H, Hm
          liquidation: number; covered_s: number; backfilled_s: number;                           // haircut now; seconds booked live / from klines
          realized: number; realized_old: number; floating: number;                               // Π split FIFO, see below
-         mm: number; mm_spread: number; inventory: number };                                     // Π = mm + inventory, see below
+         mm: number; mm_spread: number; inventory: number;                                       // Π = mm + inventory, see below
+         mm_unmarked_fills: number; mm_unmarked_notional: number };                              // fills past h without a price at t + h: out of mm
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
   fills_24h: number; volume_24h: number;   // the 24 h to now, from the P&L hour blocks (tracked spot markets), the oldest prorated

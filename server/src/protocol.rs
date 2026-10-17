@@ -102,12 +102,15 @@ pub struct PnlSummary {
     /// the inventory left, at its price now against its cost
     pub floating: f64,
     /// market making: Σ s q (M(t + h) − p) − fee over today's fills, the instrument's own mid h after each
-    /// fill (mid now until h has passed)
+    /// fill (mid now until h has passed; a fill past h with no price at t + h is left out)
     pub mm: f64,
     /// the same at h = 0 against the fair at the fill: the spread alone
     pub mm_spread: f64,
     /// trading − mm: the opening inventory and each fill's position from h on, at the instrument's mid
     pub inventory: f64,
+    /// fills past h with no price at t + h (live or from klines), left out of mm and mm_spread: count, USD notional
+    pub mm_unmarked_fills: i64,
+    pub mm_unmarked_notional: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]

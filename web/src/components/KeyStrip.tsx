@@ -7,7 +7,7 @@ import { bps, compact, hm, int, num, pnl, price, qty, usd } from "../format";
 import type { Exposure } from "../protocol";
 import { TickerStrip, useTicker24h, type TickerItem } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
-import { tradingPnl, useHedgePnl } from "../selectors";
+import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -60,7 +60,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     "|",
     // tooltips on the plain words without the dotted underline (kept for jargon: Other, Exposure gap, Markout)
     {
-      label: <span title={`Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} USDT.`}`}>Market making</span>,
+      label: <span title={`Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} USDT.`}${unpriced(p, hide)}`}>Market making</span>,
       value: m(pnl(p?.mm)),
       tone: tone(p?.mm),
     },

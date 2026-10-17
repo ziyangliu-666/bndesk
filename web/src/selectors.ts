@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Fill, HedgeLeg, OpenOrder, SymbolRow, Venue } from "./protocol";
 import { serverNow, useStore } from "./store";
+import { int } from "./format";
+import { maskText, money } from "./mask";
 
 /**
  * "Trading PnL" is market making + inventory PnL, fees included, and never the hedge, on every page and size.
@@ -145,4 +147,11 @@ export function useBusiest(n: number, venue: Venue | null = "spot"): string[] {
     return s ? busiest(s.symbols, s.orders, s.fills, n, serverNow(), venue) : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick, quoted, ready, n, venue]);
+}
+
+/** The fills Market making leaves out for want of a price 60 s after them, as a sentence ("" when none). */
+export function unpriced(p: { mm_unmarked_fills: number; mm_unmarked_notional: number } | undefined, hide: boolean): string {
+  const n = p?.mm_unmarked_fills ?? 0;
+  if (!n) return "";
+  return ` ${int(n)} fill${n === 1 ? "" : "s"} without a 60 s price (${maskText(hide, money(p!.mm_unmarked_notional))} USDT notional) left out: none taken live, none from Binance's klines (yet).`;
 }
