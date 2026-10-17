@@ -115,7 +115,7 @@ impl Prices for Rest {
 }
 
 /// A request Binance refuses as such (an unknown symbol, an interval it does not have) has no data, for good.
-fn none_on_400<T: Default>(r: anyhow::Result<T>) -> anyhow::Result<T> {
+pub(crate) fn none_on_400<T: Default>(r: anyhow::Result<T>) -> anyhow::Result<T> {
     match r {
         Err(e) if e.downcast_ref::<RestError>().is_some_and(|re| re.status == 400) => Ok(T::default()),
         r => r,
@@ -194,8 +194,17 @@ impl FillAccess for (Rc<RefCell<FillBook>>, Rc<RefCell<Market>>) {
 /// minute's path is no estimate); a horizon no source prices is marked so and not asked again. Returns the
 /// marks booked.
 pub async fn backfill_marks(fills: &impl FillAccess, src: &impl Prices, now: i64) -> anyhow::Result<usize> {
+    backfill_marks_with(fills, src, now, true).await
+}
+
+/// As `backfill_marks`; without `refs`, only the instruments' prices (what market making needs), not the
+/// references' for the net marks.
+pub async fn backfill_marks_with(fills: &impl FillAccess, src: &impl Prices, now: i64, refs: bool) -> anyhow::Result<usize> {
     let mut booked = 0;
     for phase in [false, true] {
+        if phase && !refs {
+            break;
+        }
         let needs = fills.with_fills(|fb, m| if phase { fb.ref_needs(m) } else { fb.mark_needs(now) });
         // key -> (time, fill id, horizon), each key's times sorted
         let mut by_key: BTreeMap<String, Vec<(i64, String, usize)>> = BTreeMap::new();

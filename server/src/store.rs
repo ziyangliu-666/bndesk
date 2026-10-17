@@ -45,7 +45,7 @@ pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, invento
     realized, floating, hedge, mm, rebates";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
-const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
+pub(crate) const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
     maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
     futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
@@ -215,7 +215,7 @@ fn parse_path(s: &str, f: &mut FillRec) {
     }
 }
 
-fn fill_params(f: &FillRec) -> [Value; 22] {
+pub(crate) fn fill_params(f: &FillRec) -> [Value; 22] {
     let opt = |v: Option<f64>| v.map_or(Value::Null, Value::Real);
     [
         Value::Text(f.id.clone()), Value::Integer(f.ts), Value::Text(f.account.clone()),
@@ -299,6 +299,26 @@ pub fn row_fill(r: &SqlRow) -> rusqlite::Result<FillRec> {
     Ok(f)
 }
 
+/// A read-write connection to the desk's db as the store opens it: WAL, the schema and its migrations applied.
+pub fn open(path: &Path) -> rusqlite::Result<Connection> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let c = Connection::open(path)?;
+    c.busy_timeout(Duration::from_secs(5))?; // Python sqlite3's default timeout
+    c.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))?;
+    c.execute_batch("PRAGMA synchronous=NORMAL")?;
+    c.execute_batch(SCHEMA)?;
+    for (table, col, typ) in MIGRATIONS {
+        let mut st = c.prepare(&format!("PRAGMA table_info({table})"))?;
+        let cols: Vec<String> = st.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
+        if !cols.iter().any(|c| c == col) {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {typ}"))?;
+        }
+    }
+    Ok(c)
+}
+
 pub struct Store {
     pub path: PathBuf,
     tx: Sender<Item>,
@@ -313,22 +333,7 @@ impl Store {
     }
 
     fn connect(&self) -> rusqlite::Result<Connection> {
-        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let c = Connection::open(&self.path)?;
-        c.busy_timeout(Duration::from_secs(5))?; // Python sqlite3's default timeout
-        c.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))?;
-        c.execute_batch("PRAGMA synchronous=NORMAL")?;
-        c.execute_batch(SCHEMA)?;
-        for (table, col, typ) in MIGRATIONS {
-            let mut st = c.prepare(&format!("PRAGMA table_info({table})"))?;
-            let cols: Vec<String> = st.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
-            if !cols.iter().any(|c| c == col) {
-                c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {typ}"))?;
-            }
-        }
-        Ok(c)
+        open(&self.path)
     }
 
     /// Rows from `since` on (hour rows from `hours_back` hours earlier), alerts still active, all kv.

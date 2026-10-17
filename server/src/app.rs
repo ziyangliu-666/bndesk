@@ -1475,6 +1475,25 @@ struct Args {
     /// hash a password read from stdin, then exit
     #[arg(long)]
     hash_password: bool,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Cmd {
+    /// Recompute past days' market making with the missed 60 s marks backfilled from klines (see recompute.rs),
+    /// then exit
+    RecomputeMm {
+        /// first day, YYYY-MM-DD (UTC date of the day start)
+        #[arg(long)]
+        from: String,
+        /// last day, YYYY-MM-DD
+        #[arg(long)]
+        to: String,
+        /// print what would change, write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub fn main() {
@@ -1510,6 +1529,13 @@ pub fn main() {
         cfg.listen = l;
     }
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
+    if let Some(Cmd::RecomputeMm { from, to, dry_run }) = &args.cmd {
+        if let Err(e) = rt.block_on(crate::recompute::run(&cfg, from, to, *dry_run)) {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let local = tokio::task::LocalSet::new();
     if let Err(e) = local.block_on(&rt, run(cfg)) {
         eprintln!("{e:#}");

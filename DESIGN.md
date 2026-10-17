@@ -203,6 +203,9 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   Π − mm (the opening inventory and each fill's position from h on). Day PnL = mm + inventory + hedge
   legs + rebates + other. Rebates: today's distributions whose description has "MM Rebate", at the asset's
   price when credited; other distributions (airdrops, rewards) are kept in `dividends` and stay in other.
+  Days before 2026-10-17 valued such fills at the mid now; `desk recompute-mm --from D --to D [--dry-run]`
+  backfills their marks as above and corrects the stored `mm` of the desk equity rows and `kv dayreal:<day>`
+  (mm, inventory = trading − mm) by each fill's mark less the mid the row had (1 min klines); past days only.
 - Real-money split of Π, per base and summed, over today's spot fills in time order (USD at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
