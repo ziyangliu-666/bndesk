@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { navigate, serverNow, useStore } from "../../store";
 import { useNow } from "../../hooks";
@@ -81,25 +81,21 @@ export function InstrumentM({ symbol, venue }: { symbol: string; venue: Venue })
   );
 }
 
-// ---- header: the mid big, coloured by its last move; Binance's 24 h figures at the right ----
+// ---- header: the mid big (in ink: a market fact, not ours); Binance's 24 h figures at the right ----
 
 function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
-  const last = useRef<{ mid: number | null; dir: "" | "up" | "down" }>({ mid: null, dir: "" });
-  const m = last.current;
-  if (r.mid != null && m.mid != null && r.mid !== m.mid) m.dir = r.mid > m.mid ? "up" : "down";
-  m.mid = r.mid;
   const asset = r.symbol.replace(/USDT$/, "");
   const chg = t?.changePct ?? null;
   return (
     <section className="in-head">
       <div className="in-head-l">
-        <div className={"in-mid m-fig " + m.dir}>{r.mid == null ? "--" : price(r.mid)}</div>
+        <div className="in-mid m-fig">{r.mid == null ? "--" : price(r.mid)}</div>
         <div className="in-mid-sub m-fig">
           {/* the big figure is the book's mid: the chart's last close and the fair (legend) are the other two prices */}
           <span>Mid</span>
-          <span className="in-venue">{r.venue === "usdm" ? "Perp" : "Spot"}</span>
+          {r.venue === "usdm" && <span className="in-venue">Perp</span>}
           <span>
-            24h <span className={tone(chg, pctText(chg))}>{pctText(chg)}</span>
+            24h <span className="in-venue">{pctText(chg)}</span>
           </span>
         </div>
       </div>
@@ -149,7 +145,7 @@ function OurStats({ r }: { r: SymbolRow }) {
         { label: `Inventory (${asset})`, value: r.inv_qty === 0 && !hide ? "flat" : q(r.inv_qty, true) },
         { label: "Avg cost", value: r.inv_qty === 0 ? "--" : price(r.avg_cost) },
         { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
-        { label: "Edge", value: <span className={tone(r.edge_bps, bps(r.edge_bps))}>{bpsUnit(r.edge_bps)}</span> },
+        { label: "Edge", value: bpsUnit(r.edge_bps) },
       ];
   return (
     <dl className="in-stats">

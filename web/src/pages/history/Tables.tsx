@@ -117,7 +117,8 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     title,
     dot: k === "other",
     cell: (r) => m(sg(r[k])),
-    cls: (r) => "fig " + (hide ? "masked" : signClass(r[k])),
+    // colour for the Day PnL only (did the day make money); the parts in ink, the sign in the text
+    cls: (r) => "fig " + (hide ? "masked" : k === "pnl" ? signClass(r[k]) : ""),
     // no sort by a hidden figure (the order would tell it)
     sort: hide ? undefined : (r) => r[k],
   });
@@ -132,7 +133,7 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
       cell: (r) => (
         <span title={r.split === false ? "No split kept this day: not in the total" : r.se != null ? se(r.se) + " (Newey–West standard error)" : undefined}>{m(sg(r.pi))}</span>
       ),
-      cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : signClass(r.pi)),
+      cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : ""),
       sort: hide ? undefined : (r) => r.pi,
     },
     p("mm", "Market making", PART_META.mm.title),
@@ -219,12 +220,12 @@ const netDecimals = (rows: FillGroup[]) => qtyDecimals(Math.max(0, ...rows.map((
 const fillCols = (first: string, title: string, hide: boolean, nd: number): Col<FillGroup>[] => [
   { key: "d", label: first, title, left: true, cell: (g) => g.label, sort: (g) => g.t },
   { key: "f", label: "Fills", cell: (g) => int(g.fills), cls: () => "fig", sort: (g) => g.fills },
-  { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig up", sort: (g) => g.buys },
-  { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig down", sort: (g) => g.sells },
+  { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig", sort: (g) => g.buys },
+  { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig", sort: (g) => g.sells },
   { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (g) => maskText(hide, compact(g.bn + g.sn)), cls: () => "fig" + (hide ? " masked" : "") },
   { key: "ab", label: "Avg buy", cell: (g) => (g.bq > 0 ? price(g.bn / g.bq) : "--"), cls: () => "fig" },
   { key: "as", label: "Avg sell", cell: (g) => (g.sq > 0 ? price(g.sn / g.sq) : "--"), cls: () => "fig" },
-  { key: "n", label: "Net qty", title: "Bought minus sold, base asset", cell: (g) => qtyText(g.bq - g.sq, hide, true, nd), cls: (g) => "fig " + (hide ? "masked" : signClass(g.bq - g.sq)) },
+  { key: "n", label: "Net qty", title: "Bought minus sold, base asset", cell: (g) => qtyText(g.bq - g.sq, hide, true, nd), cls: () => "fig" + (hide ? " masked" : "") },
 ];
 
 export function InstDays({ fills, dayStart, hide }: { fills: HistFill[]; dayStart: number; hide: boolean }) {

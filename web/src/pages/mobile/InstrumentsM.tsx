@@ -3,7 +3,7 @@ import { UnstyledButton } from "@mantine/core";
 import { IconSearch, IconX } from "@tabler/icons-react";
 import { selectInstrument, useMarketsView } from "../../store";
 import { int, price } from "../../format";
-import { Money, Segmented, tone, useHold, useLive, useMoney } from "../../components/mobile";
+import { Money, Segmented, useHold, useLive, useMoney } from "../../components/mobile";
 import { Tabs, useTicker24h, useTickers24h, tickerKey, type Ticker24h } from "../../components/ex";
 import type { SymbolRow, Venue } from "../../protocol";
 import { hedgePnl, legPnl, tradingPnl } from "../../selectors";
@@ -67,11 +67,6 @@ function MarketList() {
   const sortHidden = hide && (sort.key === "pnl" || sort.key === "inv");
   const eff: Sort = sortHidden ? { key: "name", desc: false } : sort;
   const all = rows ?? [];
-  const counts = useMemo(() => {
-    const c: Record<Filter, number> = { all: 0, held: 0, quoted: 0, perp: 0 };
-    for (const r of all) for (const f of Object.keys(FILTERS) as Filter[]) if (FILTERS[f](r)) c[f]++;
-    return c;
-  }, [all]);
   const needle = q.trim().toUpperCase();
   const shown = useMemo(
     () => all.filter((r) => FILTERS[filter](r) && (!needle || r.symbol.includes(needle))),
@@ -148,10 +143,10 @@ function MarketList() {
             value={filter}
             onChange={setFilter}
             data={[
-              { value: "all", label: "All", count: counts.all },
-              { value: "held", label: "Held", count: counts.held },
-              { value: "quoted", label: "Quoted", count: counts.quoted },
-              { value: "perp", label: "Perp", count: counts.perp },
+              { value: "all", label: "All" },
+              { value: "held", label: "Held" },
+              { value: "quoted", label: "Quoted" },
+              { value: "perp", label: "Perp" },
             ]}
           />
         </div>
@@ -198,12 +193,14 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
           <span className="mk-quote">/USDT</span>
         </span>
         <span className="mk-sub">
-          {perp ? "Perp" : "Spot"} · {int(r.fills_day)} fills
+          {perp ? "Perp · " : ""}
+          {int(r.fills_day)} fills
         </span>
       </span>
       <span className="mk-c-m">
         <span className="mk-px m-fig">{r.mid == null ? "--" : price(r.mid)}</span>
-        <span className={"mk-sub m-fig " + tone(chg, pctText(chg))}>{pctText(chg)}</span>
+        {/* the market's 24 h move: a fact about the market, in ink (colour is for what we made) */}
+        <span className="mk-sub m-fig">{pctText(chg)}</span>
       </span>
       <span className="mk-c-r">
         <span className="mk-pnl">
