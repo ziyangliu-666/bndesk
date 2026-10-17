@@ -349,6 +349,7 @@ pub struct DeskRow {
     pub rebates: Option<f64>,
     pub inventory: f64,
     pub futures: f64,
+    pub equity: f64,
 }
 
 fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow>> {
@@ -356,7 +357,7 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
     let have: Vec<String> = c.prepare("PRAGMA table_info(equity)")?.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
     let col = |n: &str| if have.iter().any(|h| h == n) { n.to_string() } else { "NULL".into() };
     let sql = format!(
-        "SELECT t, pnl_day, {}, {}, {}, inventory, futures_notional, {}, {} FROM equity WHERE account = '*' AND t >= ? AND t < ? ORDER BY t",
+        "SELECT t, pnl_day, {}, {}, {}, inventory, futures_notional, {}, {}, equity FROM equity WHERE account = '*' AND t >= ? AND t < ? ORDER BY t",
         col("trading"), col("realized"), col("hedge"), col("mm"), col("rebates"));
     let mut st = c.prepare(&sql)?;
     st.query_map([from, to], |r| {
@@ -370,6 +371,7 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
             futures: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
             mm: r.get(7)?,
             rebates: r.get(8)?,
+            equity: r.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
         })
     })?
     .collect()
@@ -434,9 +436,10 @@ pub fn bar_of(t: i64, step_ms: i64, anchor: i64) -> i64 {
 /// Desk P&L since the first row (0 there), in bars: pnl_day, trading, realized, hedge and rebates restart each P&L day, so
 /// within a day a series is (the sum of the earlier days' final values) + its value now. OHLC of the
 /// cumulative day P&L; pi / realized / hedge / rebates: the bar's last non-null cumulative value; inventory and
-/// futures: the bar's last row; volume and fills from `flows` (bar start -> (Σ notional, count)).
-/// `rows` ordered by t; bars without rows are left out.
-pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, day_start_min: i64) -> Vec<P::HistoryBar> {
+/// futures, equity: the bar's last row; volume and fills from `flows` (bar start -> (Σ notional, count)).
+/// `per_day`: each figure as stored instead, restarting at each day start (a bar never spans two days when the
+/// step divides a day). `rows` ordered by t; bars without rows are left out.
+pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, day_start_min: i64, per_day: bool) -> Vec<P::HistoryBar> {
     let rows = clean(rows, day_start_min);
     let rows = &rows[..];
     let anchor = day_start_min * 60_000;
@@ -446,7 +449,11 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
     let mut day = None;
     for r in rows {
         let ds = sessions::day_start(r.t, day_start_min);
-        if day != Some(ds) {
+        if per_day {
+            for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
+                *c = Cum { seen: true, ..Cum::default() };
+            }
+        } else if day != Some(ds) {
             for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
                 c.roll();
             }
@@ -467,6 +474,7 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
                 x.rebates = vrb.or(x.rebates);
                 x.inventory = Some(r.inventory);
                 x.futures = Some(r.futures);
+                x.equity = Some(r.equity);
             }
             _ => out.push(P::HistoryBar {
                 t: b,
@@ -481,6 +489,7 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
                 rebates: vrb,
                 inventory: Some(r.inventory),
                 futures: Some(r.futures),
+                equity: Some(r.equity),
                 volume: 0.0,
                 fills: 0,
             }),
@@ -567,11 +576,12 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
         return Err(bad(format!("step must be one of {STEPS:?}")));
     }
     let sm = step * 1000;
+    let per_day = q.get("per").map(String::as_str) == Some("day");
     let (from, to) = range(&q, DAY)?;
     let from = from.max(to - MAX_BARS * sm);
     let dsm = api.day_start_min;
     let (rows, flows) = api.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
-    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm), days: days(from, to, dsm) };
+    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm, per_day), days: days(from, to, dsm) };
     Ok(json(&h))
 }
 
@@ -621,7 +631,7 @@ mod tests {
 
     fn row(t: i64, pnl: f64, tr: Option<f64>) -> DeskRow {
         DeskRow { t, pnl_day: pnl, trading: tr, realized: tr.map(|x| x / 2.0), hedge: None, mm: None, rebates: None, inventory: t as f64,
-                  futures: -1.0 }
+                  futures: -1.0, equity: 0.0 }
     }
 
     #[test]
@@ -634,7 +644,7 @@ mod tests {
             row(d0 + 10_000, 6.6, Some(0.3)),     // half-valued just after a restart
             row(d0 + 15_000, 0.2, Some(0.3)),
         ];
-        let b = bars(&rows, &HashMap::new(), 60_000, 0);
+        let b = bars(&rows, &HashMap::new(), 60_000, 0, false);
         let today = b.last().unwrap();
         assert_eq!((today.h, today.c), (0.2, 0.2));
         // Π: the range starts at day 0's last row (18 → 0), today adds 0.3; the roll row's stale 18 is not used
@@ -657,7 +667,7 @@ mod tests {
             row(d0 + 2 * DAY + 10 * m, 1.0, Some(1.0)),
         ];
         let flows: HashMap<i64, (f64, i64)> = [(d0, (100.0, 2))].into_iter().collect();
-        let b = bars(&rows, &flows, 3_600_000, 8 * 60);
+        let b = bars(&rows, &flows, 3_600_000, 8 * 60, false);
         assert_eq!(b.len(), 3);
         // 07:00 bar: day 0, from 0 at the first row (pnl 1, trading 0.5, realized 0.25)
         assert_eq!((b[0].t, b[0].o, b[0].h, b[0].l, b[0].c), (d0 - 3_600_000, 0.0, 2.0, 0.0, 1.0));
@@ -671,12 +681,25 @@ mod tests {
         // two days on: 2 + 4 + 1 (trading: 1 + 3 + 1)
         assert_eq!((b[2].t, b[2].c, b[2].pi), (d0 + 2 * DAY, 6.0, Some(4.5)));
         // daily bars start at the day start
-        let b = bars(&rows, &HashMap::new(), DAY, 8 * 60);
+        let b = bars(&rows, &HashMap::new(), DAY, 8 * 60, false);
         assert_eq!(b.iter().map(|x| x.t).collect::<Vec<_>>(), [d0 - DAY, d0, d0 + 2 * DAY]);
         assert_eq!((b[1].o, b[1].c), (1.5, 5.0));
         let ds = days(d0 - 30 * m, d0 + DAY + 1, 8 * 60);
         assert_eq!(ds.iter().map(|d| (d.day.as_str(), d.start)).collect::<Vec<_>>(),
                    [("2026-10-04", d0 - DAY), ("2026-10-05", d0), ("2026-10-06", d0 + DAY)]);
+    }
+
+    #[test]
+    fn per_day_bars_restart_at_each_day_start() {
+        let d0 = utc(2026, 10, 5, 0, 0);
+        let m = 60_000;
+        let mut rows = vec![row(d0 - 20 * m, 2.0, Some(1.0)), row(d0 - 10 * m, 3.0, Some(1.5)), row(d0 + 10 * m, 0.5, Some(0.25))];
+        rows[2].equity = 99.0;
+        let b = bars(&rows, &HashMap::new(), 3_600_000, 0, true);
+        assert_eq!(b.len(), 2);
+        // as stored: day 0 ends at 3, day 1 starts again near 0 (not 3 + 0.5)
+        assert_eq!((b[0].o, b[0].h, b[0].c, b[0].pi), (2.0, 3.0, 3.0, Some(1.5)));
+        assert_eq!((b[1].t, b[1].o, b[1].c, b[1].pi, b[1].equity), (d0, 0.5, 0.5, Some(0.25), Some(99.0)));
     }
 
     #[test]
@@ -689,7 +712,7 @@ mod tests {
             c.execute("INSERT INTO equity VALUES (5000, '*', 1.0, 2.0, 0.0, 3.0, 4.0)", []).unwrap();
         }
         let r = with_db(&p, |c| desk_rows(c, 0, 10_000)).unwrap();
-        assert_eq!(r, [DeskRow { t: 5000, pnl_day: 2.0, inventory: 3.0, futures: 4.0, ..Default::default() }]);
+        assert_eq!(r, [DeskRow { t: 5000, pnl_day: 2.0, inventory: 3.0, futures: 4.0, equity: 1.0, ..Default::default() }]);
     }
 
     #[test]
@@ -775,10 +798,14 @@ mod tests {
         let b = v["bars"].as_array().unwrap();
         assert_eq!(b.len(), 3);
         assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 0.0, "h": 0.0, "l": 0.0, "c": 0.0, "pi": 0.0,
-            "realized": 0.0, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "volume": 0.0, "fills": 0}));
+            "realized": 0.0, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
         assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&1.0.into(), &1.0.into(), &0.5.into()));
         assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&16.0.into(), &2.into()));
         assert_eq!(b[2]["c"], 2.0);
+        // per=day: as stored, each day from its own start
+        let w: serde_json::Value =
+            get(format!("/api/history?from={}&to={}&step=60&per=day", d0 - DAY, d0 + DAY)).await.unwrap().json().await.unwrap();
+        assert_eq!(w["bars"].as_array().unwrap().len(), 3);
         assert_eq!(v["days"][1], serde_json::json!({"day": "2026-10-05", "start": d0}));
         assert_eq!(get("/api/history?step=7".into()).await.unwrap().status(), 400);
 

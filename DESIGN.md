@@ -381,10 +381,11 @@ interface History {
 
 interface HistoryBar {
   t: number;                                // bar start
-  o: number; h: number; l: number; c: number;   // day PnL summed across days since `from`
+  o: number; h: number; l: number; c: number;   // day PnL summed across days since `from` (`per=day`: as stored, restarting each day)
   pi: number | null; realized: number | null; mm: number | null; hedge: number | null;   // the same for Π, realized + realized_old, hedge legs; bar close
   rebates: number | null;                   // the same for the rebates
   inventory: number | null; futures: number | null;   // last in the bar: inventory value, futures notional
+  equity: number | null;                    // last in the bar: equity of all accounts
   volume: number; fills: number;            // every fill in the bar
 }
 

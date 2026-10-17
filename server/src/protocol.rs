@@ -573,6 +573,7 @@ pub struct HistoryBar {
     pub rebates: Option<f64>,
     pub inventory: Option<f64>,
     pub futures: Option<f64>,
+    pub equity: Option<f64>,
     pub volume: f64,
     pub fills: i64,
 }
