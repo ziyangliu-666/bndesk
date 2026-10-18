@@ -140,7 +140,7 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
     const futOnly = (p: ValueFormatterParams<Row>) => (p.data?.fut_wallet || p.data?._total ? fMoney(p) : "--");
     const account: ColDef<Row> = { field: "label", headerName: "Account", headerTooltip: "Account label; hover a name for its email", width: 112, pinned: "left", cellRenderer: AccountCell };
     const stream: ColDef<Row> = { field: "user_stream", headerName: "Stream", headerTooltip: "User data stream state (fills, orders, balances)", width: 76, cellRenderer: StreamCell };
-    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: "Spot balances at mid (stablecoins at 1) plus futures margin balance, USDT", width: 92, valueFormatter: fMoney });
+    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: "Spot balances at mid (USDT at 1, other stablecoins at their USDT pair) plus futures margin balance, USDT", width: 92, valueFormatter: fMoney });
     const day = n({ field: "pnl_day", headerName: "Day PnL", headerTooltip: "Equity now − equity at the day start − net transfers in since then, USDT", width: 80, valueFormatter: fSigned, cellClass: signedCls(hide) });
     const open = n({ field: "open_orders", headerName: "Open", headerTooltip: "Number of open orders", width: 56, valueFormatter: fInt, cellClass: "num" });
     if (full) {

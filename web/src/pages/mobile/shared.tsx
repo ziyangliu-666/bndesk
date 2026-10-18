@@ -316,7 +316,7 @@ export const bandDef = (band: string) =>
 // ---- accounts: definitions from the desktop's tips, figure table, positions (Accounts, Account) ----
 
 export const TIP = {
-  equity: "Spot balances at mid (stablecoins at 1) plus futures margin balance, USDT.",
+  equity: "Spot balances at mid (USDT at 1, other stablecoins at their USDT pair) plus futures margin balance, USDT.",
   dayPnl: "Equity now − equity at the day start − net transfers in since then, USDT.",
   o10: "Orders placed in the last 10 s against the Binance limit.",
   o1d: "Orders placed today as a share of the Binance daily limit.",

@@ -381,6 +381,11 @@ impl Desk {
                 tracked.insert(m.insts[r].key.clone());
             }
         }
+        // the stablecoins' USDT pairs (USDCUSDT, ...) from the start: equity and transfers value a stablecoin
+        // other than USDT at its pair's price, which must be there before one arrives
+        for a in crate::market::STABLES.iter().filter(|a| **a != crate::market::QUOTE) {
+            m.asset_inst(a);
+        }
         self.fixed_betas = Rc::new(self.cfg.markets.iter().map(|mc| (format!("{}:{}", mc.venue, mc.symbol), mc.beta)).collect());
         if let Some((venue, sym)) = self.cfg.beta_vs.as_deref().and_then(|v| v.split_once(':'))
             && let Ok(venue) = venue.parse::<Venue>()

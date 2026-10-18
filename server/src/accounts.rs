@@ -16,7 +16,7 @@ use crate::binance::ws::{USDM_PRIVATE, WS_API, WsConn, WsHandle, run_ws, ws_api_
 use crate::config::AccountCfg;
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::FillRec;
-use crate::market::{Market, STABLES};
+use crate::market::{Market, QUOTE, STABLES};
 use crate::pnl::Flow;
 use crate::params;
 use crate::protocol::{self as P, Role, Side, UserStream, Venue};
@@ -416,14 +416,27 @@ impl Account {
 
     // valuation
 
-    /// (quote free, quote locked, inventory value, all priced)
+    /// (quote free, quote locked, inventory value, all priced). Quote = the stablecoins, in USDT: USDT at 1,
+    /// another at its USDT pair's price (`Market::asset_price`, the price transfers are valued at too, so a
+    /// stablecoin that comes in and is converted makes no P&L of its own); one whose pair is listed but not
+    /// yet quoted holds the valuation back, like any asset.
     pub fn spot_parts(&self, m: &mut Market) -> (f64, f64, f64, bool) {
         let (mut qf, mut ql, mut inv) = (0.0, 0.0, 0.0);
         let mut priced = true;
         for (a, &(f, l)) in &self.balances {
             if STABLES.contains(&a.as_str()) {
-                qf += f;
-                ql += l;
+                let px = if a == QUOTE {
+                    1.0
+                } else {
+                    let inst = m.asset_inst(a);
+                    let quoted = inst.and_then(|i| m.px(i)).is_some_and(|p| p > 0.0);
+                    if !quoted && f + l != 0.0 {
+                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > 30_000);
+                    }
+                    m.asset_price(a).unwrap_or(1.0)
+                };
+                qf += f * px;
+                ql += l * px;
             } else if f + l > 0.0 {
                 match m.asset_price(a) {
                     // wait briefly for a quote; then an unquoted asset counts as 0
@@ -518,7 +531,7 @@ impl Account {
             if f != 0.0 || l != 0.0 || !replace {
                 self.balances.insert(a.to_string(), (f, l));
             }
-            if !STABLES.contains(&a) && f + l > 0.0 {
+            if a != QUOTE && f + l > 0.0 {
                 self.touch_asset(a);
             }
         }
@@ -540,7 +553,7 @@ impl Account {
             }
             let (f, l) = rows.get(&a).copied().unwrap_or((0.0, 0.0));
             if f != 0.0 || l != 0.0 {
-                if !STABLES.contains(&a.as_str()) {
+                if a != QUOTE {
                     self.touch_asset(&a);
                 }
                 self.balances.insert(a.clone(), (f, l));
@@ -998,7 +1011,7 @@ pub async fn dividends(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
 }
 
 /// The market-maker rebates credited in [from, to), for a past day: each row goes to on_dividend (the store
-/// keeps it), and the rebates are summed at the asset's price now (stablecoins at 1).
+/// keeps it), and the rebates are summed at the asset's price now (USDT at 1, another stablecoin at its USDT pair).
 pub async fn rebates_between(acct: &AccountRef, rest: &impl RestGet, from: i64, to: i64) -> Result<f64> {
     let q: Params = params!["startTime" => from, "endTime" => to - 1, "limit" => 500];
     let r = rest.get_json("/sapi/v1/asset/assetDividend", &q, 10, true).await?;
@@ -1014,7 +1027,7 @@ pub async fn rebates_between(acct: &AccountRef, rest: &impl RestGet, from: i64, 
         };
         (a.on_dividend)(&a, &id_str(get(x, "id")?), &d);
         if d.rebate() {
-            let px = if STABLES.contains(&d.asset.as_str()) { Some(1.0) } else { m.as_mut().and_then(|m| m.asset_price(&d.asset)) };
+            let px = m.as_mut().and_then(|m| m.asset_price(&d.asset)).or_else(|| STABLES.contains(&d.asset.as_str()).then_some(1.0));
             sum += d.amount * px.unwrap_or(0.0);
         }
     }
@@ -1791,6 +1804,37 @@ mod tests {
 
     fn tr(ts: i64, frm: &str, to: &str, asset: &str, amount: f64) -> Transfer {
         Transfer { ts, frm: frm.into(), to: to.into(), asset: asset.into(), amount, usd: None }
+    }
+
+    /// The owner sends 12 888.89 USDC to an account and it sells them on USDCUSDT at once. Equity, the
+    /// opening equity and the transfer all price USDC at USDCUSDT's mid, so neither the transfer nor a
+    /// conversion at the mid makes Day PnL (at 1.0 each would have booked +0.0012 a dollar).
+    #[test]
+    fn usdc_in_then_converted_leaves_day_pnl_unchanged() {
+        let mut m = Market::new(info(&[("USDCUSDT", SymbolInfo::new("USDC", "USDT", 5.0))]), 120.0, 100.0);
+        m.asset_inst("USDC");
+        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
+        let mut c = cfg("usdc", "u@x.io");
+        c.futures = false;
+        let a = Account::new(c, None, "").shared();
+        a.borrow_mut().set_balances([("USDT", 1000.0, 0.0), ("USDC", 500.0, 0.0)], true);
+        let open = a.borrow().equity(&mut m);
+        assert_relative_eq!(open, 1000.0 + 500.0 * 1.0012, max_relative = 1e-12);
+        let mut t = Transfers::new(None, vec![a.clone()]);
+        let x = 12_888.888_888_88;
+        t.add("1", tr(2_500, "master@x.io", "u@x.io", "USDC", x));
+        t.value(&mut m, 3_000);
+        assert_relative_eq!(t.records["1"].usd.unwrap(), x * 1.0012, max_relative = 1e-12);
+        let day = |a: &AccountRef, m: &mut Market, t: &Transfers| {
+            crate::metrics::day_pnl(a.borrow().equity(m), open, t.net_in_live(&a.borrow(), 0))
+        };
+        a.borrow_mut().set_balances([("USDC", 500.0 + x, 0.0)], false);
+        assert_relative_eq!(day(&a, &mut m, &t), 0.0, epsilon = 1e-9);
+        // sold at the mid: USDC out, USDT in
+        a.borrow_mut().set_balances([("USDC", 500.0, 0.0), ("USDT", 1000.0 + x * 1.0012, 0.0)], false);
+        assert_relative_eq!(day(&a, &mut m, &t), 0.0, epsilon = 1e-9);
+        // USDT itself stays at 1
+        assert_eq!(m.asset_price("USDT"), Some(1.0));
     }
 
     #[test]

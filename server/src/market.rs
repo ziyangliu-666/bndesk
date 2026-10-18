@@ -13,6 +13,27 @@ pub use crate::protocol::Venue;
 pub const QUOTE: &str = "USDT";
 pub const STABLES: [&str; 8] = ["USDT", "USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USD1"];
 
+pub fn is_stable(asset: &str) -> bool {
+    STABLES.contains(&asset)
+}
+
+/// A pair of two stablecoins (USDCUSDT, FDUSDUSDT, ...): trading it converts one dollar into another, it is not
+/// market making, so the fill statistics, markouts, market making, Π and the instrument lists leave it out.
+pub fn is_conversion(symbol: &str) -> bool {
+    STABLES.iter().any(|q| symbol.strip_suffix(q).is_some_and(is_stable))
+}
+
+/// Every pair of two stablecoins as an SQL list ('USDCUSDT', ...).
+pub fn conversion_list() -> String {
+    let mut v = vec![];
+    for b in STABLES {
+        for q in STABLES.iter().filter(|q| **q != b) {
+            v.push(format!("'{b}{q}'"));
+        }
+    }
+    v.join(", ")
+}
+
 pub fn key(symbol: &str, venue: Venue) -> String {
     format!("{venue}:{symbol}")
 }
@@ -434,9 +455,14 @@ impl Market {
         self.known(&sym, Venue::Spot).then(|| self.ensure(&sym, Venue::Spot, None))
     }
 
+    /// The asset's USD (USDT) price now: its USDT market's valuation price. USDT is 1; another stablecoin is
+    /// priced like any asset (USDC at USDCUSDT's mid), 1 only while its pair has no price (or none is listed).
     pub fn asset_price(&mut self, asset: &str) -> Option<f64> {
-        if STABLES.contains(&asset) {
+        if asset == QUOTE {
             return Some(1.0);
+        }
+        if is_stable(asset) {
+            return Some(self.asset_inst(asset).and_then(|i| self.px(i)).filter(|p| *p > 0.0).unwrap_or(1.0));
         }
         let inst = self.asset_inst(asset);
         if inst.is_none() && asset.starts_with("LD") && asset.len() > 2 {
@@ -447,10 +473,16 @@ impl Market {
 
     /// The asset's USD price at t_ms: its mid at the end of the last whole second before (from the 1 s ring,
     /// so it no longer changes once asked after that second), else the price now when the ring does not reach
-    /// back that far.
+    /// back that far. Stablecoins as in `asset_price`: USDT 1, another at its USDT pair's price then, 1 when it
+    /// has none.
     pub fn asset_price_at(&mut self, asset: &str, t_ms: i64) -> Option<f64> {
-        if STABLES.contains(&asset) {
+        if asset == QUOTE {
             return Some(1.0);
+        }
+        if is_stable(asset) {
+            let i = self.asset_inst(asset);
+            let at = i.and_then(|i| self.insts[i].ring.at(t_ms.div_euclid(1000) * 1000 - 1).or_else(|| self.px(i)));
+            return Some(at.filter(|p| *p > 0.0).unwrap_or(1.0));
         }
         match self.asset_inst(asset) {
             Some(i) => self.insts[i].ring.at(t_ms.div_euclid(1000) * 1000 - 1).filter(|p| *p != 0.0).or_else(|| self.px(i)),
@@ -639,7 +671,7 @@ mod tests {
     #[test]
     fn asset_price_stables_ld_and_known() {
         let mut m = Market::new(info(&[("BTCUSDT", SymbolInfo::new("BTC", "USDT", 5.0))]), 120.0, 100.0);
-        assert_eq!(m.asset_price("USDC"), Some(1.0));
+        assert_eq!(m.asset_price("USDC"), Some(1.0));   // no USDCUSDT listed: 1
         assert_eq!(m.asset_price("LDUSDT"), Some(1.0));
         assert_eq!(m.asset_price("BTC"), None);   // known, no book yet
         assert!(m.get("spot:BTCUSDT").is_some());
@@ -647,6 +679,36 @@ mod tests {
         assert_relative_eq!(m.asset_price("LDBTC").unwrap(), 100.01, max_relative = 1e-12);
         assert_eq!(m.asset_price("ZZZ"), None);
         assert!(m.get("spot:ZZZUSDT").is_none());
+    }
+
+    #[test]
+    fn stablecoins_at_their_usdt_pair() {
+        let mut m = Market::new(info(&[("USDCUSDT", SymbolInfo::new("USDC", "USDT", 5.0))]), 120.0, 100.0);
+        // listed, no book yet: 1 until it is quoted
+        assert_eq!(m.asset_price("USDC"), Some(1.0));
+        assert_eq!(m.asset_price_at("USDC", 5_000), Some(1.0));
+        assert_eq!(m.asset_price("USDT"), Some(1.0));
+        book(&mut m, Venue::Spot, r#"{"s":"USDCUSDT","b":"1.0011","a":"1.0012","E":10500}"#);
+        assert_relative_eq!(m.asset_price("USDC").unwrap(), 1.00115, max_relative = 1e-12);
+        assert_relative_eq!(m.asset_price("LDUSDC").unwrap(), 1.00115, max_relative = 1e-12);
+        assert_relative_eq!(m.asset_price_at("USDC", 11_200).unwrap(), 1.00115, max_relative = 1e-12);
+        book(&mut m, Venue::Spot, r#"{"s":"USDCUSDT","b":"1.0001","a":"1.0003","E":12500}"#);
+        // at a time: the mid at the end of the last whole second before it
+        assert_relative_eq!(m.asset_price_at("USDC", 12_700).unwrap(), 1.00115, max_relative = 1e-12);
+        assert_relative_eq!(m.asset_price_at("USDC", 13_100).unwrap(), 1.0002, max_relative = 1e-12);
+        assert_eq!(m.asset_price("USDT"), Some(1.0));
+        assert_eq!(m.asset_price_at("USDT", 13_100), Some(1.0));
+        assert_eq!(m.asset_price("FDUSD"), Some(1.0));   // not listed here: 1
+    }
+
+    #[test]
+    fn conversion_pairs() {
+        for s in ["USDCUSDT", "FDUSDUSDT", "FDUSDUSDC", "USD1USDT", "TUSDUSDT"] {
+            assert!(is_conversion(s), "{s}");
+        }
+        for s in ["BTCUSDT", "BTCUSDC", "USDTTRY", "EURUSDT", "USDT", "CRCLBUSDT"] {
+            assert!(!is_conversion(s), "{s}");
+        }
     }
 
     #[test]

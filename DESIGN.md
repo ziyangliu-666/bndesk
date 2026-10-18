@@ -65,7 +65,8 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
   withdrawal, a spot to futures move inside one account, which nets out there).
 - Transfer values: each move and each record is valued once, when first seen: the asset's mid at the end
   of the last whole second before it (1 s ring, 10 min; the price at first sight when the ring does not
-  reach back), stablecoins at 1. A record that confirms a move takes the move's value. The value is
+  reach back); USDT at 1, another stablecoin the same way at its USDT pair (USDCUSDT), 1 only while that
+  pair has no price. A record that confirms a move takes the move's value. The value is
   stored (`transfers.usd`) and kept across restarts; a row stored without one is valued at first sight
   after the start.
 - Balance ordering: a REST snapshot can be read before a fill and applied after the stream reported
@@ -129,7 +130,20 @@ All times are exchange event times (ms).
   from a ms-resolution ring of every change (7 min).
 - Toxicity D(h) = −s × (R(t+h) / R(t−5 s) − 1) × 1e4 for h ∈ {0, 0.2, 1, 60, 300} s, notional
   weighted over today's fills with a reference: positive = the reference moved against the fill.
-- Account equity (quote USDT) = spot balances at mid (stablecoins at 1) + futures margin balance.
+- Stablecoin prices: USDT is 1; every other stablecoin (USDC, FDUSD, TUSD, USDP, DAI, BUSD, USD1) is worth
+  its USDT pair's valuation price (mid, or fair while the book gapes), 1 only while the pair is listed but not
+  quoted yet (an account holding one is not valued for its first 30 s, as for any asset) or not listed at all.
+  The pairs are subscribed at the start. Equity, the opening equity, transfers, moves and rebates all take
+  this price, so a stablecoin sent in and converted makes no Day PnL beyond the conversion's own spread and
+  fee. The futures wallet is Binance's own USD total (`totalWalletBalance`), not revalued.
+- Conversions: a trade between two stablecoins (base and quote both stablecoins: USDCUSDT, FDUSDUSDT) is a
+  conversion, not market making. It stays on the fills tape and in the raw fills (`Fill.conversion`, tagged
+  "Conv"), and is left out of everything fill-based: the fill aggregate (counts, volume, edge, markouts, the
+  per-hour and toxicity stats, the alerts on them), `/api/markouts`, market making, Π and its scope, the day
+  and History volume bars, `/api/fills` across all instruments (asked for by name it is shown), and the
+  instrument rows (`symbols`: so no quote map, movers, footer or picker entry for the pair).
+- Account equity (quote USDT) = spot balances at mid (stablecoins at their USDT pair, above) + futures margin
+  balance.
   Day PnL = equity − equity at the day start − net transfers in since then, at their values when they
   happened (day start configurable, default 00:00 UTC). An asset that leaves carries no price exposure
   after it has gone, in Day PnL or in Π.
