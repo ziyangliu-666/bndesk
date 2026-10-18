@@ -307,6 +307,24 @@
 .dk-chart.ex-chart .ex-tb {
   padding-left: 12px;
 }
+.dk-pnl-parts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 30px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+}
+.dk-pnl-parts-label {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.dk-pnl-parts .ex-tt {
+  flex-shrink: 0;
+}
 .dk-info {
   flex: 1;
   min-height: 0;

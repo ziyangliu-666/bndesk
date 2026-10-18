@@ -6,7 +6,7 @@ import { useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from "../../theme";
-import { ExChart, GAP, Tabs, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
+import { ExChart, GAP, Tabs, TextToggle, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
 import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
@@ -57,6 +57,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const id = "desk." + tab;
   const [iv, setIv] = useExPref<string>(id, "interval", "1m", IV_VALUES);
   const [style, setStyle] = useExPref<string>("desk.pnl", "style", "area", ["area", "candles"]);
+  const [part, setPart] = useExPref<string>("desk.pnl", "part", "trading", ["trading", "mm", "inv", "hedge", "reb", "other"]);
   const bars = useStore((s) => s.snap?.bars);
   const series = useStore((s) => s.snap?.series);
   const fills = useStore((s) => s.snap?.fills);
@@ -117,6 +118,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       : [];
 
   let list: ExSeries[];
+  let parts: ExSeries[] = [];
+  let selectedPart: ExSeries | undefined;
   let extra: ExLegendItem[] = [];
   let stretch = [1, 0.22];
   if (tab === "pnl") {
@@ -147,8 +150,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     const anyReb = mins.reb.t.length > 0 || past.rows.some((r) => r.reb != null);
     const P = PNL_COLORS;
     const S = PNL_STROKES;
-    list = [
-      day,
+    parts = [
       { key: "trading", kind: "line", pane: 1, label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("trading", (r) => r.trading) },
       ...(has("mm")
         ? [
@@ -176,10 +178,15 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
             } as ExSeries,
           ]
         : []),
+    ];
+    selectedPart = parts.find((s) => s.key === part) ?? parts[0]!;
+    // Each component fits its own visible range, without larger components flattening it.
+    list = [
+      day,
+      { ...selectedPart, width: 2, lineStyle: "solid", toggle: false, lastValue: true, margins: { top: 0.22, bottom: 0.12 } },
       { ...vol, pane: 2 },
     ];
-    // the P&L alone in the main pane (its scale fits the bars in view); its parts below on their own scale
-    stretch = [1, 0.5, 0.2];
+    stretch = [1, 0.8, 0.2];
     extra = [
       ...volLegend.map((x) => ({ ...x, pane: 2 })),
       {
@@ -230,30 +237,43 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const right = step >= 15 * MIN ? 1 : step >= 5 * MIN ? 2 : undefined;
 
   return (
-    <ExChart
-      id={id}
-      className="dk-chart"
-      fill
-      title={tab === "pnl" ? "Desk PnL" : tab === "equity" ? "Desk equity" : "Desk exposure"}
-      series={list}
-      paneStretch={stretch}
-      intervals={IVS}
-      interval={iv}
-      onInterval={setIv}
-      modes={tab === "pnl" ? [{ label: "Style", value: style, onChange: setStyle, options: STYLE }] : []}
-      legendExtra={extra}
-      legendRest="names"
-      fullscreen
-      rightOffset={right}
-      // the view opens on today; the days before are a pan (or a zoom) away
-      initialBars={Math.max(today.length, 30)}
-      dividers={step < 1440 * MIN ? past.days : undefined}
-      onNearStart={past.loadOlder}
-      // fitted again when the days before first come in under today's bars
-      resetKey={past.rows.length > 0 ? "past" : "today"}
-      emptyText="No data yet today"
-      style={{ flex: 1, minHeight: 0 }}
-    />
+    <>
+      {tab === "pnl" && (
+        <div className="dk-pnl-parts">
+          <span className="dk-pnl-parts-label">Breakdown</span>
+          <TextToggle
+            label="P&L breakdown"
+            options={parts.map((s) => ({ value: s.key, label: s.label }))}
+            value={selectedPart?.key ?? "trading"}
+            onChange={setPart}
+          />
+        </div>
+      )}
+      <ExChart
+        id={id}
+        className="dk-chart"
+        fill
+        title={tab === "pnl" ? "Desk PnL" : tab === "equity" ? "Desk equity" : "Desk exposure"}
+        series={list}
+        paneStretch={stretch}
+        intervals={IVS}
+        interval={iv}
+        onInterval={setIv}
+        modes={tab === "pnl" ? [{ label: "Style", value: style, onChange: setStyle, options: STYLE }] : []}
+        legendExtra={extra}
+        legendRest="names"
+        fullscreen
+        rightOffset={right}
+        // the view opens on today; the days before are a pan (or a zoom) away
+        initialBars={Math.max(today.length, 30)}
+        dividers={step < 1440 * MIN ? past.days : undefined}
+        onNearStart={past.loadOlder}
+        // fitted again when the days before first come in under today's bars
+        resetKey={past.rows.length > 0 ? "past" : "today"}
+        emptyText="No data yet today"
+        style={{ flex: 1, minHeight: 0 }}
+      />
+    </>
   );
 }
 
