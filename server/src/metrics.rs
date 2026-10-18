@@ -77,6 +77,7 @@ pub struct FillAgg {
     pub tox_n: [i64; 5],
     pub hours: HashMap<i64, (i64, VW, VW, f64)>,
     pub pnl_day: f64,
+    pub fills_day: i64,
     pub volume_day: f64,
     pub fills_1h: i64,
     pub mk10_1h: VW,
@@ -89,13 +90,15 @@ const H60: usize = 2;
 const H300: usize = 3;
 
 #[allow(clippy::needless_range_loop)]
+/// Over today's fills less the conversions between stablecoins (`FillRec::conversion`).
 pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
     let mut g = FillAgg::default();
-    for f in fills {
+    for f in fills.iter().filter(|f| !f.conversion()) {
         let a = g.by_inst.entry(f.key()).or_default();
         let n = f.notional();
         a.fills += 1;
         a.volume += n;
+        g.fills_day += 1;
         g.volume_day += n;
         if f.side == Side::Buy {
             a.buys += 1;
@@ -188,7 +191,8 @@ struct Quotes {
 /// Σ s q (M(t + h) − p) − fee, the mid now for a fill younger than h (plus MARK_GRACE_MS); `spread`: the same
 /// at h = 0 against the fair at the fill. By base and by UTC hour (start ms) too. A fill past h with no price
 /// at t + h (taken live or backfilled from klines) is left out of all of them, counted in `unmarked` with its
-/// notional (USD): valuing it at the mid now would book hours of inventory moves as market making.
+/// notional (USD): valuing it at the mid now would book hours of inventory moves as market making. A conversion
+/// between stablecoins is not market making: left out.
 #[derive(Debug, Default)]
 pub struct MmSplit {
     pub total: f64,
@@ -202,7 +206,7 @@ pub struct MmSplit {
 pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, tracked: impl Fn(&str) -> bool) -> MmSplit {
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let mut out = MmSplit::default();
-    for f in fills.iter().filter(|f| f.venue == Venue::Spot) {
+    for f in fills.iter().filter(|f| f.venue == Venue::Spot && !f.conversion()) {
         let Some((base, quote, mid)) = m.get(&crate::market::key(&f.symbol, Venue::Spot)).map(|i| (i.base.clone(), i.quote.clone(), i.mid()))
         else {
             continue;
@@ -275,6 +279,9 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
     });
     let empty = InstAgg::default();
     let mut rows = Vec::with_capacity(ids.len());
+    // a pair of two stablecoins (USDCUSDT: priced for valuation, traded to convert) is not an instrument
+    // of the desk: no row, so no quote map, movers, footer or picker entry either
+    ids.retain(|&id| !crate::market::is_conversion(&m.insts[id].symbol));
     for id in ids {
         let (key, venue, base) = {
             let i = &m.insts[id];
@@ -714,5 +721,45 @@ mod tests {
         let s = mm_split(&mut m, &[marked, back], 60, now, |_| true);
         assert_relative_eq!(s.total, 0.05 - 0.02, epsilon = 1e-9);
         assert_eq!((s.unmarked, s.unmarked_notional), (0, 0.0));
+    }
+
+    /// USDCUSDT (and any pair of two stablecoins) is a conversion: out of market making, the fill aggregate
+    /// (counts, volume, markouts, per-instrument rows) and the instrument list, even though it is quoted.
+    #[test]
+    fn stable_pair_fills_are_left_out_of_mm_and_the_aggregates() {
+        let mut info: Info = HashMap::new();
+        info.insert(Venue::Spot, HashMap::from([
+            ("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0)),
+            ("USDCUSDT".to_string(), SymbolInfo::new("USDC", "USDT", 5.0)),
+        ]));
+        info.insert(Venue::Usdm, HashMap::new());
+        let mut m = Market::new(info, 120.0, 50.0);
+        m.ensure("AAAUSDT", Venue::Spot, None);
+        m.asset_inst("USDC");
+        m.on_book(Venue::Spot, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));
+        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1)));
+        let now = 10 * 3_600_000;
+        let mut aaa = FillRec::new("a", now - 600_000, "mm", "AAAUSDT", Venue::Spot, Side::Buy, 10.0, 1.0);
+        aaa.mk_raw.0[2] = Some(50.0);
+        aaa.mk.0 = [Some(10.0), Some(20.0), Some(50.0), Some(40.0)];
+        let mut conv = FillRec::new("c", now - 590_000, "usdc", "USDCUSDT", Venue::Spot, Side::Sell, 1.00112, 12_889.0);
+        conv.maker = false;
+        conv.mk_raw.0[2] = Some(-3.0);
+        conv.mk.0 = [Some(-1.0), Some(-2.0), Some(-3.0), Some(-4.0)];
+        assert!(conv.conversion() && !aaa.conversion());
+        assert!(conv.proto().conversion && !aaa.proto().conversion);
+        let fills = vec![aaa.clone(), conv.clone()];
+        let s = mm_split(&mut m, &fills, 60, now, |_| true);
+        assert_relative_eq!(s.total, 0.05, epsilon = 1e-9);
+        assert!(!s.by_base.contains_key("USDC"));
+        let g = aggregate(&fills, now);
+        let only = aggregate(&[aaa], now);
+        assert_eq!((g.fills_day, g.volume_day), (1, 10.0));
+        assert_eq!(g.all, only.all);
+        assert_eq!(g.n_30m, only.n_30m);
+        assert!(!g.by_inst.contains_key("spot:USDCUSDT"));
+        let rows = symbol_rows(&mut m, &[], &OMap::new(), &g, &s);
+        assert!(rows.iter().any(|r| r.symbol == "AAAUSDT"));
+        assert!(rows.iter().all(|r| r.symbol != "USDCUSDT"));
     }
 }

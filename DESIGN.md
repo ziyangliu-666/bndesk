@@ -100,8 +100,9 @@ All times are exchange event times (ms).
   records and unconfirmed moves, netted by transfer, so one between two of the desk's accounts is none;
   a desk account with the master's email sending to an address off the desk is a flow out). A flow books
   like a fill of s·q at p = its transfer value per unit, no fee, not counted in fills or volume, and left
-  out of markouts and the market-making split; an asset Π holds no position in yet gets one (stablecoins
-  only move a position Π already has). A move that drops unconfirmed is taken back as it was booked, so
+  out of markouts and the market-making split; an asset Π holds no position in yet gets one. Stablecoins are
+  cash, never a position: their flows and their conversions (below) stay out of Π, and Day PnL alone carries
+  what holding or converting them made (their USDT pair's moves, the spread and fee of a conversion). A move that drops unconfirmed is taken back as it was booked, so
   Π, like Day PnL, is as if it had never been seen.
   - Π for the day has a closed form, so it covers the whole day whenever the monitor started:
     Π_k = Q0_k·(M_k(T) − M_k(D)) + Σ_fills+flows [s·q·(M_k(T) − p) − fee], fees in USDT. M_k(D) is the open of
@@ -384,6 +385,7 @@ interface Fill {
   mk: { "1": number | null; "10": number | null; "60": number | null; "300": number | null };      // net τ = 1 s if available
   mk_raw: { "1": number | null; "10": number | null; "60": number | null; "300": number | null };
   mk_fast: { "1": number | null; "10": number | null; "60": number | null; "300": number | null }; // net τ = 0.2 s if available
+  conversion: boolean;   // a trade between two stablecoins: on the tape, out of every fill statistic
 }
 
 interface AccountSeries { account: string; t: number[]; equity: number[]; pnl_day: number[] }

@@ -103,12 +103,16 @@ impl Mem {
         let keep = self.rows.partition_point(|r| r.t < from);
         self.rows.truncate(keep);
         self.rows.extend(new);
-        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty FROM fills WHERE rowid > ? ORDER BY rowid")?;
+        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty, symbol FROM fills WHERE rowid > ? ORDER BY rowid")?;
         let mut q = st.query([self.fill_rowid])?;
         while let Some(r) = q.next()? {
             self.fill_rowid = r.get(0)?;
             let (id, ts, n): (String, Option<i64>, Option<f64>) = (r.get(1)?, r.get(2)?, r.get(3)?);
             let Some(ts) = ts else { continue };
+            // a conversion between stablecoins is not desk volume
+            if r.get::<_, Option<String>>(4)?.is_some_and(|s| crate::market::is_conversion(&s)) {
+                continue;
+            }
             let n = n.unwrap_or(0.0);
             if let Some((t0, n0)) = self.ids.get(&id).copied() {
                 let e = self.minutes.entry(t0 - t0.rem_euclid(MIN)).or_default();
@@ -378,7 +382,8 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
 }
 
 fn fills(c: &Connection, symbol: Option<String>, venue: Option<&'static str>, from: i64, to: i64) -> rusqlite::Result<Vec<P::HistoryFill>> {
-    let sym = if symbol.is_some() { " AND symbol = ?" } else { "" };
+    // every instrument: the conversions between stablecoins left out (asked for by name, they are shown)
+    let sym = if symbol.is_some() { " AND symbol = ?".to_string() } else { format!(" AND symbol NOT IN ({})", crate::market::conversion_list()) };
     let ven = if venue.is_some() { " AND venue = ?" } else { "" };
     let sql = format!(
         "SELECT ts, side, price, qty, account, venue, maker FROM fills WHERE ts >= ? AND ts < ?{sym}{ven} ORDER BY ts LIMIT {MAX_FILLS}");

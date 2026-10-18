@@ -134,6 +134,12 @@ impl FillRec {
         self.price * self.qty
     }
 
+    /// A trade between two stablecoins (`market::is_conversion`): on the tape, marked, and out of every fill
+    /// statistic (aggregates, markouts, market making, Π, the instrument lists, the alerts).
+    pub fn conversion(&self) -> bool {
+        crate::market::is_conversion(&self.symbol)
+    }
+
     /// Markout P&L at horizon h ("1", "10", "60", "300"), USDT.
     pub fn pnl(&self, h: &str) -> f64 {
         let i = HK.iter().position(|k| *k == h).expect("horizon");
@@ -196,6 +202,7 @@ impl FillRec {
             mk: self.mk,
             mk_raw: self.mk_raw,
             mk_fast: self.mk_fast,
+            conversion: self.conversion(),
         }
     }
 }

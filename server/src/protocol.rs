@@ -250,6 +250,8 @@ pub struct Fill {
     pub mk: Marks,
     pub mk_raw: Marks,
     pub mk_fast: Marks,
+    /// a trade between two stablecoins (USDCUSDT, ...): a conversion, left out of every fill statistic
+    pub conversion: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -825,7 +827,7 @@ mod tests {
             id: "i".into(), ts: 1, account: "a".into(), symbol: "S".into(), venue: Venue::Spot, side: Side::Buy,
             price: 1.0, qty: 1.0, notional: 1.0, fee: 0.0, fee_asset: "USDT".into(), maker: true, fair: None,
             edge_bps: None, mk: Marks([Some(1.0), None, None, None]), mk_raw: Marks::default(),
-            mk_fast: Marks::default(),
+            mk_fast: Marks::default(), conversion: false,
         };
         let d: serde_json::Value = serde_json::from_slice(&encode(&f)).unwrap();
         assert_eq!(d["mk"], serde_json::json!({"1": 1.0, "10": null, "60": null, "300": null}));

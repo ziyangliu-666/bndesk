@@ -194,7 +194,8 @@ struct Inst {
     pnl: f64,
 }
 
-/// The report for one view of today's fills; `now` and `day_start` in ms.
+/// The report for one view of today's fills (less the conversions between stablecoins); `now` and
+/// `day_start` in ms.
 pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::MarkoutReport {
     let mut sides = [[Mom::default(); PATH_N]; 3]; // all, buy, sell: fills with a path
     let mut every = [[Mom::default(); PATH_N]; 3]; // the same with every fill at its own horizons
@@ -207,7 +208,7 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
     let mut buckets: Vec<(i64, f64, Mom, Mom)> = vec![(0, 0.0, Mom::default(), Mom::default()); nb.min(200)];
     let mut insts: HashMap<(&str, Venue), Inst> = HashMap::new();
     for f in fills {
-        if q.account.as_ref().is_some_and(|a| *a != f.account) || q.venue.is_some_and(|v| v != f.venue) {
+        if f.conversion() || q.account.as_ref().is_some_and(|a| *a != f.account) || q.venue.is_some_and(|v| v != f.venue) {
             continue;
         }
         let w = if q.by_fill { 1.0 } else { f.notional() };

@@ -194,7 +194,8 @@ impl Desk {
                 (fills.clone(), market.clone(), tracked.clone(), spot_filled.clone(), pnl.clone());
             Rc::new(move |f: FillRec| {
                 let key = f.key();
-                let spot = (f.venue == Venue::Spot).then(|| f.clone());
+                // a conversion between stablecoins is kept on the tape, out of the P&L scope and Π
+                let spot = (f.venue == Venue::Spot && !f.conversion()).then(|| f.clone());
                 let mut m = market.borrow_mut();
                 // a fill that arrives late (a REST sweep) is not marked against today's fair
                 let fresh = CLOCK.now() - f.ts < 5_000;
@@ -451,7 +452,7 @@ impl Desk {
             let mut sf = self.spot_filled.borrow_mut();
             for f in data.fills {
                 let key = f.key();
-                let spot = f.venue == Venue::Spot;
+                let spot = f.venue == Venue::Spot && !f.conversion();
                 fills.add(&mut m, f, false);
                 tracked.insert(key.clone());
                 if spot && !sf.contains(&key) {
@@ -626,7 +627,7 @@ impl Desk {
             pnl: ps,
             markout_net_bps_1h: agg.mk10_1h.value(),
             fills_1h: agg.fills_1h,
-            fills_day: self.fills.borrow().fills.len() as i64,
+            fills_day: agg.fills_day,
             volume_day: agg.volume_day,
             fills_24h,
             volume_24h,
@@ -1553,7 +1554,7 @@ pub fn main() {
 }
 
 /// Minute bars from `from`'s minute on: each minute's last point of `series` (with its `x`: market making,
-/// hedge), money in cents, and the notional of `fills` in the minute.
+/// hedge), money in cents, and the notional of `fills` in the minute (conversions between stablecoins left out).
 fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: &[FillRec], from: i64) -> P::DayBars {
     let cents = |v: f64| (v * 100.0).round() / 100.0;
     let mut b = P::DayBars::default();
@@ -1581,7 +1582,7 @@ fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: 
     }
     let first = b.t.first().copied().unwrap_or(i64::MAX);
     let mut vol: HashMap<i64, f64> = HashMap::new();
-    for f in fills.iter().filter(|f| f.ts >= first) {
+    for f in fills.iter().filter(|f| f.ts >= first && !f.conversion()) {
         *vol.entry(f.ts - f.ts.rem_euclid(MINUTE)).or_default() += f.notional();
     }
     b.volume = b.t.iter().map(|t| cents(vol.get(t).copied().unwrap_or(0.0))).collect();

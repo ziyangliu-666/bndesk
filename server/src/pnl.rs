@@ -476,9 +476,10 @@ impl PnlBook {
 
     // inputs
 
-    /// (base asset, the asset's own instrument, the fill's instrument) of a spot fill.
+    /// (base asset, the asset's own instrument, the fill's instrument) of a spot fill; None for a conversion
+    /// between two stablecoins (`market::is_conversion`), which Π leaves out.
     fn base_of(m: &mut Market, f: &PFill) -> Option<(String, InstId, InstId)> {
-        if f.venue != Venue::Spot {
+        if f.venue != Venue::Spot || crate::market::is_conversion(&f.symbol) {
             return None;
         }
         let inst = m.ensure(&f.symbol, Venue::Spot, None);
@@ -598,18 +599,18 @@ impl PnlBook {
 
     /// Books qty of the asset at px (USD) as a fill with no fee. grid: Some(false) when it is in the balance
     /// already (Q0 takes it), Some(true) for the grid to apply, None to decide: in the balance when it came
-    /// before the balance its position's opening quantity was taken from, or when it is a stablecoin the book
-    /// holds no position in. Returns how it was booked, None when the asset has no instrument.
+    /// before the balance its position's opening quantity was taken from. Returns how it was booked, None when
+    /// the asset has no instrument or is a stablecoin: Π holds no stablecoin position (they are cash, valued
+    /// in Day PnL at their USDT pair's price; their conversions are left out of Π too).
     #[allow(clippy::too_many_arguments)]
     fn put_flow(&mut self, m: &mut Market, key: &str, asset: &str, ts: i64, qty: f64, px: f64, grid: Option<bool>)
                 -> Option<bool> {
+        if crate::market::is_stable(asset) {
+            return None;
+        }
         let inst = m.asset_inst(asset)?;
         let base = m.insts[inst].base.clone();
-        let stable = crate::market::STABLES.contains(&asset);
-        let grid = grid.unwrap_or_else(|| match self.pos.get(&base) {
-            Some(p) => ts >= p.t0,
-            None => !stable,
-        });
+        let grid = grid.unwrap_or_else(|| self.pos.get(&base).is_none_or(|p| ts >= p.t0));
         let f = Rc::new(PFill {
             ts,
             symbol: m.insts[inst].symbol.clone(),
@@ -621,11 +622,9 @@ impl PnlBook {
             fee_asset: String::new(),
             flow: Some(key.into()),
         });
-        if !stable {
-            let k = m.insts[inst].key.clone();
-            if !self.flow_keys.contains(&k) {
-                self.flow_keys.push(k);
-            }
+        let k = m.insts[inst].key.clone();
+        if !self.flow_keys.contains(&k) {
+            self.flow_keys.push(k);
         }
         if !grid {
             self.seen(m, &base, inst, ceil_div(ts, 1000), &f);
@@ -799,7 +798,7 @@ impl PnlBook {
                 continue;
             }
             let Some(inst) = m.id(&k) else { continue };
-            if m.insts[inst].venue != Venue::Spot {
+            if m.insts[inst].venue != Venue::Spot || crate::market::is_conversion(&m.insts[inst].symbol) {
                 continue;
             }
             let base = m.insts[inst].base.clone();
@@ -1607,6 +1606,41 @@ mod tests {
         approx!(pb.pi_k(&mut m, &pb.pos["X"]), 1.0 * 3.0 + 0.5 * (100.0 - 99.0));
         let (r, o, f) = pb.fifo(&mut m, &pb.pos["X"]);
         approx!(r + o + f, 3.5);
+    }
+
+    /// A USDC transfer in and its sale on USDCUSDT: Π holds no USDC position, books neither, and Π stays
+    /// what X made.
+    #[test]
+    fn usdc_flow_and_conversion_stay_out_of_pi() {
+        let mut info = Info::new();
+        info.insert(Venue::Spot, HashMap::from([
+            ("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0)),
+            ("USDCUSDT".to_string(), SymbolInfo::new("USDC", "USDT", 5.0)),
+        ]));
+        info.insert(Venue::Usdm, HashMap::new());
+        let mut m = Market::new(info, 120.0, 100.0);
+        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        m.ensure("BUSDT", Venue::Usdm, None);
+        m.asset_inst("USDC");
+        tick(&mut m, 200, 100.0, 50.0, 200.0);
+        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(200)));
+        let mut pb = book(1.0);
+        pb.begin(&mut m, 4000);
+        pb.m0.insert("X", 97.0);
+        let before = pb.trading(&mut m);
+        approx!(before, 3.0);
+        let flow = Flow { key: "t:1".into(), ts: 4_100, asset: "USDC".into(), qty: 12_888.888_888_88, px: 1.0012 };
+        pb.set_flows(&mut m, &[flow], 4_200);
+        let mut conv = FillRec::new("c", 4_300, "usdc", "USDCUSDT", Venue::Spot, Side::Sell, 1.00112, 12_889.0);
+        conv.fee = 1.29;
+        conv.fee_asset = "USDT".into();
+        pb.on_fill(&mut m, &conv);
+        for t in 5..9 {
+            pb.step(&mut m, t * 1000);
+        }
+        assert!(!pb.pos.contains_key("USDC"));
+        assert!(pb.flows.is_empty() && pb.pending.is_empty());
+        approx!(pb.trading(&mut m), before);
     }
 
     #[test]
