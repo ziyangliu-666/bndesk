@@ -305,7 +305,13 @@ impl Alerts {
             .map(|r| format!("{} {}", r.symbol, fmt_num(r.inv_value, 0, false)))
             .collect();
         if !big.is_empty() {
-            add("inventory", "asset", Level::Warn, format!("over {}: {}", fmt_num(ac.asset_cap_usd, 0, false), names(&big)));
+            let cap = fmt_num(ac.asset_cap_usd, 0, false);
+            let text = if big.len() == 1 {
+                format!("{} USDT of inventory, over the per-asset cap of {cap}", big[0])
+            } else {
+                format!("Inventory over the per-asset cap of {cap} USDT: {}", names(&big))
+            };
+            add("inventory", "asset", Level::Warn, text);
         }
 
         let e = &v.exposure;
