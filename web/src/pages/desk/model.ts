@@ -100,6 +100,7 @@ export function todayRows(bars: DayBars | undefined, series: readonly SeriesPoin
   const cnt = new Map<number, number>();
   for (const f of tape) {
     if (f.ts < dayStart) break; // newest first
+    if (f.conversion) continue; // a stablecoin conversion is not desk volume
     const m = minute(f.ts);
     cnt.set(m, (cnt.get(m) ?? 0) + 1);
     if (m >= lastBar) vol.set(m, (vol.get(m) ?? 0) + f.notional);

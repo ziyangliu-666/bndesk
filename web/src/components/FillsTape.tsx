@@ -67,6 +67,11 @@ export function FillsTape({ mode = "net", symbol = null }: { mode?: MarkoutBasis
             <span className="sym">
               {p.data.symbol}
               {p.data.venue === "usdm" && <span className="dk-tag">Perp</span>}
+              {p.data.conversion && (
+                <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">
+                  Conv
+                </span>
+              )}
             </span>
           ) : null,
       },

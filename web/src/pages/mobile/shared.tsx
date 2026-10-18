@@ -162,6 +162,7 @@ export const FillRow = memo(function FillRow({
               {f.venue === "usdm" && <Tag>Perp</Tag>}
             </>
           )}
+          {f.conversion && <Tag>conversion</Tag>}
           <Side side={f.side} />
           {!f.maker && <Tag>taker</Tag>}
         </>

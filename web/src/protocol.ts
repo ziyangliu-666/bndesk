@@ -264,6 +264,7 @@ export interface Fill {
   mk: Markouts; // net τ = 1 s if available
   mk_raw: Markouts;
   mk_fast: Markouts; // net τ = 0.2 s if available
+  conversion?: boolean; // a trade between two stablecoins (USDCUSDT, ...): on the tape, out of every fill statistic
 }
 
 export interface SeriesPoint {

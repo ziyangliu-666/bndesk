@@ -252,6 +252,7 @@ function byInstrument(fills: Fill[]): InstDay[] {
   const m = new Map<string, { symbol: string; venue: Fill["venue"]; n: number; volume: number; ew: number; w: number }>();
   let total = 0;
   for (const f of fills) {
+    if (f.conversion) continue; // a stablecoin conversion: on the tape, not in the account's trading
     const k = f.venue + f.symbol;
     let x = m.get(k);
     if (!x) m.set(k, (x = { symbol: f.symbol, venue: f.venue, n: 0, volume: 0, ew: 0, w: 0 }));

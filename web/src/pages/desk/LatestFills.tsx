@@ -10,7 +10,7 @@ import { maskNode, qtyText, useHide } from "../../mask";
 const N = 80;
 
 /** What a row shows: a fill from the live tape, or an earlier one from /api/fills (no edge kept there). */
-type ShownFill = Pick<Fill, "id" | "ts" | "account" | "symbol" | "venue" | "side" | "price" | "qty" | "notional" | "maker" | "edge_bps">;
+type ShownFill = Pick<Fill, "id" | "ts" | "account" | "symbol" | "venue" | "side" | "price" | "qty" | "notional" | "maker" | "edge_bps" | "conversion">;
 
 export function LatestFills({ inst }: { inst: Instrument | null }) {
   const fills = useStore((s) => s.snap?.fills);
@@ -120,6 +120,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: S
           <span className="dk-tr-sym">
             {f.symbol.replace(/USDT$/, "")}
             {f.venue === "usdm" && <span className="dk-tag">Perp</span>}
+            {f.conversion && <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">Conv</span>}
           </span>
           <span className={"fig " + side}>{price(f.price)}</span>
           <span className="fig">{maskNode(hide, compact(f.notional))}</span>
