@@ -65,7 +65,7 @@ reference = { symbol = "ETHUSDT", venue = "usdm" }
 day_drawdown_usd = 100
 drop_15m_usd = 40
 inventory_cap_usd = 10000
-asset_cap_usd = 1000
+# asset_cap_usd = 1000      # one spot asset's inventory value; unset: no per-asset cap
 markout_floor_bps = -1.0
 stale_quote_s = 60
 futures_margin_min_usd = 100

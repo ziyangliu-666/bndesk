@@ -301,11 +301,11 @@ impl Alerts {
         let mine: Vec<&P::SymbolRow> = v.symbols.iter().filter(|r| watched(r)).collect();
         let big: Vec<String> = mine
             .iter()
-            .filter(|r| r.venue == Venue::Spot && r.inv_value.abs() > ac.asset_cap_usd)
+            .filter(|r| r.venue == Venue::Spot && ac.asset_cap_usd.is_some_and(|cap| r.inv_value.abs() > cap))
             .map(|r| format!("{} {}", r.symbol, fmt_num(r.inv_value, 0, false)))
             .collect();
         if !big.is_empty() {
-            let cap = fmt_num(ac.asset_cap_usd, 0, false);
+            let cap = fmt_num(ac.asset_cap_usd.unwrap_or_default(), 0, false);
             let text = if big.len() == 1 {
                 format!("{} USDT of inventory, over the per-asset cap of {cap}", big[0])
             } else {

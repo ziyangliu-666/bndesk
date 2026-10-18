@@ -181,7 +181,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   at startup counts from then), then the new value is the baseline; another change restarts the 24 h.
   `fee_expiry` within 7 days if configured.
 - `drawdown`: day PnL below `day_drawdown_usd`, or a drop over 15 min larger than `drop_15m_usd`.
-- `inventory`: total inventory value > `inventory_cap_usd`, or one asset > `asset_cap_usd`.
+- `inventory`: total inventory value > `inventory_cap_usd`, or one spot asset > `asset_cap_usd` (only when set; no per-asset cap by default).
 - `exposure_gap`: |gap| > band for > 60 s (when configured); inside a hedge pause, info: hedge left to close.
 - `reconcile`: |day PnL − Π − hedge legs − rebates| > `reconcile_usd` (1) for > 5 min: a fill, transfer or asset the desk does not see.
 - `markout`: rolling 30-min volume-weighted 10 s net markout < `markout_floor_bps` with >= 30 fills.

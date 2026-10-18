@@ -100,7 +100,7 @@ impl Sim {
             transfers: desk.transfers.clone(),
             on_fill: desk.on_fill.clone(),
             target_ratio: desk.cfg.target_ratio,
-            asset_cap_usd: desk.cfg.alerts.asset_cap_usd,
+            asset_cap_usd: desk.cfg.alerts.asset_cap_usd.unwrap_or(1000.0),
             rng: StdRng::from_os_rng(),
             quote_bps: HashMap::new(),
             cool: HashMap::new(),

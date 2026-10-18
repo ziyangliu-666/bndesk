@@ -101,7 +101,8 @@ pub struct AlertCfg {
     pub day_drawdown_usd: f64,
     pub drop_15m_usd: f64,
     pub inventory_cap_usd: f64,
-    pub asset_cap_usd: f64,
+    /// One spot asset's inventory value above this warns; none (the default): no per-asset cap.
+    pub asset_cap_usd: Option<f64>,
     pub markout_floor_bps: f64,
     pub stale_quote_s: f64,
     pub futures_margin_min_usd: f64,
@@ -119,7 +120,7 @@ impl Default for AlertCfg {
             day_drawdown_usd: 100.0,
             drop_15m_usd: 40.0,
             inventory_cap_usd: 10000.0,
-            asset_cap_usd: 1000.0,
+            asset_cap_usd: None,
             markout_floor_bps: -1.0,
             stale_quote_s: 60.0,
             futures_margin_min_usd: 100.0,
