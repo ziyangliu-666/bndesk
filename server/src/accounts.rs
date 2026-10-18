@@ -382,8 +382,9 @@ impl Account {
         if self.feeds.iter().all(|f| f.borrow().up) { UserStream::Up } else { UserStream::Down }
     }
 
-    /// Orders placed as seen on the user stream: stands in for /api/v3/rateLimit/order,
-    /// which read-only keys may not call (Binance spot limits 100 per 10 s, 200k per day).
+    /// Orders placed as seen on the user stream: stands in for /api/v3/rateLimit/order, which read-only keys may
+    /// not call. The limits are exchangeInfo's (market::order_limits). Orders Binance rejects never reach the
+    /// stream, so this can read lower than Binance's own count.
     pub fn count_new(&mut self, t: i64) {
         if !self.no_order_counts {
             return;
@@ -400,7 +401,8 @@ impl Account {
         while self.new_ts.front().is_some_and(|&t| t <= now - 10_000) {
             self.new_ts.pop_front();
         }
-        (self.orders_10s, self.orders_10s_limit, self.orders_1d_limit) = (self.new_ts.len() as i64, 100, 200_000);
+        let (l10, l1d) = crate::market::order_limits();
+        (self.orders_10s, self.orders_10s_limit, self.orders_1d_limit) = (self.new_ts.len() as i64, l10, l1d);
     }
 
     /// No key of its own: balances and futures come from the master's sub-account endpoints;
@@ -1195,6 +1197,8 @@ async fn rate_limits(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             if !e.to_string().contains("-2015") {
                 return Err(e);
             }
+            let id = acct.borrow().id.clone();
+            tracing::warn!("{id}: /api/v3/rateLimit/order refused (-2015, a read-only key): order counts from the user stream instead");
             acct.borrow_mut().no_order_counts = true;   // this endpoint wants a trading key; read-only keys get -2015
             return Ok(());
         }

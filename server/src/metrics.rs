@@ -393,6 +393,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
         orders_10s_limit: acct.orders_10s_limit,
         orders_1d: acct.orders_1d,
         orders_1d_limit: acct.orders_1d_limit,
+        orders_source: if acct.no_order_counts { "stream" } else { "binance" }.to_string(),
         open_orders: acct.open.len() as i64,
         bids_notional: bids,
         asks_notional: asks,

@@ -239,17 +239,20 @@ const OrderRow = memo(
 function Rates({ accounts }: { accounts: Account[] }) {
   if (!accounts.length) return <Empty>No account is trading</Empty>;
   const lim1d = accounts.find((a) => a.orders_1d_limit > 0)?.orders_1d_limit;
+  const stream = accounts.some((a) => a.orders_source === "stream")
+    ? "\n\nCounted from the user stream (the key cannot read Binance's own count): orders Binance rejected are not in it."
+    : "";
   const digits = pctDigits(accounts.filter((a) => a.orders_1d_limit > 0).map((a) => a.orders_1d / a.orders_1d_limit));
   return (
     <>
-      <Sec flush title="Orders 10 s" info={`${TIP.o10} Amber from 80 %, red at the limit.`}>
+      <Sec flush title="Orders 10 s" info={`${TIP.o10} Amber from 80 %, red at the limit.${stream}`}>
         {accounts.map((a) => (
           <Meter key={a.id} label={a.label} value={a.orders_10s} limit={a.orders_10s_limit} />
         ))}
       </Sec>
       <Sec
         title="Orders today"
-        info={`${TIP.o1d}${lim1d ? ` The limit is ${int(lim1d)} orders a day.` : ""} Amber from 80 %, red at the limit.`}
+        info={`${TIP.o1d}${lim1d ? ` The limit is ${int(lim1d)} orders a day.` : ""} Amber from 80 %, red at the limit.${stream}`}
         right={lim1d ? `of ${int(lim1d)}` : undefined}
       >
         {accounts.map((a) => (

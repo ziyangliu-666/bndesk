@@ -1164,6 +1164,7 @@ function account(a: (typeof ACCOUNTS)[number]): Account {
     // each account its own count (the sub-accounts quote different names at different rates)
     orders_1d: (isMain ? 2_400 : 26_000 + 9_500 * ACCOUNTS.findIndex((x) => x.id === a.id)) + eng1.orders / 4 + adds.length,
     orders_1d_limit: 160_000,
+    orders_source: "binance",
     open_orders: orders.length + (isMain && hedgeOrder ? 1 : 0),
     bids_notional: bidsN,
     asks_notional: asksN,

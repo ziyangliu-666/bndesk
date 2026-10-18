@@ -191,6 +191,7 @@ export interface Account {
   orders_10s_limit: number;
   orders_1d: number;
   orders_1d_limit: number;
+  orders_source: "binance" | "stream"; // "stream": counted from the user stream, without rejected orders
   open_orders: number;
   bids_notional: number;
   asks_notional: number;

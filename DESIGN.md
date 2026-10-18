@@ -339,6 +339,7 @@ interface Account {
   positions: { symbol: string; amt: number; entry: number; mark: number; upnl: number; notional: number;
                pnl_day: number | null }[];   // pnl_day: today's price P&L, fees and funding on the symbol
   orders_10s: number; orders_10s_limit: number; orders_1d: number; orders_1d_limit: number;
+  orders_source: string;                    // "binance" (rateLimit/order) or "stream" (user stream, no rejects)
   open_orders: number; bids_notional: number; asks_notional: number;
   utilization: number;              // resting bids / (quote_free + resting bids)
   fees: { venue: "spot" | "usdm"; maker_bps: number; taker_bps: number; changed: boolean }[];

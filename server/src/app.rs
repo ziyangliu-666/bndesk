@@ -1154,6 +1154,10 @@ async fn bootstrap(http: &reqwest::Client, govs: &Governors, feed: &FeedRef, cfg
                 feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", CLOCK.offset_ms())));
                 let mut info: Info = HashMap::new();
                 info.insert(Venue::Spot, parse_exchange_info(&spot));
+                if let (Some(s10), Some(day)) = crate::market::parse_order_limits(&spot) {
+                    let _ = crate::market::ORDER_LIMITS.set((s10, day));
+                    info!("spot order limits from exchangeInfo: {s10} per 10 s, {day} per day");
+                }
                 info.insert(Venue::Usdm, parse_exchange_info(&usdm));
                 return Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
             }

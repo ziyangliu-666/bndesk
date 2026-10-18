@@ -52,6 +52,32 @@ fn num(v: &serde_json::Value) -> f64 {
 }
 
 /// `/api/v3/exchangeInfo` or `/fapi/v1/exchangeInfo` -> trading symbols.
+/// The spot order-rate limits (orders per 10 s, per day) exchangeInfo's `rateLimits` give; Binance's published
+/// 100 and 200 000 until it has been read.
+pub static ORDER_LIMITS: std::sync::OnceLock<(i64, i64)> = std::sync::OnceLock::new();
+
+pub fn order_limits() -> (i64, i64) {
+    *ORDER_LIMITS.get().unwrap_or(&(100, 200_000))
+}
+
+/// `rateLimits` ORDERS entries of an exchangeInfo: (orders per 10 s, orders per day), where given.
+pub fn parse_order_limits(info: &serde_json::Value) -> (Option<i64>, Option<i64>) {
+    let (mut s10, mut day) = (None, None);
+    for r in info.get("rateLimits").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+        let g = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let n = |k: &str| r.get(k).and_then(|v| v.as_i64());
+        if g("rateLimitType") != "ORDERS" {
+            continue;
+        }
+        match (g("interval"), n("intervalNum"), n("limit")) {
+            ("SECOND", Some(10), Some(l)) => s10 = Some(l),
+            ("DAY", Some(1), Some(l)) => day = Some(l),
+            _ => {}
+        }
+    }
+    (s10, day)
+}
+
 pub fn parse_exchange_info(info: &serde_json::Value) -> HashMap<String, SymbolInfo> {
     let mut out = HashMap::new();
     let Some(symbols) = info.get("symbols").and_then(|s| s.as_array()) else { return out };
@@ -521,6 +547,16 @@ impl Market {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn order_limits_from_exchange_info() {
+        let info = serde_json::json!({"rateLimits": [
+            {"rateLimitType": "REQUEST_WEIGHT", "interval": "MINUTE", "intervalNum": 1, "limit": 6000},
+            {"rateLimitType": "ORDERS", "interval": "SECOND", "intervalNum": 10, "limit": 100},
+            {"rateLimitType": "ORDERS", "interval": "DAY", "intervalNum": 1, "limit": 200000}]});
+        assert_eq!(parse_order_limits(&info), (Some(100), Some(200_000)));
+        assert_eq!(parse_order_limits(&serde_json::json!({})), (None, None));
+    }
+
     use super::*;
     use approx::assert_relative_eq;
 

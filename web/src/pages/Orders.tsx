@@ -42,6 +42,10 @@ const tradingAccounts = (accounts: Account[]) => accounts.filter((a) => a.role !
 /** One cell per trading account: name and free USDT, then what can run out as a small table (orders per 10 s and
  *  per day against Binance's limits, bid use: label, bar, figure) and the resting notional on each side in a quiet
  *  line. Bars are neutral and turn amber, then red, only near a limit. */
+/** How the counts were had when not from Binance's own /api/v3/rateLimit/order. */
+const streamNote = (a: Account) =>
+  a.orders_source === "stream" ? " Counted from the user stream (the key cannot read Binance's own count): orders Binance rejected are not in it." : "";
+
 function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrder[] }) {
   const m = useAmount();
   const hide = useHide();
@@ -76,12 +80,12 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
             </div>
             {/* what can run out, a row each: label, how near the limit (the bar), the figure */}
             <div className="ops-limit-rows fig">
-              <span className="ops-l" title={`Orders placed in the last 10 s, of Binance's ${int(l10)}`}>Orders 10 s</span>
+              <span className="ops-l" title={`Orders placed in the last 10 s, of Binance's ${int(l10)}.${streamNote(a)}`}>Orders 10 s</span>
               <LimitBar value={a.orders_10s} limit={l10} />
               <span className={limitTone(r10)}>
                 {int(a.orders_10s)} / {int(l10)}
               </span>
-              <span className="ops-l" title={a.orders_1d_limit ? `${int(a.orders_1d)} of ${int(a.orders_1d_limit)} orders today` : "No daily limit known"}>
+              <span className="ops-l" title={(a.orders_1d_limit ? `${int(a.orders_1d)} of ${int(a.orders_1d_limit)} orders today.` : "No daily limit known.") + streamNote(a)}>
                 Orders today
               </span>
               <LimitBar value={a.orders_1d} limit={a.orders_1d_limit} />

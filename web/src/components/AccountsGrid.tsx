@@ -111,6 +111,7 @@ function total(rows: Account[]): Row {
     orders_10s_limit: 0,
     orders_1d: sum("orders_1d"),
     orders_1d_limit: 0,
+    orders_source: "binance",
     open_orders: sum("open_orders"),
     bids_notional: sum("bids_notional"),
     asks_notional: sum("asks_notional"),

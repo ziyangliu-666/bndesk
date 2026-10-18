@@ -179,6 +179,9 @@ pub struct Account {
     pub orders_10s_limit: i64,
     pub orders_1d: i64,
     pub orders_1d_limit: i64,
+    /// Where the order counts come from: "binance" (/api/v3/rateLimit/order) or "stream" (counted from the user
+    /// stream, without the orders Binance rejected).
+    pub orders_source: String,
     pub open_orders: i64,
     pub bids_notional: f64,
     pub asks_notional: f64,
