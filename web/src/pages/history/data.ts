@@ -525,9 +525,10 @@ export const todayOf = (dayStart: number) => new Date(dayStart).toISOString().sl
 export function useRangeDays(from: number | null): { rows: DayRow[]; todayDay: string | null; loading: boolean; error: string | null } {
   const snapDays = useStore((s) => s.snap?.days);
   const daily = useDeskHistory(86_400, from);
-  // the days wait for the snapshot's kept ones too: the equity history's figures first would be replaced by the
-  // desk's own closing split a moment later
-  const rows = useMemo(() => (from == null || snapDays === undefined ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
+  // the days once both halves are in (the snapshot's kept days and the day bars): either alone first would change
+  // the figures a moment later
+  const rows = useMemo(() => (from == null || snapDays === undefined || daily.loading ? [] : dayRows(snapDays, daily.bars, daily.days, from)),
+    [snapDays, daily.bars, daily.days, daily.loading, from]);
   const dayStart = useStore((s) => s.snap?.summary.day_start);
   return { rows, todayDay: dayStart ? todayOf(dayStart) : null, loading: daily.loading || (from != null && snapDays === undefined), error: daily.error };
 }

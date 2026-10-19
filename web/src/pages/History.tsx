@@ -115,7 +115,10 @@ export function History() {
     return r;
   }, [desk.bars, iv, dayStart]);
   const hourRows = useMemo(() => (dayStart == null ? [] : deskRows(hours.bars, "day", dayStart, null)), [hours.bars, dayStart]);
-  const days = useMemo(() => (from == null ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
+  // the days once both halves are in: the snapshot's kept days alone first would change the totals a moment later,
+  // when the day bars bring the days before the kept ones
+  const days = useMemo(() => (from == null || daily.loading || snapDays === undefined ? [] : dayRows(snapDays, daily.bars, daily.days, from)),
+    [snapDays, daily.bars, daily.days, daily.loading, from]);
   // today by its start, not the snapshot's last day (yesterday until the P&L engine has started)
   const todayDay = dayStart == null ? null : todayOf(dayStart);
 
