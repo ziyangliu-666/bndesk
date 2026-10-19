@@ -47,6 +47,8 @@ pub const TICKS_1S: u64 = 8;
 const WARMUP_S: f64 = 30.0;   // round(1 / TICK_S)
 pub const ACCT_STEP: i64 = 45_000;   // per-account series grid: at most 1920 points a day
 const MINUTE: i64 = 60_000;
+/// The day opens at the last 1 s equity mark before its start if it is this recent (else at the roll's tick).
+const ROLL_MARK_MS: i64 = 10_000;
 /// Minute bars each `bars` message carries: the one that closed and those before it, for fills that came late.
 const BARS_RESENT: i64 = 5;
 
@@ -99,6 +101,8 @@ pub fn in_flight(pts: &[(f64, Option<f64>)], floor: f64) -> bool {
 pub struct Desk {
     pub cfg: Config,
     pub started: f64,
+    /// the last logged gaps between Π's quantities and the balances (check_positions)
+    pub position_gaps: String,
     pub govs: Governors,
     pub store: Rc<Store>,
     pub alerts: RefCell<Alerts>,
@@ -213,6 +217,7 @@ impl Desk {
         };
         Desk {
             started: now_s(),
+            position_gaps: String::new(),
             govs,
             alerts: RefCell::new(alerts),
             engines: cfg.engines.iter().map(|e| Rc::new(RefCell::new(EngineScraper::new(e.clone())))).collect(),
@@ -856,6 +861,7 @@ impl Desk {
                 let td = tr.net_in_live(&a, ds);
                 a.transfers_day = td;
                 a.day_start = ds;
+                a.equity_mark = if a.valued(&mut m) { Some((now, a.equity(&mut m))) } else { None };
                 if a.equity_open.is_none() && a.valued(&mut m) && tr.loaded {
                     let eo = a.equity(&mut m) - a.transfers_day;
                     a.equity_open = Some(eo);
@@ -1009,7 +1015,11 @@ impl Desk {
             if a.no_order_counts {
                 a.orders_1d = 0;
             }
-            a.equity_open = if a.valued(&mut m) { Some(a.equity(&mut m)) } else { None };
+            // the equity at the day start, not at this tick (a second or more later): what was made in between
+            // (fills, funding at the day start) is the new day's, as Π and the hedge legs count it
+            let now_eq = if a.valued(&mut m) { Some(a.equity(&mut m)) } else { None };
+            a.equity_open = opening_equity(a.equity_mark, ds, now_eq);
+            a.funding_stream.retain(|x| x.0 >= ds);
             if let Some(eo) = a.equity_open {
                 self.store.put(Row::Kv(format!("open:{}:{ds}", a.id), repr(eo)));
             }
@@ -1046,9 +1056,34 @@ impl Desk {
             self.pnl.borrow_mut().step(&mut m, now);
         }
         if n.is_multiple_of(60 * TICKS_1S) {
+            self.check_positions();
             pnl_flush(&self.pnl, &self.store);
             self.put_day_real(self.day_start());
             self.put_order_counts();
+        }
+    }
+
+    /// Π's quantities against the accounts' balances, once a minute: a gap (a fill Π missed or booked twice,
+    /// across a restart) makes the Day PnL's Other move with that asset's price. Logged when it changes.
+    fn check_positions(&mut self) {
+        let mut bal: HashMap<String, f64> = HashMap::new();
+        for a in &self.accounts {
+            for (asset, (f, l)) in &a.borrow().balances {
+                *bal.entry(asset.clone()).or_insert(0.0) += f + l;
+            }
+        }
+        let gaps = {
+            let mut m = self.market.borrow_mut();
+            self.pnl.borrow().position_gaps(&mut m, &bal, 2.0)
+        };
+        let text = gaps.iter().map(|(b, q, x)| format!("{b} {q} vs {x}")).collect::<Vec<_>>().join(", ");
+        if text != self.position_gaps {
+            if text.is_empty() {
+                info!("P&L positions match the balances again");
+            } else {
+                tracing::warn!("P&L position differs from the balance (Π vs accounts): {text}");
+            }
+            self.position_gaps = text;
         }
     }
 
@@ -1553,6 +1588,15 @@ pub fn main() {
     }
 }
 
+/// A day's opening equity: the last 1 s mark before the day start `ds` when it is at most ROLL_MARK_MS old, else
+/// the equity at the roll's tick (`now`, None while unvalued).
+fn opening_equity(mark: Option<(i64, f64)>, ds: i64, now: Option<f64>) -> Option<f64> {
+    match mark {
+        Some((t, v)) if t < ds && ds - t <= ROLL_MARK_MS => Some(v),
+        _ => now,
+    }
+}
+
 /// Minute bars from `from`'s minute on: each minute's last point of `series` (with its `x`: market making,
 /// hedge), money in cents, and the notional of `fills` in the minute (conversions between stablecoins left out).
 fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: &[FillRec], from: i64) -> P::DayBars {
@@ -1612,6 +1656,17 @@ mod tests {
         assert_eq!(b.volume, [6.0, 3.0, 0.0]);
         let b = day_bars(&series, &x, &fills, 150_000);
         assert_eq!((b.t, b.volume), (vec![120_000, 180_000], vec![3.0, 0.0]));
+    }
+
+    #[test]
+    fn the_day_opens_at_the_last_mark_before_its_start() {
+        let ds = 86_400_000;
+        // the roll ran late, after fills and funding at the day start had moved the equity
+        assert_eq!(opening_equity(Some((ds - 800, 1_000.0)), ds, Some(1_004.0)), Some(1_000.0));
+        // a mark from after the start, or too old (the desk was stalled or restarted), is not the start's
+        assert_eq!(opening_equity(Some((ds + 200, 1.0)), ds, Some(2.0)), Some(2.0));
+        assert_eq!(opening_equity(Some((ds - ROLL_MARK_MS - 1, 1.0)), ds, Some(2.0)), Some(2.0));
+        assert_eq!(opening_equity(None, ds, None), None);
     }
 
     #[test]

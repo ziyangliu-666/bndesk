@@ -153,7 +153,7 @@ All times are exchange event times (ms).
 - Exposure: per account and total, spot inventory value, futures net notional, net. Optional
   `[exposure] target_ratio, band_usd, band_frac, hedge_symbols` turns on a hedge check: the hedge
   symbols' futures notional (all futures if none named) should equal −ratio × beta-weighted spot
-  value, within band = max(`band_usd`, `band_frac` × |target|). Inside an `[[exposure.pauses]]`
+  value (clamped to ±`max_notional` when set), within band = max(`band_usd`, `band_frac` × |target|). Inside an `[[exposure.pauses]]`
   window (weekly, `start = "fri 21:00"`, `end = "sun 21:00"`, in its `tz`) the hedge is off: the
   target is 0 and any hedge left counts as to be closed. The betas are the desk's own, which may
   differ from a trading engine's,
@@ -189,15 +189,15 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   quotes: one in `[[markets]]`, a market's reference, or one with an order resting. Others held or traded (dust)
   are not watched.
   bookTicker only sends on a change at the top of the book, and thin markets can sit unchanged for tens of seconds.
-- `orders_10s`, `orders_1d`: unfilled order count > 80 % of the limit.
+- `orders_10s`, `orders_1d`: unfilled order count > 80 % of the limit. `orders_10s` opens only after 20 s over 80 % and clears under 70 %, so a burst hovering at the threshold is one alert.
 - `rest_ban`: 418 or 429 seen (also engine rate-limit cooldowns).
 - `fee_change`: commission differs from its baseline (the first value seen, kv `fee:<acct>:<venue>:<symbol>`),
   for 24 h from when the change was seen (kv `feechg:…`, so a restart keeps the clock; a rate already differing
   at startup counts from then), then the new value is the baseline; another change restarts the 24 h.
   `fee_expiry` within 7 days if configured.
 - `drawdown`: day PnL below `day_drawdown_usd`, or a drop over 15 min larger than `drop_15m_usd`.
-- `inventory`: total inventory value > `inventory_cap_usd`, or one spot asset > `asset_cap_usd` (only when set; no per-asset cap by default).
-- `exposure_gap`: |gap| > band for > 60 s (when configured); inside a hedge pause, info: hedge left to close.
+- `inventory`: total inventory value > `inventory_cap_usd` (clears under 95 % of it), or one spot asset > `asset_cap_usd` (only when set; no per-asset cap by default).
+- `exposure_gap`: |gap| > band for > `gap_hold_s` (60), or > `gap_wide_bands` bands for > 60 s (when set; when configured): a hedge that rebalances slowly is still at work before that; inside a hedge pause, info: hedge left to close.
 - `reconcile`: |day PnL − Π − hedge legs − rebates| > `reconcile_usd` (1) for > 5 min: a fill, transfer or asset the desk does not see.
 - `markout`: rolling 30-min volume-weighted 10 s net markout < `markout_floor_bps` with >= 30 fills.
 - `dust`: a balance below the symbol's min notional (info).

@@ -25,6 +25,7 @@ reference = { symbol = "ETHUSDT", venue = "usdm" }
 # target_ratio = 1.0
 # band_usd = 200               # band = max(band_usd, band_frac x |target|)
 # band_frac = 0.25
+# max_notional = 5000          # target clamped to ±this
 # hedge_symbols = ["BTCUSDT"]
 # markets_only = true          # count only the configured markets' assets (not stray coins)
 # beta = "estimate"            # or "fixed" (the beta on each [[markets]] entry, default 1)
@@ -72,6 +73,8 @@ futures_margin_min_usd = 100
 drop_1h_usd = 100
 quote_idle_usd = 10
 quote_idle_s = 600
+# gap_hold_s = 60              # exposure_gap: |gap| over the band this long
+# gap_wide_bands = 0           # ... or over this many bands for a minute (0: off)
 latency_p99_us = 2000
 
 [master]

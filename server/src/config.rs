@@ -112,6 +112,10 @@ pub struct AlertCfg {
     pub latency_p99_us: f64,
     /// |day PnL − Π − hedge legs| above this for 5 min: a fill, transfer or asset the desk does not see
     pub reconcile_usd: f64,
+    /// exposure_gap: |gap| over the band this long (a hedge that rebalances slowly is still at work before it)
+    pub gap_hold_s: f64,
+    /// exposure_gap also after a minute over this many bands (0: off)
+    pub gap_wide_bands: f64,
 }
 
 impl Default for AlertCfg {
@@ -129,6 +133,8 @@ impl Default for AlertCfg {
             quote_idle_s: 600.0,
             latency_p99_us: 2000.0,
             reconcile_usd: 1.0,
+            gap_hold_s: 60.0,
+            gap_wide_bands: 0.0,
         }
     }
 }
@@ -172,6 +178,7 @@ pub struct Config {
     pub target_ratio: Option<f64>,
     pub band_usd: Option<f64>,
     pub band_frac: f64,   // band = max(band_usd, band_frac x |target|)
+    pub max_notional: Option<f64>,   // the target clamped to ±this
     pub hedge_pauses: Vec<PauseCfg>,
     pub hedge_symbols: Vec<String>,
     pub markets_only: bool,
@@ -203,6 +210,7 @@ impl Config {
             target_ratio: None,
             band_usd: None,
             band_frac: 0.0,
+            max_notional: None,
             hedge_pauses: vec![],
             hedge_symbols: vec![],
             markets_only: false,
@@ -491,6 +499,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         target_ratio: opt_f(exp, "target_ratio")?,
         band_usd: opt_f(exp, "band_usd")?,
         band_frac: f(exp, "band_frac", 0.0)?,
+        max_notional: opt_f(exp, "max_notional")?.filter(|x| *x > 0.0),
         hedge_pauses: array(exp, "pauses")?.iter().map(|w| typed(w, "exposure.pauses")).collect::<Result<_>>()?,
         hedge_symbols: array(exp, "hedge_symbols")?
             .iter()

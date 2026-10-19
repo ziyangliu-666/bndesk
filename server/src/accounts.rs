@@ -104,11 +104,13 @@ pub struct FutDay {
     pub trades: BTreeMap<i64, (i64, f64, f64, f64)>,
     pub funding: f64,
     pub m0: Option<f64>,
+    /// when the REST pass that gave `funding` asked for it (ms; 0 before any): stream funding from then on adds to it
+    pub rest_t: i64,
 }
 
 impl FutDay {
     pub fn new(ds: i64) -> Self {
-        FutDay { ds, trades: BTreeMap::new(), funding: 0.0, m0: None }
+        FutDay { ds, trades: BTreeMap::new(), funding: 0.0, m0: None, rest_t: 0 }
     }
 }
 
@@ -246,6 +248,10 @@ pub struct Account {
     pub first_fees: HashMap<(Venue, String), (f64, f64)>,   // the baseline a rate is compared with
     pub fee_changed: HashMap<(Venue, String), i64>,       // since when a rate differs from its baseline
     pub equity_open: Option<f64>,
+    /// the equity at the last 1 s tick while valued (exchange ms, value): the next day opens at the one before it
+    pub equity_mark: Option<(i64, f64)>,
+    /// funding the futures stream reported (time, symbol, USD) since the day start: counts until REST has it
+    pub funding_stream: Vec<(i64, String, f64)>,
     pub day_start: i64,                      // set by the desk; the futures day below is read from it
     pub fut_day: HashMap<String, FutDay>,
     /// spot symbols whose fills the desk tracks (set by the desk): the myTrades sweep reads these
@@ -310,6 +316,8 @@ impl Account {
             first_fees: HashMap::new(),
             fee_changed: HashMap::new(),
             equity_open: None,
+            equity_mark: None,
+            funding_stream: vec![],
             day_start: 0,
             fut_day: HashMap::new(),
             spot_symbols: vec![],
@@ -487,7 +495,10 @@ impl Account {
             ),
             _ => None,
         };
-        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: d.funding }
+        // REST's funding as of its pass, and what the stream reported after it (REST picks that up within a minute)
+        let streamed: f64 =
+            self.funding_stream.iter().filter(|(t, sym, _)| sym == s && *t >= d.ds && *t >= d.rest_t).map(|x| x.2).sum();
+        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: d.funding + streamed }
     }
 
     pub fn fut_upnl(&self, m: &Market) -> f64 {
@@ -776,6 +787,23 @@ impl Account {
                 let empty = vec![];
                 let bs = a.get("B").and_then(Value::as_array).unwrap_or(&empty);
                 let reason = a.get("m").and_then(Value::as_str);
+                if reason == Some("FUNDING_FEE") {
+                    // no symbol on the event (a cross position sends the balance only): the one position held
+                    let held: Vec<&String> = self.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s).collect();
+                    let usd: f64 = bs
+                        .iter()
+                        .filter(|b| matches!(b.get("a").and_then(Value::as_str), Some("USDT" | "USDC")))
+                        .map(|b| f_or0(b, "bc"))
+                        .sum::<Result<f64>>()?;
+                    if let [sym] = held[..]
+                        && usd != 0.0
+                    {
+                        let sym = sym.clone();
+                        let ds = self.day_start;
+                        self.funding_stream.retain(|x| x.0 >= ds);
+                        self.funding_stream.push((if u != 0 { u } else { now_ms() }, sym, usd));
+                    }
+                }
                 if !matches!(reason, Some("ORDER" | "FUNDING_FEE")) {
                     // transfers: "bc" is the wallet change apart from P&L
                     for b in bs {
@@ -1130,6 +1158,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
         return Ok(());
     }
     let mut funding: HashMap<String, f64> = HashMap::new();
+    let rest_t = CLOCK.now();
     let mut t = ds;
     loop {
         let q: Params = params!["incomeType" => "FUNDING_FEE", "startTime" => t, "limit" => 1000];
@@ -1179,6 +1208,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
         }
         d.trades = trades;
         d.funding = funding.get(&sym).copied().unwrap_or(0.0);
+        d.rest_t = rest_t;
         if d.m0.is_none() {
             let q: Params = params!["symbol" => sym, "interval" => "1m", "startTime" => ds, "limit" => 1];
             let k = rest.get_json("/fapi/v1/markPriceKlines", &q, 1, false).await?;
@@ -1471,7 +1501,6 @@ fn confirms(r: &Transfer, mv: &Move, email: &str) -> bool {
     (r.ts - mv.t).abs() < MOVE_HOLD_MS
         && r.asset == mv.asset
         && (r.amount - mv.d.abs()).abs() < 1e-9
-        && r.frm.to_lowercase() != r.to.to_lowercase()
         && (if mv.d > 0.0 { r.to.to_lowercase() } else { r.frm.to_lowercase() }) == email
 }
 
@@ -1517,6 +1546,34 @@ impl Transfers {
         }
     }
 
+    /// Match each stream move to at most one history leg and each history leg to
+    /// at most one move. Prefer the nearest timestamp, with stable tie breakers.
+    /// A same-account wallet transfer has two legs too: consuming only its incoming
+    /// move through an equal external receipt would leave a false outgoing flow.
+    fn matched_moves<'a>(&'a self, acct: &Account) -> Vec<Option<&'a str>> {
+        let mut matched = vec![None; acct.moves.len()];
+        let email = acct.email.to_lowercase();
+        if email.is_empty() {
+            return matched;
+        }
+        let mut candidates = vec![];
+        for (id, r) in &self.records {
+            for (i, mv) in acct.moves.iter().enumerate() {
+                if mv.d != 0.0 && confirms(r, mv, &email) {
+                    candidates.push(((r.ts - mv.t).abs(), r.ts, id.as_str(), i, mv.d > 0.0));
+                }
+            }
+        }
+        candidates.sort_unstable();
+        let mut used = HashSet::new();
+        for (_, _, id, i, incoming) in candidates {
+            if matched[i].is_none() && used.insert((id, incoming)) {
+                matched[i] = Some(id);
+            }
+        }
+        matched
+    }
+
     /// Values once what is not yet valued, and drops the stream moves past MOVE_HOLD_MS. A stream move takes
     /// its asset's price at its time; a record takes the price of a move it confirms, so a move confirmed
     /// later keeps its value, else its asset's price at its time (the price now when the market's ring does
@@ -1530,18 +1587,20 @@ impl Transfers {
                 mv.px = m.asset_price_at(&mv.asset, mv.t);
             }
         }
+        let mut move_prices = HashMap::new();
+        for a in &self.accounts {
+            let a = a.borrow();
+            for (mv, id) in a.moves.iter().zip(self.matched_moves(&a)) {
+                if let (Some(id), Some(px)) = (id, mv.px) {
+                    move_prices.entry(id.to_owned()).or_insert(px);
+                }
+            }
+        }
         let mut ids: Vec<String> = self.records.iter().filter(|(_, r)| r.usd.is_none()).map(|(k, _)| k.clone()).collect();
         ids.sort();
         for id in ids {
             let r = &self.records[&id];
-            let px = self
-                .accounts
-                .iter()
-                .find_map(|a| {
-                    let a = a.borrow();
-                    let email = a.email.to_lowercase();
-                    a.moves.iter().find(|mv| !email.is_empty() && mv.px.is_some() && confirms(r, mv, &email)).and_then(|mv| mv.px)
-                })
+            let px = move_prices.get(&id).copied()
                 .or_else(|| m.asset_price_at(&r.asset, r.ts));
             if let Some(px) = px {
                 let r = self.records.get_mut(&id).expect("record");
@@ -1575,9 +1634,9 @@ impl Transfers {
                 }
             }
         }
-        for mv in &acct.moves {
+        for (mv, matched) in acct.moves.iter().zip(self.matched_moves(acct)) {
             let Some(px) = mv.px else { continue };
-            if mv.t < since || self.records.values().any(|r| confirms(r, mv, &email)) {
+            if mv.t < since || matched.is_some_and(|id| self.records[id].usd.is_some()) {
                 continue;
             }
             out.push(Flow { key: format!("m:{}:{}:{}:{}", acct.id, mv.t, mv.asset, mv.d), ts: mv.t, asset: mv.asset.clone(),
@@ -1958,6 +2017,67 @@ mod tests {
         assert_relative_eq!(t.net_in_live(&b.borrow(), 0), 3750.0);
     }
 
+    #[test]
+    fn internal_transfer_and_equal_subaccount_receipts_do_not_create_profit() {
+        // The master's own-wallet transfer of 100 is followed by four sub-account
+        // receipts, one also exactly 100.
+        let mut m = Market::new(info(&[]), 120.0, 100.0);
+        let master = Account::new(cfg("master", "master@x.io"), None, "").shared();
+        let amounts = [100.0, 99.99, 99.99, 99.99];
+        let mut accounts = vec![master.clone()];
+        for (i, amount) in amounts.iter().enumerate() {
+            let a = Account::new(cfg(&format!("sub{i}"), &format!("sub{i}@x.io")), None, "").shared();
+            a.borrow_mut().moves.push(Move::new(2_000, "USDT", -amount));
+            accounts.push(a);
+            master.borrow_mut().moves.push(Move::new(2_000, "USDT", *amount));
+        }
+        master.borrow_mut().moves.extend([
+            Move::new(1_000, "USDT", -100.0),
+            Move::new(1_001, "USDT", 100.0),
+        ]);
+        let mut t = Transfers::new(None, accounts);
+        t.value(&mut m, 3_000);
+        let total: f64 = amounts.iter().sum();
+        assert_relative_eq!(t.net_in_live(&master.borrow(), 0), total);
+        assert_relative_eq!(t.desk_flows(0).iter().map(|f| f.qty * f.px).sum::<f64>(), 0.0, epsilon = 1e-9);
+
+        // Even a partial history must consume each stream receipt only once.
+        t.add("external0", tr(2_000, "sub0@x.io", "master@x.io", "USDT", amounts[0]));
+        t.value(&mut m, 48_000);
+        assert_relative_eq!(t.net_in_live(&master.borrow(), 0), total);
+        assert_relative_eq!(t.desk_flows(0).iter().map(|f| f.qty * f.px).sum::<f64>(), 0.0, epsilon = 1e-9);
+
+        t.add("internal", tr(1_000, "master@x.io", "master@x.io", "USDT", 100.0));
+        for (i, amount) in amounts.iter().enumerate().skip(1) {
+            t.add(&format!("external{i}"), tr(2_000, &format!("sub{i}@x.io"), "master@x.io", "USDT", *amount));
+        }
+        t.value(&mut m, 60_000);
+        assert_relative_eq!(t.net_in_live(&master.borrow(), 0), total);
+        assert!(t.desk_flows(0).is_empty());
+        t.value(&mut m, 2_000 + MOVE_HOLD_MS);
+        assert_relative_eq!(t.net_in_live(&master.borrow(), 0), total);
+        assert!(t.desk_flows(0).is_empty());
+    }
+
+    #[test]
+    fn equal_transfers_keep_the_prices_of_their_own_stream_moves() {
+        let mut m = bnb_market();
+        bnb(&mut m, 1_000, 750.0);
+        let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
+        let mut t = Transfers::new(None, vec![a.clone()]);
+        a.borrow_mut().moves.push(Move::new(1_000, "BNB", -5.0));
+        t.value(&mut m, 2_000);
+        bnb(&mut m, 10_000, 760.0);
+        a.borrow_mut().moves.push(Move::new(11_000, "BNB", -5.0));
+        t.value(&mut m, 11_500);
+        t.add("1", tr(1_005, "a@x.io", "b@x.io", "BNB", 5.0));
+        t.add("2", tr(11_005, "a@x.io", "b@x.io", "BNB", 5.0));
+        t.value(&mut m, 12_000);
+        assert_relative_eq!(t.records["1"].usd.unwrap(), 3750.0);
+        assert_relative_eq!(t.records["2"].usd.unwrap(), 3800.0);
+        assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -7550.0);
+    }
+
     struct FakeRest {
         calls: RefCell<Vec<(String, String, i64)>>,
     }
@@ -2157,6 +2277,32 @@ mod tests {
         assert_eq!(l.funding, 0.3);
         a.fut_day.get_mut("XUSDT").unwrap().m0 = None;   // opening mark unknown with a position held at the start: no price P&L yet
         assert!(a.fut_leg(&m, "XUSDT").price.is_none());
+    }
+
+    #[test]
+    fn stream_funding_counts_until_rest_has_it() {
+        let mut m = Market::new(info(&[]), 120.0, 100.0);
+        let id = m.ensure("XUSDT", Venue::Usdm, None);
+        m.insts[id].mark = Some(100.0);
+        let mut a = Account::new(cfg("a", ""), None, "");
+        a.day_start = 1_000;
+        a.positions.insert("XUSDT".into(), (-2.0, 100.0));
+        let mut d = FutDay::new(1_000);
+        (d.m0, d.funding, d.rest_t) = (Some(100.0), -1.5, 2_000);
+        a.fut_day.insert("XUSDT".into(), d);
+        // funding on the stream: the balance only, no symbol; the one position held takes it
+        let ev = |t: i64, bc: &str| json!({"e": "ACCOUNT_UPDATE", "E": t, "T": t, "a": {"m": "FUNDING_FEE",
+            "B": [{"a": "USDT", "wb": "1000", "cw": "1000", "bc": bc}]}});
+        a.on_fut_event(&ev(3_000, "0.7")).unwrap();
+        assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
+        // the next REST pass has it: counted once
+        let d = a.fut_day.get_mut("XUSDT").unwrap();
+        (d.funding, d.rest_t) = (-1.5 + 0.7, 4_000);
+        assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
+        // with two positions held the stream cannot tell whose it is: REST books it
+        a.positions.insert("YUSDT".into(), (1.0, 10.0));
+        a.on_fut_event(&ev(5_000, "1.0")).unwrap();
+        assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
     }
 
     #[test]

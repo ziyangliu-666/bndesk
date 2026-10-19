@@ -12,6 +12,11 @@ use crate::protocol::{self as P, FeedKind, Level, Venue};
 use crate::store::AlertRow;
 
 pub const MIN: i64 = 60_000;
+/// Orders per 10 s over 80% of the limit this long before the alert opens; it clears under ORDERS_CLEAR.
+const ORDERS_HOLD_MS: i64 = 20_000;
+const ORDERS_CLEAR: f64 = 0.7;
+/// An open inventory alert clears once inventory is under this share of the cap.
+const INVENTORY_CLEAR: f64 = 0.95;
 const CLEARED_MAX: usize = 100;
 
 fn level_rank(l: Level) -> i32 {
@@ -127,6 +132,12 @@ impl Alerts {
         now - *self.cond_since.entry(k.to_string()).or_insert(now) >= ms
     }
 
+    /// `held(open)` for an alert not yet open; an open one (id `id`) stays while `keep`, so a value
+    /// hovering at its threshold does not open and clear it over and over.
+    pub fn latched(&mut self, id: &str, open: bool, keep: bool, now: i64, ms: i64) -> bool {
+        self.held(id, open, now, ms) || (keep && self.items.iter().any(|a| a.id == id))
+    }
+
     pub fn apply(&mut self, conds: Vec<Cond>, now: i64) {
         let mut seen = std::collections::HashSet::new();
         for (id, rule, level, text) in conds {
@@ -217,8 +228,15 @@ impl Alerts {
 
         for a in &v.accounts {
             for (name, n, lim) in [("orders_10s", a.orders_10s, a.orders_10s_limit), ("orders_1d", a.orders_1d, a.orders_1d_limit)] {
-                if lim != 0 && n as f64 > 0.8 * lim as f64 {
-                    add(name, &a.id, Level::Warn, format!("{} {n}/{lim} orders ({})", a.id, pct(n as f64 / lim as f64)));
+                let (n_f, lim_f) = (n as f64, lim as f64);
+                // the 10 s count swings around 80% in a burst: it opens after ORDERS_HOLD_MS over, clears under 70%
+                let on = lim != 0 && if name == "orders_10s" {
+                    self.latched(&format!("{name}:{}", a.id), n_f > 0.8 * lim_f, n_f > ORDERS_CLEAR * lim_f, now, ORDERS_HOLD_MS)
+                } else {
+                    n_f > 0.8 * lim_f
+                };
+                if on {
+                    add(name, &a.id, Level::Warn, format!("{} {n}/{lim} orders ({})", a.id, pct(n_f / lim_f)));
                 }
             }
             let acct = desk.account(&a.id);
@@ -292,7 +310,9 @@ impl Alerts {
             }
         }
 
-        if s.inventory_value > ac.inventory_cap_usd {
+        // opens over the cap, clears under INVENTORY_CLEAR of it: inventory near the cap would open one a minute
+        let cap = ac.inventory_cap_usd;
+        if self.latched("inventory:total", s.inventory_value > cap, s.inventory_value > INVENTORY_CLEAR * cap, now, 0) {
             add("inventory", "total", Level::Warn, format!("inventory {} > cap {}", fmt_num(s.inventory_value, 0, false),
                 fmt_num(ac.inventory_cap_usd, 0, false)));
         }
@@ -315,8 +335,12 @@ impl Alerts {
         }
 
         let e = &v.exposure;
-        let over = matches!((e.gap, e.band), (Some(g), Some(b)) if g.abs() > b);
-        if self.held("exposure_gap", over, now, MIN) {
+        // a gap over the band for gap_hold_s, or over gap_wide_bands bands for a minute: a hedge that rebalances
+        // slowly is still at work before that
+        let gap_over = |m: f64| matches!((e.gap, e.band), (Some(g), Some(b)) if g.abs() > m * b);
+        let slow = self.held("exposure_gap", gap_over(1.0), now, (ac.gap_hold_s * 1000.0) as i64);
+        let wide = ac.gap_wide_bands > 0.0 && self.held("exposure_gap:wide", gap_over(ac.gap_wide_bands), now, MIN);
+        if slow || wide {
             if let Some(p) = &e.paused {
                 add("exposure_gap", "", Level::Info, format!("{p}: hedge {} left to close", fmt_num(e.hedge_notional, 0, true)));
             } else {
@@ -435,5 +459,24 @@ mod tests {
         a.apply(vec![c("x", Level::Info, "a3")], 40);   // back: leaves the cleared list
         assert_eq!(a.list().iter().filter(|x| x.id == "x").count(), 1);
         assert!(!a.held("k", true, 0, 100) && a.held("k", true, 100, 100) && !a.held("k", false, 200, 100));
+    }
+
+    #[test]
+    fn latched_opens_after_the_hold_and_clears_only_below_keep() {
+        let mut a = Alerts::default();
+        let c = || vec![("o".to_string(), "o".to_string(), Level::Warn, String::new())];
+        // over 80% for less than the hold: nothing; a dip resets it
+        assert!(!a.latched("o", true, true, 0, 20_000));
+        assert!(!a.latched("o", false, true, 10_000, 20_000));
+        assert!(!a.latched("o", true, true, 15_000, 20_000));
+        assert!(a.latched("o", true, true, 35_000, 20_000));
+        a.apply(c(), 35_000);
+        // open: under the opening threshold but over keep, it stays; under keep, it clears
+        assert!(a.latched("o", false, true, 36_000, 20_000));
+        assert!(!a.latched("o", false, false, 37_000, 20_000));
+        a.apply(vec![], 37_000);
+        assert!(!a.latched("o", false, true, 38_000, 20_000));
+        // no hold: opens at once
+        assert!(a.latched("i", true, true, 0, 0));
     }
 }

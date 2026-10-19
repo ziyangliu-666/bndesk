@@ -698,6 +698,27 @@ impl PnlBook {
         self.last.is_some()
     }
 
+    /// Bases whose Q (with the fills and flows not yet on the grid) differs from the accounts' balance `bal` by
+    /// more than `usd` at the current price: (base, Q, balance). Fees taken in the base asset show here too.
+    pub fn position_gaps(&self, m: &mut Market, bal: &HashMap<String, f64>, usd: f64) -> Vec<(String, f64, f64)> {
+        let mut q: HashMap<String, f64> = self.pos.iter().map(|(b, p)| (b.to_string(), p.q)).collect();
+        for (_, f) in &self.pending {
+            if let Some((base, _, _)) = Self::base_of(m, f) {
+                *q.entry(base).or_insert(0.0) += sign(f.side) * f.qty;
+            }
+        }
+        let mut out: Vec<(String, f64, f64)> = q
+            .into_iter()
+            .filter_map(|(base, q)| {
+                let b = bal.get(&base).copied().unwrap_or(0.0);
+                let px = m.asset_price(&base)?;
+                ((q - b).abs() * px > usd).then_some((base, q, b))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     fn marks(&self) -> Marks {
         self.pos.iter().map(|(b, p)| (b.to_string(), (p.m, p.r))).collect()
     }

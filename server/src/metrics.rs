@@ -434,6 +434,7 @@ pub fn exposure(cfg: &Config, m: &Market, accounts: &[P::Account], beta_value: f
     let off = cfg.target_ratio.and_then(|_| pause(&cfg.hedge_pauses, now));
     if let Some(ratio) = cfg.target_ratio {
         let t = if off.is_some() { 0.0 } else { -ratio * beta_value };
+        let t = cfg.max_notional.map_or(t, |mx| t.clamp(-mx, mx));
         target = Some(t);
         band = Some(cfg.band_usd.unwrap_or(0.0).max(cfg.band_frac * t.abs()));
         gap = Some(t - hedge);   // futures notional to trade to reach the target
@@ -685,6 +686,12 @@ mod tests {
         assert_relative_eq!(e.gap.unwrap(), 700.0);
         assert_eq!(e.paused.as_deref(), Some("hedge off"));
         assert_eq!(e.paused_until, Some(utc(2026, 10, 11, 20, 0)));
+        // max_notional clamps the target, and the band follows the clamped target
+        let mut cfg = cfg;
+        cfg.max_notional = Some(800.0);
+        let e = exposure(&cfg, &m, &accts, 1000.0, false, utc(2026, 10, 5, 6, 0));
+        assert_relative_eq!(e.target.unwrap(), -800.0);
+        assert_relative_eq!(e.band.unwrap(), 200.0);
     }
 
     #[test]
