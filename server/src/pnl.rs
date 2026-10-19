@@ -1243,6 +1243,12 @@ impl PnlBook {
     /// buy of today is left. realized: sells against today's buys, minus today's fees; realized_old: sells
     /// against the opening inventory, or beyond it, at M_k(D); floating: what is left at M_k(T) against cost.
     pub fn fifo(&self, m: &mut Market, p: &Pos) -> (f64, f64, f64) {
+        self.fifo_upto(m, p, i64::MAX)
+    }
+
+    /// `fifo` over the fills and flows at or before `upto` (ms), at the market's prices now: the split as it
+    /// stood at `upto` when the market is set to that time's prices (`desk repair-day`).
+    pub fn fifo_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> (f64, f64, f64) {
         let Some(mt) = nz(m.px(p.inst)).or(p.m) else { return (0.0, 0.0, 0.0) };
         let m0 = nz(self.m0.get(&p.base).copied()).or(nz(p.m_start)).unwrap_or(mt);
         let mut lots: std::collections::VecDeque<(f64, f64)> = std::collections::VecDeque::new();   // today's buys
@@ -1256,7 +1262,7 @@ impl PnlBook {
                 *net.entry(k).or_insert(0.0) += sign(f.side) * f.qty;
             }
         }
-        fills.retain(|f| f.flow.as_deref().is_none_or(|k| net[k].abs() > 1e-12));
+        fills.retain(|f| f.flow.as_deref().is_none_or(|k| net[k].abs() > 1e-12) && f.ts <= upto);
         fills.sort_by_key(|f| f.ts);
         let (mut realized, mut old, mut fees) = (0.0, 0.0, 0.0);
         for f in fills {
@@ -1293,6 +1299,53 @@ impl PnlBook {
         }
         let floating = lots.iter().map(|(q, c)| q * (mt - c)).sum::<f64>() + opening * (mt - m0);
         (realized - fees, old, floating)
+    }
+
+    /// `pi_k` over the fills and flows at or before `upto` (ms), at the market's prices now.
+    pub fn pi_k_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> f64 {
+        let Some(mt) = nz(m.px(p.inst)).or(p.m) else { return 0.0 };
+        let m0 = nz(self.m0.get(&p.base).copied()).or(nz(p.m_start)).unwrap_or(mt);
+        let mut out = -p.q0 * m0;
+        let mut q = p.q0;
+        for (_, sq, f) in self.day_fills.get(&p.base).map(Vec::as_slice).unwrap_or(&[]) {
+            if f.ts > upto {
+                continue;
+            }
+            q += sq;
+            if f.flow.is_some() {
+                out -= sq * f.price;
+            } else {
+                let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
+                out -= sq * f.price * quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0);
+            }
+            if f.fee != 0.0 && !f.fee_asset.is_empty() {
+                out -= f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
+            }
+        }
+        out + q * mt
+    }
+
+    /// (Π, realized, realized_old, floating) over the fills and flows at or before `upto`, at the market's
+    /// prices now, with Q at `upto`: the trading P&L as it stood then when the market holds that time's prices.
+    pub fn split_upto(&self, m: &mut Market, upto: i64) -> (f64, f64, f64, f64) {
+        let mut out = (0.0, 0.0, 0.0, 0.0);
+        for p in self.pos.values() {
+            let (a, b, c) = self.fifo_upto(m, p, upto);
+            out = (out.0 + self.pi_k_upto(m, p, upto), out.1 + a, out.2 + b, out.3 + c);
+        }
+        out
+    }
+
+    /// Q_k at `upto` (ms): the opening quantity and the fills and flows at or before it.
+    pub fn q_upto(&self, base: &str, upto: i64) -> f64 {
+        let Some(p) = self.pos.get(base) else { return 0.0 };
+        p.q0 + self.day_fills.get(base).map_or(0.0, |v| v.iter().filter(|x| x.2.ts <= upto).map(|x| x.1).sum())
+    }
+
+    /// Positions for every base in scope, as booking would open them at grid second `t` (a past day booked from
+    /// klines alone, `desk repair-day`).
+    pub fn open_scope(&mut self, m: &mut Market, t: i64) {
+        self.sync_scope(m, t);
     }
 
     pub fn fifo_total(&self, m: &mut Market) -> (f64, f64, f64) {
@@ -1597,6 +1650,12 @@ mod tests {
         approx!(o, 0.5 * (98.0 - 97.0) + 0.5 * (101.0 - 97.0));
         approx!(f, 1.5 * (100.0 - 97.0));
         approx!(r + o + f, pb.pi_k(&mut m, &pb.pos["X"]));
+        // as it stood at 250 ms (a and b only), at the mid now: Π and its split over those fills, Q then
+        approx!(pb.pi_k_upto(&mut m, &pb.pos["X"], i64::MAX), pb.pi_k(&mut m, &pb.pos["X"]));
+        let (pi, re, old, fl) = pb.split_upto(&mut m, 250);
+        approx!(pi, 2.5 * (100.0 - 97.0) - 0.5 * (100.0 - 98.0) + (100.0 - 99.0) - 0.01);
+        approx!(re + old + fl, pi);
+        approx!(pb.q_upto("X", 250), 3.0);
         // a balance below today's net buys (a sale not seen): the opening comes out negative, the split
         // still sums to Π
         let mut pb = book(0.5);

@@ -20,5 +20,6 @@ pub mod alerts;
 pub mod server;
 pub mod history;
 pub mod recompute;
+pub mod repair;
 pub mod sim;
 pub mod app;

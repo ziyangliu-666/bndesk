@@ -1539,6 +1539,23 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Rebuild a past day's desk rows from --from to --to (HH:MM): the gaps the desk could not write filled, the
+    /// split of the rows there recomputed from the day's fills (see repair.rs), then exit
+    RepairDay {
+        /// the day, YYYY-MM-DD (UTC date of the day start)
+        #[arg(long)]
+        day: String,
+        #[arg(long)]
+        from: String,
+        #[arg(long, default_value = "24:00")]
+        to: String,
+        /// print what would change, write nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// the rows as written, to this CSV
+        #[arg(long)]
+        csv: Option<String>,
+    },
 }
 
 pub fn main() {
@@ -1576,6 +1593,13 @@ pub fn main() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
     if let Some(Cmd::RecomputeMm { from, to, dry_run }) = &args.cmd {
         if let Err(e) = rt.block_on(crate::recompute::run(&cfg, from, to, *dry_run)) {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Some(Cmd::RepairDay { day, from, to, dry_run, csv }) = &args.cmd {
+        if let Err(e) = rt.block_on(crate::repair::run(&cfg, day, from, to, *dry_run, csv.as_deref())) {
             eprintln!("{e:#}");
             std::process::exit(1);
         }
