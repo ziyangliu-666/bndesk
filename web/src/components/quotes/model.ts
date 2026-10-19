@@ -47,14 +47,32 @@ export function wideCut(rows: readonly QRow[]): number {
   return Math.max(4, 2 * ws[Math.floor(ws.length / 2)]!);
 }
 
-/** What the map says about a row at the right of its plot: a missing side, nothing resting, a wide quote. */
+/** What the map says in words at the right of a row's plot: nothing resting, a wide quote. A missing side is
+ *  drawn instead (`missingSide`). */
 export function rowStatus(r: QRow, cut: number): string | null {
   const s = sidesOf(r);
-  if (s === "noask") return "No ask";
-  if (s === "nobid") return "No bid";
+  if (s === "noask" || s === "nobid") return null;
   if (s === "none") return "Not quoted";
   const w = widthOf(r);
   return w != null && w > cut ? "Wide" : null;
+}
+
+/** A one-sided row's missing side and where it is drawn: an empty ring at the market's best price on that side,
+ *  bps from fair (null when the row is two-sided, unquoted, or the market has no price on that side). */
+export function missingSide(r: QRow): { side: "buy" | "sell"; bps: number } | null {
+  const s = sidesOf(r);
+  if (s !== "noask" && s !== "nobid") return null;
+  const fair = r.sym.fair ?? r.sym.mid;
+  const px = s === "nobid" ? r.sym.bid : r.sym.ask;
+  if (!fair || !px) return null;
+  return { side: s === "nobid" ? "buy" : "sell", bps: off(px, fair) };
+}
+
+/** The largest resting order on the map, USDT: the dots' sizes are relative to it. */
+export function maxNotional(rows: readonly QRow[]): number {
+  let m = 0;
+  for (const r of rows) for (const o of r.orders) m = Math.max(m, o.notional);
+  return m;
 }
 
 /** The map's counts: rows with one side missing, rows quoted wide, orders through fair. */
@@ -137,9 +155,12 @@ export const LADDER = [2, 4, 6, 10, 16, 25, 35, 50, 75, 100, 150, 200];
 /** The range choices the controls offer. */
 export const RANGES = [10, 25, 50, 100] as const;
 
-/** A dot's diameter for an order's notional (area ~ notional), px. An order through fair keeps its size and
- *  gets a separate amber ring THROUGH_GAP px outside it, so size and "through fair" never look alike. */
-export const dotSize = (notional: number) => Math.max(5, Math.min(11, Math.sqrt(notional / 60) * 5.6));
+/** A dot's diameter, px: area ~ the order's notional against the largest order on the map (`max`), which is
+ *  DOT_MAX across. An order through fair keeps its size and gets a separate amber ring THROUGH_GAP px outside
+ *  it, so size and "through fair" never look alike. A missing side's empty ring is DOT_MAX across too. */
+export const DOT_MAX = 9;
+export const dotSize = (notional: number, max: number) =>
+  max > 0 ? Math.max(3, DOT_MAX * Math.sqrt(Math.max(0, notional) / max)) : DOT_MAX;
 export const THROUGH_GAP = 2.5;
 
 /** The market band's fill and edges, and the inventory bars: neutral (they are not gains or losses). */

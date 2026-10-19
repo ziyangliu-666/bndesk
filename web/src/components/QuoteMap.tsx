@@ -5,12 +5,13 @@ import { C, SANS } from "../theme";
 import { bps, MINUS, price, usd } from "../format";
 import { MASK, hideNow, maskText, useHide } from "../mask";
 import { EChart, phoneDpr, type EChartsType } from "./EChart";
-import { BAND, BAND_EDGE, INV_FILL, LADDER, THROUGH_GAP, clamp, dotSize, off, quoteRows, rowStatus, short, sidesOf, wideCut, widthOf, type MapSort, type QRow } from "./quotes/model";
+import { BAND, BAND_EDGE, DOT_MAX, INV_FILL, LADDER, THROUGH_GAP, clamp, dotSize, maxNotional, missingSide, off, quoteRows, rowStatus, short, sidesOf, wideCut, widthOf, type MapSort, type QRow } from "./quotes/model";
 
 export type { MapSort };
 
 /** One row per instrument, x in bps from fair. The market's bid-ask is a thin bar, own bids and asks
- *  are dots with area ~ notional, orders through fair carry an amber ring, orders beyond the x range
+ *  are dots with area ~ notional (against the largest order shown), a missing side is an empty ring at the
+ *  market's best price on that side, orders through fair carry an amber ring, orders beyond the x range
  *  sit on the edge as triangles. Inventory value is a narrow bar column on the right. */
 
 type Row = QRow;
@@ -163,11 +164,20 @@ export function QuoteMap({
     const bids: object[] = [];
     const asks: object[] = [];
     const rings: object[] = [];
+    const missing: object[] = [];
     const status: [number, number, string][] = [];
     const cut = wideCut(rows);
+    const maxN = maxNotional(rows);
     rows.forEach((r, i) => {
       const st = rowStatus(r, cut);
       if (st) status.push([range, i, st]);
+      const miss = missingSide(r);
+      if (miss)
+        missing.push({
+          value: [clamp(miss.bps, range), i],
+          symbolSize: DOT_MAX,
+          itemStyle: { borderColor: miss.side === "buy" ? C.up : C.down },
+        });
       const s = r.sym;
       const fair = s.fair ?? s.mid;
       if (!fair) return;
@@ -176,7 +186,7 @@ export function QuoteMap({
         const b = off(o.price, fair);
         const out = Math.abs(b) > range;
         const through = o.dist_bps != null && o.dist_bps < 0;
-        const size = out ? 8 : dotSize(o.notional);
+        const size = out ? 8 : dotSize(o.notional, maxN);
         const item = {
           value: [clamp(b, range), i],
           symbol: out ? "triangle" : "circle",
@@ -191,6 +201,8 @@ export function QuoteMap({
     });
 
     const label = (sel: boolean, has: boolean) => (sel ? "sel" : has ? "on" : "off");
+    // a category label's formatter gets its index from the first row in view, not in `rows`: look rows up by name
+    const byName = new Map(rows.map((r) => [short(r.sym.symbol), r]));
     const yAxis = (gridIndex: number) => ({
       id: `y${gridIndex}`,
       gridIndex,
@@ -301,7 +313,10 @@ export function QuoteMap({
             margin: 8,
             align: "left",
             padding: [0, 0, 0, -LEFT + 10],
-            formatter: (v: string, i: number) => `{${label(rows[i]?.sym.symbol === selected, !!rows[i]?.orders.length)}|${v}}`,
+            formatter: (v: string) => {
+              const r = byName.get(v);
+              return `{${label(r?.sym.symbol === selected, !!r?.orders.length)}|${v}}`;
+            },
             rich: {
               on: {
                 color: C.ink,
@@ -334,8 +349,8 @@ export function QuoteMap({
             color: C.ink2,
             fontSize: 11,
             fontFamily: SANS,
-            formatter: (_: string, i: number) => {
-              const v = rows[i]?.sym.inv_value ?? 0;
+            formatter: (name: string) => {
+              const v = byName.get(name)?.sym.inv_value ?? 0;
               // hidden: every row reads the same (a blank one would tell it holds nothing)
               if (hide) return MASK;
               if (Math.abs(v) < 1) return "";
@@ -461,7 +476,20 @@ export function QuoteMap({
           z: 2,
         },
         {
-          // a row's status at the right of the plot (No ask, No bid, Not quoted, Wide), under the marks
+          // a missing side: an empty ring in its colour at the market's best price on that side (filled with the
+          // ground, so the band's edge does not run through it)
+          id: "missing",
+          type: "scatter",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          silent: true,
+          symbol: "circle",
+          itemStyle: { color: C.ground, borderWidth: 1.25 },
+          data: missing,
+          z: 2,
+        },
+        {
+          // a row's status at the right of the plot (Not quoted, Wide), under the marks
           id: "status",
           type: "custom",
           xAxisIndex: 0,

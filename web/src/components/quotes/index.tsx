@@ -26,7 +26,7 @@ export const QuoteMapEC = lazyPage<Parameters<typeof import("../QuoteMap").Quote
 type OnSelect = (symbol: string, venue: Venue) => void;
 
 /** The map's legend on top of the map: Market bid–ask ▬ · Our bid ● · Our ask ● · Size = order size ·● ·
- *  Through fair ◎ · Beyond range ▸. `short` (the phone) leaves out Beyond range and wraps to two lines. */
+ *  No quote ○ · Through fair ◎ · Beyond range ▸. `short` (the phone) leaves out Beyond range and wraps to two lines. */
 export function QuoteLegend({ short = false, className }: { short?: boolean; className?: string }) {
   return (
     <div className={"q-legend" + (short ? " short" : "") + (className ? " " + className : "")}>
@@ -39,9 +39,12 @@ export function QuoteLegend({ short = false, className }: { short?: boolean; cla
       <span>
         <i className="q-lg-dot down" /> Our ask
       </span>
-      <span title="A dot's area is the order's size (notional)">
+      <span title="A dot's area is the order's size (notional), against the largest order on the map">
         <i className="q-lg-dot sm" />
         <i className="q-lg-dot lg" /> Size = order size
+      </span>
+      <span title="A side with no order of ours: an empty ring at the market's best price on that side">
+        <i className="q-lg-dot hollow" /> No quote
       </span>
       <span title="An order priced through fair: a bid above it or an ask below it">
         <i className="q-lg-dot ring" /> Through fair

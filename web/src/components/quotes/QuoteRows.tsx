@@ -1,12 +1,13 @@
 // The light quote map: plain canvas, no chart library. One row per instrument, x in bps from fair (the centre
-// line): the market's bid–ask as a grey band, our bids and asks as dots (area ~ notional; a separate amber
-// ring around an order through fair; a faded triangle on the edge when beyond the range), a row's status at
-// the right of the plot (No ask, No bid, Not quoted, Wide), and optionally the inventory value as a neutral bar
+// line): the market's bid–ask as a grey band, our bids and asks as dots (area ~ notional against the largest
+// order shown; a separate amber ring around an order through fair; a faded triangle on the edge when beyond
+// the range), a missing side as an empty ring at the market's best price there, a row's status at the right
+// of the plot (Not quoted, Wide), and optionally the inventory value as a neutral bar
 // at the right. Redrawn on each store update (its live motion), at most once a frame.
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { C, SANS } from "../../theme";
 import { MINUS } from "../../format";
-import { BAND, BAND_EDGE, INV_FILL, THROUGH_GAP, clamp, dotSize, off, rowStatus, short, wideCut, type QRow } from "./model";
+import { BAND, BAND_EDGE, DOT_MAX, INV_FILL, THROUGH_GAP, clamp, dotSize, maxNotional, missingSide, off, rowStatus, short, wideCut, type QRow } from "./model";
 import { MASK, useHide } from "../../mask";
 
 export interface QuoteRowsProps {
@@ -27,7 +28,7 @@ export interface QuoteRowsProps {
   onRow?: (r: QRow) => void;
   /** Text when there are no rows. */
   empty?: string;
-  /** Each row's status at the right of the plot: No ask, No bid, Not quoted, Wide (default on). */
+  /** Each row's status at the right of the plot: Not quoted, Wide (default on). */
   status?: boolean;
   /** The ticks stay under the page's top bar while a long map scrolls by (the phone's full map). */
   stickyAxis?: boolean;
@@ -204,6 +205,7 @@ function draw(
   const ix0 = w - PAD / 2 - INV_TXT - INV_W;
   const ixOf = (v: number) => ix0 + ((v - invLo) / invSpan) * INV_W;
   const cut = wideCut(rows);
+  const maxN = maxNotional(rows);
 
   rows.forEach((r, i) => {
     const y0 = top + i * rowH;
@@ -242,6 +244,18 @@ function draw(
         g.fillRect(a, yc - bh / 2, 1, bh);
         g.fillRect(Math.max(a + 1, b - 1), yc - bh / 2, 1, bh);
       }
+      // a missing side: an empty ring in its colour at the market's best price on that side
+      const miss = missingSide(r);
+      if (miss) {
+        // filled with the ground, so the band's edge does not run through it
+        g.fillStyle = C.ground;
+        g.strokeStyle = miss.side === "buy" ? C.up : C.down;
+        g.lineWidth = 1.25;
+        g.beginPath();
+        g.arc(xOf(miss.bps), yc, Math.min(DOT_MAX, rowH - 4) / 2, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+      }
       // our orders: the larger first, so a small one stays visible on top
       const os = r.orders.slice().sort((x, y) => y.notional - x.notional);
       for (const o of os) {
@@ -263,7 +277,7 @@ function draw(
           g.globalAlpha = 1;
           continue;
         }
-        const rad = Math.min(dotSize(o.notional), rowH - 4 - 2 * THROUGH_GAP) / 2;
+        const rad = Math.min(dotSize(o.notional, maxN), rowH - 4 - 2 * THROUGH_GAP) / 2;
         g.globalAlpha = 0.9;
         g.fillStyle = col;
         g.beginPath();

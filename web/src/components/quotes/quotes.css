@@ -86,6 +86,13 @@
   width: 10px;
   height: 10px;
 }
+/* a missing side: an empty ring, as on the map */
+.q-lg-dot.hollow {
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1.25px solid var(--ink-2);
+}
 /* through fair: an amber ring clear of the dot, as on the map */
 .q-lg-dot.ring {
   width: 6px;
