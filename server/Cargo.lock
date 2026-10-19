@@ -464,6 +464,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "libc",
  "rand 0.9.5",
  "regex",
  "reqwest",

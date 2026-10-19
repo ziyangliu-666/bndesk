@@ -44,6 +44,7 @@ subtle = "2"
 chrono-tz = "0.10"
 rustc-hash = "2"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+libc = "0.2"
 
 [dev-dependencies]
 approx = "0.5"

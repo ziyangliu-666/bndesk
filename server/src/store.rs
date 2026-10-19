@@ -3,8 +3,8 @@
 //! The schema migrates in place: a newer desk opens an older desk.db.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -319,8 +319,43 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     Ok(c)
 }
 
+/// How the writer is doing: a batch that fails (the disk full, the db locked) is kept and retried, never
+/// dropped while the queue fits in `MAX_PENDING`; the desk raises an alert from this.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StoreHealth {
+    /// since when writes have failed (ms), None while they succeed
+    pub failing_since: Option<i64>,
+    pub error: String,
+    /// rows waiting for a write that succeeds
+    pub pending: usize,
+    /// rows given up on (the queue past MAX_PENDING, or failing at shutdown), since the start
+    pub dropped: u64,
+}
+
+/// Rows held for retry at most: past it the oldest are dropped (counted in `dropped`, logged).
+pub const MAX_PENDING: usize = 2_000_000;
+/// The first retry waits this long, doubling to RETRY_MAX_MS.
+const RETRY_MS: u64 = 1_000;
+const RETRY_MAX_MS: u64 = 30_000;
+
+/// Used and total bytes of the filesystem holding `path` (its directory when the file does not exist yet).
+pub fn disk_usage(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = if path.exists() { path.to_path_buf() } else { path.parent().filter(|d| !d.as_os_str().is_empty())?.to_path_buf() };
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: c is a valid NUL-terminated path, st a statvfs to fill
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let total = st.f_blocks as u64 * st.f_frsize as u64;
+    let avail = st.f_bavail as u64 * st.f_frsize as u64;
+    Some((total.saturating_sub(avail), total))
+}
+
 pub struct Store {
     pub path: PathBuf,
+    pub health: Arc<Mutex<StoreHealth>>,
     tx: Sender<Item>,
     rx: Mutex<Option<Receiver<Item>>>,
     thread: Mutex<Option<(JoinHandle<()>, Receiver<()>)>>,
@@ -329,7 +364,8 @@ pub struct Store {
 impl Store {
     pub fn new(path: impl AsRef<Path>) -> Store {
         let (tx, rx) = mpsc::channel();
-        Store { path: path.as_ref().to_path_buf(), tx, rx: Mutex::new(Some(rx)), thread: Mutex::new(None) }
+        Store { path: path.as_ref().to_path_buf(), health: Arc::default(), tx, rx: Mutex::new(Some(rx)),
+                thread: Mutex::new(None) }
     }
 
     fn connect(&self) -> rusqlite::Result<Connection> {
@@ -431,10 +467,11 @@ impl Store {
         let Some(rx) = self.rx.lock().unwrap().take() else { return Ok(()) };
         let c = self.connect()?;
         let (done_tx, done_rx) = mpsc::channel();
+        let health = self.health.clone();
         let h = std::thread::Builder::new()
             .name("desk-store".into())
             .spawn(move || {
-                run(c, rx);
+                run(c, rx, &health);
                 let _ = done_tx.send(());
             })
             .expect("spawn desk-store");
@@ -449,6 +486,10 @@ impl Store {
 
     pub fn put(&self, row: Row) {
         let _ = self.tx.send(Item::Row(row));
+    }
+
+    pub fn health(&self) -> StoreHealth {
+        self.health.lock().unwrap().clone()
     }
 
     /// Flushes the queue and stops the writer (waits at most 5 s).
@@ -513,22 +554,88 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-fn run(c: Connection, rx: Receiver<Item>) {
-    // the Store owns the sender, so recv only fails once it is dropped
-    while let Ok(item) = rx.recv() {
-        let mut batch = vec![item];
-        while batch.len() < 5000 {
-            match rx.try_recv() {
-                Ok(i) => batch.push(i),
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// A failure of the disk or of access to the db (full, I/O, busy, locked, read-only), which passes; not one of
+/// the rows themselves.
+fn transient(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode as C;
+    matches!(e, rusqlite::Error::SqliteFailure(f, _) if matches!(f.code, C::DiskFull | C::SystemIoFailure | C::DatabaseBusy
+        | C::DatabaseLocked | C::CannotOpen | C::ReadOnly | C::OutOfMemory | C::FileLockingProtocolFailed))
+}
+
+/// Writes the queue in batches. A batch that fails stays queued and is tried again, the wait doubling from
+/// RETRY_MS to RETRY_MAX_MS, while new rows queue behind it: the desk keeps running on a full disk, and what it
+/// saw is written once there is room. `health` says how it goes.
+fn run(c: Connection, rx: Receiver<Item>, health: &Mutex<StoreHealth>) {
+    let mut queue: std::collections::VecDeque<Item> = std::collections::VecDeque::new();
+    let mut wait = RETRY_MS;
+    let mut stop = false;
+    let mut dropped: u64 = 0;
+    loop {
+        if queue.is_empty() && !stop {
+            // the Store owns the sender, so recv only fails once it is dropped
+            match rx.recv() {
+                Ok(i) => queue.push_back(i),
                 Err(_) => break,
             }
         }
-        let stop = batch.iter().any(|b| matches!(b, Item::Stop));
-        if let Err(e) = write(&c, &batch) {
-            // keep writing later batches
-            tracing::error!("store: batch of {} dropped: {e}", batch.len());
+        while let Ok(i) = rx.try_recv() {
+            queue.push_back(i);
         }
-        if stop {
+        if queue.len() > MAX_PENDING {
+            let n = queue.len() - MAX_PENDING;
+            queue.drain(..n);
+            dropped += n as u64;
+            tracing::error!("store: {n} rows dropped, {MAX_PENDING} still queued for a write that fails");
+        }
+        let n = queue.len().min(5000);
+        let batch: Vec<Item> = queue.drain(..n).collect();
+        stop |= batch.iter().any(|b| matches!(b, Item::Stop));
+        match write(&c, &batch) {
+            Ok(()) => {
+                let mut h = health.lock().unwrap();
+                if let Some(since) = h.failing_since.take() {
+                    tracing::warn!("store: writing again after {} s of failures", (now_ms() - since) / 1000);
+                }
+                h.pending = queue.len();
+                h.dropped = dropped;
+                wait = RETRY_MS;
+            }
+            Err(e) if !transient(&e) => {
+                // a row the db refuses for what it is: retrying cannot help
+                dropped += batch.len() as u64;
+                health.lock().unwrap().dropped = dropped;
+                tracing::error!("store: batch of {} dropped: {e}", batch.len());
+            }
+            Err(e) => {
+                let pending = batch.len() + queue.len();
+                {
+                    let mut h = health.lock().unwrap();
+                    if h.failing_since.is_none() {
+                        h.failing_since = Some(now_ms());
+                        tracing::error!("store: batch of {} not written: {e}; kept for retry", batch.len());
+                    }
+                    h.error = e.to_string();
+                    h.pending = pending;
+                }
+                if stop {
+                    dropped += pending as u64;
+                    health.lock().unwrap().dropped = dropped;
+                    tracing::error!("store: stopping with {pending} rows unwritten: {e}");
+                    break;
+                }
+                for (k, b) in batch.into_iter().enumerate() {
+                    queue.insert(k, b);
+                }
+                std::thread::sleep(Duration::from_millis(wait));
+                wait = (wait * 2).min(RETRY_MAX_MS);
+                continue;
+            }
+        }
+        if stop && queue.is_empty() {
             break;
         }
     }
@@ -557,6 +664,45 @@ mod tests {
         s.close();
         let rows: Vec<i64> = s.load(0, 61 * 24).unwrap().equity.iter().map(|r| r.t).collect();
         assert_eq!(rows, [60_000, 120_000, 1_000_000]);
+    }
+
+    /// A full db (its page cap reached, as a full disk) keeps the rows and writes them once there is room.
+    #[test]
+    fn a_full_db_keeps_rows_until_there_is_room() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("full.db");
+        let c = open(&p).unwrap();
+        c.execute_batch("CREATE TABLE filler (x BLOB)").unwrap();
+        for _ in 0..200 {
+            c.execute("INSERT INTO filler VALUES (zeroblob(4000))", []).unwrap();
+        }
+        let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+        c.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |r| r.get::<_, i64>(0)).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let health: Arc<Mutex<StoreHealth>> = Arc::default();
+        let h2 = health.clone();
+        let th = std::thread::spawn(move || run(c, rx, &h2));
+        for k in 0..2000 {
+            let f = FillRec::new(format!("f{k}"), k, "a", "XUSDT", Venue::Spot, Side::Buy, 1.0, 1.0);
+            tx.send(Item::Row(Row::Fill(Box::new(f)))).unwrap();
+        }
+        let t0 = std::time::Instant::now();
+        while health.lock().unwrap().failing_since.is_none() {
+            assert!(t0.elapsed().as_secs() < 10, "never failed");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(health.lock().unwrap().pending > 0);
+        // room again: the filler goes, its pages are free for the queued rows
+        let o = Connection::open(&p).unwrap();
+        o.busy_timeout(Duration::from_secs(5)).unwrap();
+        o.execute("DELETE FROM filler", []).unwrap();
+        drop(o);
+        tx.send(Item::Stop).unwrap();
+        th.join().unwrap();
+        let h = health.lock().unwrap().clone();
+        assert_eq!((h.failing_since, h.pending, h.dropped), (None, 0, 0));
+        let n: i64 = Connection::open(&p).unwrap().query_row("SELECT count(*) FROM fills", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2000);
     }
 
     #[test]

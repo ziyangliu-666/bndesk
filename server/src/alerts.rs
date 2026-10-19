@@ -18,6 +18,9 @@ const ORDERS_CLEAR: f64 = 0.7;
 /// An open inventory alert clears once inventory is under this share of the cap.
 const INVENTORY_CLEAR: f64 = 0.95;
 const CLEARED_MAX: usize = 100;
+/// The db's disk this full warns, and this full is critical (a full disk stops every write).
+const DISK_WARN: f64 = 0.8;
+const DISK_CRIT: f64 = 0.9;
 
 fn level_rank(l: Level) -> i32 {
     match l {
@@ -267,6 +270,23 @@ impl Alerts {
             if acct.is_some() && futures && !a.positions.is_empty() && a.fut_available < ac.futures_margin_min_usd {
                 add("futures_margin", &a.id, Level::Warn, format!("{} futures available {} < {}", a.id,
                     fmt_num(a.fut_available, 0, false), fmt_num(ac.futures_margin_min_usd, 0, false)));
+            }
+        }
+
+        // the store: a write failing (rows held for retry) and the disk the db is on filling up
+        let sh = desk.store.health();
+        if let Some(since) = sh.failing_since {
+            add("store", "write", Level::Crit, format!("db writes failing for {}s, {} rows held: {}", (now - since).div_euclid(1000),
+                sh.pending, sh.error));
+        }
+        if sh.dropped > 0 {
+            add("store", "dropped", Level::Crit, format!("{} rows not written to the db since the start", sh.dropped));
+        }
+        if let Some((used, total)) = crate::store::disk_usage(&desk.store.path).filter(|u| u.1 > 0) {
+            let frac = used as f64 / total as f64;
+            if frac >= DISK_WARN {
+                add("disk", "db", if frac >= DISK_CRIT { Level::Crit } else { Level::Warn }, format!(
+                    "db disk {} full: {:.0} of {:.0} MB", pct(frac), used as f64 / 1e6, total as f64 / 1e6));
             }
         }
 
