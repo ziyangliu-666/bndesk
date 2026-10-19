@@ -103,14 +103,17 @@ impl Mem {
         let keep = self.rows.partition_point(|r| r.t < from);
         self.rows.truncate(keep);
         self.rows.extend(new);
-        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty, symbol FROM fills WHERE rowid > ? ORDER BY rowid")?;
+        // the desk's volume is its spot fills' (the perps' hedge fills are not market making), as the ticker's
+        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty, symbol, venue FROM fills WHERE rowid > ? ORDER BY rowid")?;
         let mut q = st.query([self.fill_rowid])?;
         while let Some(r) = q.next()? {
             self.fill_rowid = r.get(0)?;
             let (id, ts, n): (String, Option<i64>, Option<f64>) = (r.get(1)?, r.get(2)?, r.get(3)?);
             let Some(ts) = ts else { continue };
-            // a conversion between stablecoins is not desk volume
-            if r.get::<_, Option<String>>(4)?.is_some_and(|s| crate::market::is_conversion(&s)) {
+            // a conversion between stablecoins is not desk volume, nor a perp fill
+            if r.get::<_, Option<String>>(4)?.is_some_and(|s| crate::market::is_conversion(&s))
+                || r.get::<_, Option<String>>(5)?.is_some_and(|v| v != "spot")
+            {
                 continue;
             }
             let n = n.unwrap_or(0.0);
@@ -805,7 +808,8 @@ mod tests {
         assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 0.0, "h": 0.0, "l": 0.0, "c": 0.0, "pi": 0.0,
             "realized": 0.0, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
         assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&1.0.into(), &1.0.into(), &0.5.into()));
-        assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&16.0.into(), &2.into()));
+        // the spot fill only: the perp's (hedge) is not the desk's volume
+        assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&6.0.into(), &1.into()));
         assert_eq!(b[2]["c"], 2.0);
         // per=day: as stored, each day from its own start
         let w: serde_json::Value =

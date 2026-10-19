@@ -90,7 +90,8 @@ const H60: usize = 2;
 const H300: usize = 3;
 
 #[allow(clippy::needless_range_loop)]
-/// Over today's fills less the conversions between stablecoins (`FillRec::conversion`).
+/// Over today's fills less the conversions between stablecoins (`FillRec::conversion`); the day's and the last
+/// hour's counts and volume over the spot fills only.
 pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
     let mut g = FillAgg::default();
     for f in fills.iter().filter(|f| !f.conversion()) {
@@ -98,8 +99,13 @@ pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
         let n = f.notional();
         a.fills += 1;
         a.volume += n;
-        g.fills_day += 1;
-        g.volume_day += n;
+        // the desk's day figures are its spot market making (the ticker's Spot volume); the perps' hedge fills
+        // are counted on their own rows
+        let spot = f.venue == Venue::Spot;
+        if spot {
+            g.fills_day += 1;
+            g.volume_day += n;
+        }
         if f.side == Side::Buy {
             a.buys += 1;
         } else {
@@ -131,7 +137,7 @@ pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
         hs.1.add(f.mk.0[H10], n);
         hs.2.add(f.mk.0[H60], n);
         hs.3 += p;
-        if f.ts >= now - HOUR {
+        if f.ts >= now - HOUR && spot {
             g.fills_1h += 1;
             g.mk10_1h.add(f.mk.0[H10], n);
         }
@@ -760,8 +766,13 @@ mod tests {
         assert_relative_eq!(s.total, 0.05, epsilon = 1e-9);
         assert!(!s.by_base.contains_key("USDC"));
         let g = aggregate(&fills, now);
-        let only = aggregate(&[aaa], now);
+        let only = aggregate(&[aaa.clone()], now);
         assert_eq!((g.fills_day, g.volume_day), (1, 10.0));
+        // a perp hedge fill has its own row, out of the day's spot count and volume
+        let hedge = FillRec::new("h", now - 500_000, "mm", "AAAUSDT", Venue::Usdm, Side::Sell, 10.0, 3.0);
+        let gh = aggregate(&[aaa.clone(), hedge], now);
+        assert_eq!((gh.fills_day, gh.volume_day, gh.fills_1h), (1, 10.0, 1));
+        assert_eq!(gh.by_inst["usdm:AAAUSDT"].volume, 30.0);
         assert_eq!(g.all, only.all);
         assert_eq!(g.n_30m, only.n_30m);
         assert!(!g.by_inst.contains_key("spot:USDCUSDT"));
