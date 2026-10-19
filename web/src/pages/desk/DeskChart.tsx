@@ -37,6 +37,7 @@ const STYLE = [
 
 const VOL = rgba(C.ink2, 0.38);
 const NO_ENDS = new Set<number>();
+const NO_ROWS: Row[] = [];
 const NET = C.ink;
 
 export function DeskChart({ head }: { head?: ReactNode }) {
@@ -80,7 +81,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
   const offAt = useDayOffsets(tab === "pnl" ? dayStart : null);
   const perDay = useMemo(() => (past.rows.length ? past.rows.concat(today) : today), [past.rows, today]);
-  const rows = useMemo(() => (offAt ? perDay.map((r) => runOn(r, offAt(r.t))) : perDay), [perDay, offAt]);
+  // until the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
+  const rows = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? perDay.map((r) => runOn(r, offAt(r.t))) : perDay), [perDay, offAt]);
   const volRows = useMemo(() => (step === 0 ? (past.rows.length ? past.rows.concat(minRows) : minRows) : rows), [step, past.rows, minRows, rows]);
   const volByT = useMemo(() => new Map(volRows.map((r) => [r.t, r])), [volRows]);
 
@@ -123,7 +125,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   let extra: ExLegendItem[] = [];
   let stretch = [1, 0.22];
   if (tab === "pnl") {
-    const dayLabel = offAt ? "Cumulative PnL" : "Day PnL";
+    const dayLabel = offAt !== null ? "Cumulative PnL" : "Day PnL";
     const day: ExSeries =
       style === "candles"
         ? {

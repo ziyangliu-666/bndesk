@@ -48,7 +48,8 @@ export function DeskChart({ ms }: { ms: number }) {
     const today = dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : [];
     nToday.current = today.length;
     const perDay = pastBars.length ? pastBars.concat(today) : today;
-    const all = offAt ? perDay.map((b) => runOn(b, offAt(b.time))) : perDay;
+    // until the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
+    const all = offAt === undefined ? [] : offAt ? perDay.map((b) => runOn(b, offAt(b.time))) : perDay;
     const ends = offAt ? new Set<number>() : dayEnds(all.map((b) => b.time), dayStart ?? 0);
     const d = toChart(all, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL, ends);
     prev.current = { k, d };
@@ -58,7 +59,7 @@ export function DeskChart({ ms }: { ms: number }) {
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
   const vol = maskFormat(hide, (v: number) => compact(v));
-  const label = offAt ? "Cumulative PnL" : "Day PnL";
+  const label = offAt !== null ? "Cumulative PnL" : "Day PnL";
   // at rest the legend has two lines: Day PnL, then Trading, Hedge and Rebates (with Other they make Day PnL); the
   // two parts of Trading and Other are a chip away
   const line = (key: keyof typeof P, label: string, pts: PnlData["mm"]): ExSeries => ({

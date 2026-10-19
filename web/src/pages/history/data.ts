@@ -525,9 +525,11 @@ export const todayOf = (dayStart: number) => new Date(dayStart).toISOString().sl
 export function useRangeDays(from: number | null): { rows: DayRow[]; todayDay: string | null; loading: boolean; error: string | null } {
   const snapDays = useStore((s) => s.snap?.days);
   const daily = useDeskHistory(86_400, from);
-  const rows = useMemo(() => (from == null ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
+  // the days wait for the snapshot's kept ones too: the equity history's figures first would be replaced by the
+  // desk's own closing split a moment later
+  const rows = useMemo(() => (from == null || snapDays === undefined ? [] : dayRows(snapDays, daily.bars, daily.days, from)), [snapDays, daily.bars, daily.days, from]);
   const dayStart = useStore((s) => s.snap?.summary.day_start);
-  return { rows, todayDay: dayStart ? todayOf(dayStart) : null, loading: daily.loading, error: daily.error };
+  return { rows, todayDay: dayStart ? todayOf(dayStart) : null, loading: daily.loading || (from != null && snapDays === undefined), error: daily.error };
 }
 
 /** Sums of day rows (null where no day had the figure); `se` combined as independent. The parts (the split and
