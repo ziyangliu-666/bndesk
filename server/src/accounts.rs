@@ -257,7 +257,8 @@ pub struct Account {
     /// spot symbols whose fills the desk tracks (set by the desk): the myTrades sweep reads these
     pub spot_symbols: Vec<String>,
     /// the myTrades sweep has covered today up to here (ms)
-    pub trades_upto: i64,    // symbol -> today's futures fills, funding and opening mark
+    pub trades_upto: HashMap<String, i64>,   // spot symbol -> when the last sweep of it that succeeded started
+    // symbol -> today's futures fills, funding and opening mark
     pub transfers_day: f64,
     pub updated: i64,
     pub feeds: Vec<FeedRef>,
@@ -321,7 +322,7 @@ impl Account {
             day_start: 0,
             fut_day: HashMap::new(),
             spot_symbols: vec![],
-            trades_upto: 0,
+            trades_upto: HashMap::new(),
             transfers_day: 0.0,
             updated: 0,
             feeds,
@@ -894,7 +895,7 @@ impl RestGet for Rest {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Job {
     SpotAccount,
     RateLimits,
@@ -930,7 +931,16 @@ async fn poll(acct: AccountRef, rest: Rest, job: Job, every: f64, delay: f64) {
         let feed = acct.borrow().rest_feed.clone();
         match r {
             Ok(()) => feed.borrow_mut().set_up(true, Some("")),
-            Err(e) => feed.borrow_mut().set_up(false, Some(&err_text(&e))),
+            Err(e) => {
+                feed.borrow_mut().set_up(false, Some(&err_text(&e)));
+                if matches!(job, Job::SpotTrades | Job::FutToday | Job::Dividends) {
+                    // the passes that fill in the day's records: a failure leaves the day short
+                    tracing::warn!("{} {job:?}: {e:#}", acct.borrow().id);
+                }
+                // a failed pass is tried again within a minute, not after its full period
+                tokio::time::sleep(Duration::from_secs_f64(every.min(60.0))).await;
+                continue;
+            }
         }
         tokio::time::sleep(Duration::from_secs_f64(every)).await;
     }
@@ -965,10 +975,12 @@ pub fn start(acct: &AccountRef, rest: Rest) -> Vec<JoinHandle<()>> {
 }
 
 /// Today's spot fills from REST, for those the user stream did not deliver (the monitor down or the
-/// stream dropping): each tracked or traded symbol from where the last sweep reached, less 15 min. The
-/// fill ids are the stream's, so a fill already seen is not added twice.
+/// stream dropping): each tracked or traded symbol from where its last sweep reached, less 15 min. The
+/// fill ids are the stream's, so a fill already seen is not added twice. Each symbol keeps its own progress: a
+/// request that fails is tried again twice, then the sweep goes on to the next symbol and the error is
+/// returned at the end (the poll retries within a minute), so one bad answer never holds back the rest.
 pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let (ds, from, syms, id, on_fill) = {
+    let (ds, syms, id, on_fill) = {
         let a = acct.borrow();
         if a.day_start == 0 {
             return Ok(());
@@ -977,15 +989,39 @@ pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
         syms.extend(a.traded.iter().filter_map(|k| k.strip_prefix("spot:")).map(String::from));
         syms.sort();
         syms.dedup();
-        let from = if a.trades_upto > a.day_start { (a.trades_upto - 15 * 60_000).max(a.day_start) } else { a.day_start };
-        (a.day_start, from, syms, a.id.clone(), a.on_fill.clone())
+        (a.day_start, syms, a.id.clone(), a.on_fill.clone())
     };
-    let started = CLOCK.now();
+    let mut failed: Vec<String> = vec![];
+    let mut first_err = None;
     for sym in syms {
+        let from = {
+            let a = acct.borrow();
+            if a.day_start != ds {
+                return Ok(());   // the day rolled while sweeping
+            }
+            match a.trades_upto.get(&sym) {
+                Some(&u) if u > ds => (u - 15 * 60_000).max(ds),
+                _ => ds,
+            }
+        };
+        let started = CLOCK.now();
         let mut start = from;
-        loop {
+        let mut tries = 0;
+        let ok = loop {
             let q: Params = params!["symbol" => sym, "startTime" => start, "limit" => 1000];
-            let r = rest.get_json("/api/v3/myTrades", &q, 20, true).await?;
+            let r = match rest.get_json("/api/v3/myTrades", &q, 20, true).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tries += 1;
+                    let refused = e.downcast_ref::<RestError>().is_some_and(|re| (400..500).contains(&re.status));
+                    if refused || tries >= 3 {
+                        first_err.get_or_insert(e);
+                        break false;
+                    }
+                    tokio::time::sleep(Duration::from_secs(2 * tries)).await;
+                    continue;
+                }
+            };
             let rows = r.as_array().ok_or_else(|| anyhow!("myTrades: not a list"))?;
             for x in rows {
                 let ts = to_i(get(x, "time")?)?;
@@ -1002,15 +1038,23 @@ pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             }
             match rows.last() {
                 Some(last) if rows.len() >= 1000 => start = to_i(get(last, "time")?)? + 1,
-                _ => break,
+                _ => break true,
             }
+        };
+        let mut a = acct.borrow_mut();
+        if a.day_start != ds {
+            return Ok(());
+        }
+        if ok {
+            a.trades_upto.insert(sym, started);
+        } else {
+            failed.push(sym);
         }
     }
-    let mut a = acct.borrow_mut();
-    if a.day_start == ds {
-        a.trades_upto = started;
+    match first_err {
+        Some(e) => Err(e.context(format!("myTrades of {} not swept: {}", failed.len(), failed.join(", ")))),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Today's asset distributions (the hourly market-maker rebate among them), the whole day each time: a day
@@ -1139,7 +1183,7 @@ async fn fut_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
 /// Today's futures fills, funding and each symbol's mark at the day start, from REST: complete
 /// across monitor restarts, unlike the user stream.
 pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let (ds, syms, market) = {
+    let (ds, syms, market, aid, on_fill) = {
         let mut a = acct.borrow_mut();
         let ds = a.day_start;
         if ds == 0 {
@@ -1152,7 +1196,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             a.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s.clone()).collect();
         syms.extend(a.traded.iter().filter_map(|k| k.strip_prefix("usdm:")).map(String::from));
         syms.extend(a.fut_day.keys().cloned());
-        (ds, syms, a.market.clone())
+        (ds, syms, a.market.clone(), a.id.clone(), a.on_fill.clone())
     };
     if syms.is_empty() {
         return Ok(());
@@ -1177,6 +1221,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     for sym in all {
         let mut d = acct.borrow().fut_day.get(&sym).cloned().unwrap_or_else(|| FutDay::new(ds));
         let mut trades = BTreeMap::new();
+        let mut swept: Vec<FillRec> = vec![];
         let mut frm: Option<i64> = None;
         loop {
             let mut q: Params = params!["symbol" => sym, "limit" => 1000];
@@ -1199,7 +1244,16 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 {
                     fee *= m.borrow_mut().asset_price(asset).unwrap_or(0.0);
                 }
-                trades.insert(to_i(get(x, "id")?)?, (ts, if s(x, "side")? == "BUY" { qty } else { -qty }, f(x, "price")?, fee));
+                let tid = to_i(get(x, "id")?)?;
+                let side = if s(x, "side")? == "BUY" { Side::Buy } else { Side::Sell };
+                trades.insert(tid, (ts, if side == Side::Buy { qty } else { -qty }, f(x, "price")?, fee));
+                // the fill itself, as the stream would have given it (same id: one the stream gave is not added again)
+                let mut fr = FillRec::new(format!("{aid}:usdm:{sym}:{tid}"), ts, aid.clone(), &sym, Venue::Usdm, side,
+                                          f(x, "price")?, qty);
+                fr.fee = f(x, "commission")?;
+                fr.fee_asset = asset.to_string();
+                fr.maker = x.get("maker").is_some_and(truthy);
+                swept.push(fr);
             }
             match rows.last() {
                 Some(last) if rows.len() >= 1000 => frm = Some(to_i(get(last, "id")?)? + 1),
@@ -1217,6 +1271,9 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             {
                 d.m0 = Some(to_f(&k0[1])?);
             }
+        }
+        for fr in swept {
+            on_fill(fr);
         }
         // fills the stream added while REST was answering are newer than its list: kept
         let mut a = acct.borrow_mut();
