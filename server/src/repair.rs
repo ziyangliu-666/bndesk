@@ -430,8 +430,12 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     let c = crate::store::open(&cfg.db)?;
     let fills = fills_between(&c, ds, ds + DAY)?;
     let after = fills_between(&c, ds + DAY, t_bal + 1)?;
-    let n_transfers: i64 = c.query_row("SELECT count(*) FROM transfers WHERE ts >= ? AND amount != 0", [ds], |r| r.get(0))?;
-    anyhow::ensure!(n_transfers == 0, "{n_transfers} transfers since {day}: the repair does not book flows");
+    // Π books the flows of the desk's assets, not of its cash: a stablecoin moved between accounts (or in and out)
+    // changes no position, only equity, which the rows' own offsets carry
+    let stables = STABLES.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(",");
+    let n_transfers: i64 = c.query_row(&format!("SELECT count(*) FROM transfers WHERE ts >= ? AND amount != 0 AND asset NOT IN ({stables})"),
+                                       [ds], |r| r.get(0))?;
+    anyhow::ensure!(n_transfers == 0, "{n_transfers} transfers of a non-stable asset since {day}: the repair does not book them");
 
     // the market: the configured instruments and every one filled
     let spot: Value = public.get("/api/v3/exchangeInfo", &[], 20, false).await?;
