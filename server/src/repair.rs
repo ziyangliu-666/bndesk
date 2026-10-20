@@ -376,6 +376,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
 
     // the balances now and the futures legs, with each account's key
     let mut bal: HashMap<String, f64> = HashMap::new();
+    let mut read_at: HashMap<String, i64> = HashMap::new();
     let mut pos: HashMap<String, f64> = HashMap::new();
     // symbol -> (trades (t, s q, price, fee, fee asset), funding (t, amount))
     type Raw = (Vec<(i64, f64, f64, f64, String)>, Vec<(i64, f64)>);
@@ -386,6 +387,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
             .map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
         let rest = Rest::new(client(), governors(), Some(Rc::new(creds)), None);
         let r: Value = rest.get("/api/v3/account", &crate::params! {"omitZeroBalances" => "true"}, 20, true).await?;
+        // when this account's balances stood (its fills up to then are in them); "updateTime" is Binance's
+        read_at.insert(ac.id.clone(), r.get("updateTime").and_then(Value::as_i64).unwrap_or_else(|| CLOCK.now()));
         for b in r.get("balances").and_then(Value::as_array).into_iter().flatten() {
             let a = b.get("asset").and_then(Value::as_str).unwrap_or_default().to_string();
             *bal.entry(a).or_default() += num(b, "free")? + num(b, "locked")?;
@@ -429,7 +432,13 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     }
     let c = crate::store::open(&cfg.db)?;
     let fills = fills_between(&c, ds, ds + DAY)?;
-    let after = fills_between(&c, ds + DAY, t_bal + 1)?;
+    // wait for the fills up to the last read to be in the db, then take each account's up to its own read
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let last_read = read_at.values().copied().max().unwrap_or(t_bal);
+    let after: Vec<FillRec> = fills_between(&c, ds + DAY, last_read + 1)?
+        .into_iter()
+        .filter(|f| read_at.get(&f.account).is_some_and(|&t| f.ts <= t))
+        .collect();
     // Π books the flows of the desk's assets, not of its cash: a stablecoin moved between accounts (or in and out)
     // changes no position, only equity, which the rows' own offsets carry
     let stables = STABLES.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(",");
@@ -450,12 +459,13 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     for f in fills.iter().chain(&after) {
         m.ensure(&f.symbol, f.venue, None);
     }
-    // Q at the day's end: the balance now less the spot fills since
+    // Q at the day's end: the balance now less the spot fills since (a fee taken in the base asset came out of it)
     let mut q_end = bal.clone();
     for f in after.iter().filter(|f| f.venue == Venue::Spot && !f.conversion()) {
         if let Some(i) = m.get(&f.key()) {
             let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
-            *q_end.entry(i.base.clone()).or_default() -= s * f.qty;
+            let fee = if f.fee_asset == i.base { f.fee } else { 0.0 };
+            *q_end.entry(i.base.clone()).or_default() -= s * f.qty - fee;
         }
     }
 
