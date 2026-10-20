@@ -650,7 +650,13 @@ impl Desk {
         let orders = open_orders(&m, &self.accounts);
         let mut days = pnl.day_rows(&mut m);
         let today = crate::pnl::utc_day(ds);
-        if let Some(h) = expo.hedge_day.as_ref() {
+        // the split is kept only while the P&L grid is on the desk's day: across the roll one of them is still on
+        // the other day (the grid rolls a couple of seconds after the desk, later when the loop stalls), and the
+        // kept day would mix the new day's Π with the ending day's Day PnL and market making (2026-10-19 was kept
+        // with Π −1.43 and Other +22.40 where its last row had Π +25.89 and Other −3.50)
+        if let Some(h) = expo.hedge_day.as_ref()
+            && pnl.day_start == ds
+        {
             self.day_real.insert(today.clone(), DayReal {
                 pnl_day,
                 trading: summary.pnl.trading,
