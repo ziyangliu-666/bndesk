@@ -73,7 +73,9 @@ impl DeskRow {
 pub struct At {
     pub trading: f64,
     pub hedged: f64,
+    /// realized against today's buys (less fees), and against the opening inventory
     pub realized: f64,
+    pub realized_old: f64,
     pub floating: f64,
     pub mm: f64,
     pub hedge: f64,
@@ -226,7 +228,8 @@ impl<'a> Day<'a> {
             let px = if asset == "USDT" { Some(1.0) } else { self.inp.bars.get(&format!("spot:{asset}USDT")).and_then(|b| interp_at(b, *ts)) };
             reb += amt * px.unwrap_or(if STABLES.contains(&asset.as_str()) { 1.0 } else { 0.0 });
         }
-        At { trading: pi, hedged: pi - self.h_at(t), realized: re + re_old, floating: fl, mm, hedge, rebates: reb, inventory: inv, futures: fut }
+        At { trading: pi, hedged: pi - self.h_at(t), realized: re, realized_old: re_old, floating: fl, mm, hedge, rebates: reb, inventory: inv,
+             futures: fut }
     }
 }
 
@@ -281,7 +284,7 @@ pub fn rebuild(day: &mut Day, live: &[DeskRow], from: i64, to: i64) -> Result<Re
                 futures: r.futures + lerp(fut_a, fut_b, t),
                 trading: Some(r.trading),
                 hedged: Some(r.hedged),
-                realized: Some(r.realized),
+                realized: Some(r.realized + r.realized_old),
                 floating: Some(r.floating),
                 hedge: Some(r.hedge),
                 mm: Some(r.mm),
@@ -296,7 +299,7 @@ pub fn rebuild(day: &mut Day, live: &[DeskRow], from: i64, to: i64) -> Result<Re
         out.push(DeskRow {
             trading: Some(x.trading),
             hedged: Some(x.hedged),
-            realized: Some(x.realized),
+            realized: Some(x.realized + x.realized_old),
             floating: Some(x.floating),
             hedge: Some(x.hedge),
             mm: Some(x.mm),
@@ -378,7 +381,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     type Raw = (Vec<(i64, f64, f64, f64, String)>, Vec<(i64, f64)>);
     let mut legs_raw: HashMap<String, Raw> = HashMap::new();
     let hedges = &cfg.hedge_symbols;
-    for ac in cfg.accounts.iter().filter(|a| a.show) {
+    for ac in &cfg.accounts {
         let creds = credentials(&ac.api_key_env, &ac.private_key_env, &ac.secret_env)
             .map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
         let rest = Rest::new(client(), governors(), Some(Rc::new(creds)), None);
@@ -607,6 +610,30 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
         }
         std::fs::write(p, s)?;
     }
+    // the kept day (the day tables' row): Π, its split and market making as they stood at the day's end; its Day
+    // PnL, hedge and rebates as the desk kept them at the roll; Other what they leave
+    let kk = format!("dayreal:{day}");
+    let kept: Option<String> = c.query_row("SELECT v FROM kv WHERE k = ?", [&kk], |r| r.get(0)).ok();
+    let mut new_kept = None;
+    if to >= ds + DAY
+        && let Some(v) = &kept
+        && let Ok(mut j) = serde_json::from_str::<Value>(v)
+    {
+        let e = d.at(ds + DAY - 1);
+        let num = |j: &Value, k: &str| j.get(k).and_then(Value::as_f64);
+        let (pnl_day, hedge, reb) = (num(&j, "pnl_day").unwrap_or(0.0), num(&j, "hedge").unwrap_or(e.hedge), num(&j, "rebates").unwrap_or(e.rebates));
+        eprintln!("kept {day}: trading {} -> {:.2}, mm {} -> {:.2}, other {} -> {:.2} (Day PnL {pnl_day:.2}, hedge {hedge:.2}, rebates {reb:.2}; \
+                   recomputed hedge {:.2}, rebates {:.2})", f2(num(&j, "trading")), e.trading, f2(num(&j, "mm")), e.mm, f2(num(&j, "other")),
+                  pnl_day - e.trading - hedge - reb, e.hedge, e.rebates);
+        j["trading"] = serde_json::json!(e.trading);
+        j["realized"] = serde_json::json!(e.realized);
+        j["realized_old"] = serde_json::json!(e.realized_old);
+        j["floating"] = serde_json::json!(e.floating);
+        j["mm"] = serde_json::json!(e.mm);
+        j["inventory"] = serde_json::json!(e.trading - e.mm);
+        j["other"] = serde_json::json!(pnl_day - e.trading - hedge - reb);
+        new_kept = Some(j.to_string());
+    }
     let new = rows.iter().filter(|r| !old.contains_key(&r.t)).count();
     eprintln!("{} rows: {new} new, {} recomputed; hour blocks from {}", rows.len(), rows.len() - new, hm(from_hour));
     if dry_run {
@@ -630,6 +657,10 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
             params![t, b.trading, b.hedged(), b.factor(), b.ref_hedge, b.factor_hedge, b.fills, b.volume, b.backfilled_s],
         )?;
+    }
+    if let Some(v) = &new_kept {
+        tx.execute("UPDATE kv SET v = ? WHERE k = ?", params![v, kk])?;
+        tx.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", params![format!("repair:day-rows:{day}:kept-before"), kept])?;
     }
     let rec = serde_json::json!({"from": from, "to": to, "rows": rows.len(), "new": new, "hours_from": from_hour, "at": now});
     tx.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", params![format!("repair:day-rows:{day}"), rec.to_string()])?;
