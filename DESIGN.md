@@ -441,7 +441,7 @@ interface Account {
   positions: { symbol: string; venue: string; amt: number; entry: number; mark: number; upnl: number; notional: number;
                pnl_day: number | null }[];   // pnl_day: today's price P&L, fees and funding on the symbol
   orders_10s: number; orders_10s_limit: number; orders_1d: number; orders_1d_limit: number;
-  orders_source: string;                    // "binance" (rateLimit/order) or "stream" (user stream, no rejects)
+  orders_source: string;                    // the exchange's id, "binance" (rateLimit/order), or "stream" (user stream, no rejects)
   no_order_limits: boolean;                 // its exchange has no order windows: no meters. Only ever true: absent where it has them
   open_orders: number; bids_notional: number; asks_notional: number;
   utilization: number;              // resting bids / (quote_free + resting bids)

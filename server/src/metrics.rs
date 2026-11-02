@@ -93,10 +93,16 @@ const H300: usize = 3;
 /// Over today's fills less the conversions between stablecoins (`FillRec::conversion`); the day's and the last
 /// hour's counts and volume over the traded instruments' fills only.
 pub fn aggregate(fills: &[FillRec], now: i64, roles: &Roles) -> FillAgg {
+    aggregate_in(fills, now, roles, |_| 1.0)
+}
+
+/// `aggregate`, the volumes in the desk's currency: `unit` is what a unit of a fill's quote is worth in it.
+#[allow(clippy::needless_range_loop)]   // one index over six arrays
+pub fn aggregate_in(fills: &[FillRec], now: i64, roles: &Roles, unit: impl Fn(&FillRec) -> f64) -> FillAgg {
     let mut g = FillAgg::default();
     for f in fills.iter().filter(|f| !f.conversion()) {
         let a = g.by_inst.entry(f.key()).or_default();
-        let n = f.notional();
+        let n = f.notional() * unit(f);
         a.fills += 1;
         a.volume += n;
         // the desk's day figures are what it trades (the ticker's volume); the hedge's fills are counted on their own rows
@@ -409,7 +415,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
         orders_10s_limit: acct.orders_10s_limit,
         orders_1d: acct.orders_1d,
         orders_1d_limit: acct.orders_1d_limit,
-        orders_source: if acct.no_order_counts { "stream" } else { "binance" }.to_string(),
+        orders_source: if acct.no_order_counts { "stream".to_string() } else { acct.cfg.exchange.to_lowercase() },
         no_order_limits: !Venue::of(&acct.cfg.exchange).any(|v| v.market().order_windows),
         open_orders: acct.open.len() as i64,
         bids_notional: bids,

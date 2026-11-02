@@ -27,7 +27,7 @@ use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::{FillBook, FillRec};
 use crate::market::{Book, Inst, Market};
 use crate::metrics::{
-    FillAgg, HOUR, MmSplit, account_row, aggregate, mm_split, beta_weighted_spot, exposure, hedge_day, inventory_assets, markout_stats,
+    FillAgg, HOUR, MmSplit, account_row, aggregate_in, mm_split, beta_weighted_spot, exposure, hedge_day, inventory_assets, markout_stats,
     open_orders, symbol_rows,
 };
 use crate::pnl::{self, ALIVE_GAP_MS, ALIVE_STEP_MS, DAYS_SHOWN, PnlBook, PnlState, alive_spans};
@@ -670,7 +670,11 @@ impl Desk {
         let now = CLOCK.now();
         // the fill aggregate walks every fill of the day: redone on new or matured fills, else once a second
         if fills_changed || self.agg.as_ref().is_none_or(|a| now - a.0 >= 1000) {
-            self.agg = Some((now, Rc::new(aggregate(&self.fills.borrow().fills, now, &self.cfg.roles))));
+            {
+                let m = self.market.borrow();
+                let unit = |f: &FillRec| m.find(&f.symbol, f.venue).and_then(|i| m.unit(i)).unwrap_or(1.0);
+                self.agg = Some((now, Rc::new(aggregate_in(&self.fills.borrow().fills, now, &self.cfg.roles, unit))));
+            }
             let pnl = self.pnl.borrow();
             let mut m = self.market.borrow_mut();
             self.mm = Rc::new(mm_split(&mut m, &self.fills.borrow().fills, self.cfg.mm_horizon_s, now, &self.cfg.roles, |b| pnl.pos.contains_key(b)));
