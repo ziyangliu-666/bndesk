@@ -810,6 +810,9 @@ mod tests {
         assert_eq!(c.markets[0].reference.as_ref().unwrap().venue, Venue::HL);
         assert_eq!(c.beta_vs.as_deref(), Some("hl:BTC"));
         assert_eq!(serde_json::to_value(&c.roles).unwrap()["instruments"], serde_json::json!({"hl:BTC": "hedge"}));
+        // a role on any exchange's spot is its base asset's
+        let c = load(write(&d, "[[markets]]\nsymbol = \"HYPEUSDC\"\nvenue = \"hlspot\"\nrole = \"hedge\"\n")).unwrap();
+        assert_eq!((c.roles.asset("HYPE"), c.roles.asset("BTC")), (InstRole::Hedge, InstRole::Traded));
         let c = load(write(&d, "[exposure]\nhedge_symbols = [\"AUSDT\"]\n")).unwrap();
         assert_eq!(serde_json::to_value(&c.roles).unwrap()["instruments"], serde_json::json!({"usdm:AUSDT": "hedge"}));
     }

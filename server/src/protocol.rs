@@ -208,9 +208,9 @@ impl Roles {
         self.of(symbol, venue) == InstRole::Traded
     }
 
-    /// The role of a spot asset's balance.
+    /// The role of a spot asset's balance: its own on whichever spot market set it.
     pub fn asset(&self, asset: &str) -> InstRole {
-        self.insts[Venue::SPOT.index()].get(asset).copied().unwrap_or_else(|| self.market(Venue::SPOT))
+        Venue::all().filter(|v| v.is_spot()).find_map(|v| self.insts[v.index()].get(asset).copied()).unwrap_or_else(|| self.market(Venue::SPOT))
     }
 
     /// The P&L book keeps a position for it: all of spot (a balance is there whatever it is for), and a traded perp. A
@@ -984,7 +984,7 @@ mod tests {
             ("Snapshot", struct_fields(&Snapshot::default())),
             ("Desk", struct_fields(&Desk::default())),
             ("Summary", struct_fields(&Summary::default())),
-            ("Account", struct_fields(&Account::default())),
+            ("Account", struct_fields(&Account { no_order_limits: true, ..Default::default() })),
             ("SymbolRow", struct_fields(&SymbolRow::default())),
             ("Fill", struct_fields(&Fill::default())),
             ("SeriesPoint", struct_fields(&SeriesPoint::default())),
