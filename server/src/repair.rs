@@ -421,6 +421,10 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let mut perp_funding: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
     let mut traded_perps: Vec<(String, Venue)> = vec![];
     let c = crate::store::open(&cfg.db)?;
+    // a day whose rows are in another currency cannot be mended in this one
+    let money = crate::store::Series::read(&c, cfg.quote())?;
+    anyhow::ensure!(money.spans.last().is_some_and(|s| s.asset == cfg.numeraire.asset) && money.whole(ds, ds + DAY),
+                    "{day}: its figures are in another currency than {}", cfg.currency);
     for ac in &cfg.accounts {
         let exchange = public.named(&ac.exchange).ok_or_else(|| anyhow!("account {}: no connector for {:?}", ac.id, ac.exchange))?;
         let reader = exchange.reader(ac).map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
@@ -505,7 +509,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
 
     // the day's kept M_k(D) and the hour blocks before `from`
     let state: Option<PnlState> = c
-        .query_row("SELECT v FROM kv WHERE k = ?", [format!("pnlstate:{ds}")], |r| r.get::<_, String>(0))
+        .query_row("SELECT v FROM kv WHERE k = ?", [money.key_at(&format!("pnlstate:{ds}"), ds)], |r| r.get::<_, String>(0))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
     let from_hour = from - (from - ds).rem_euclid(HOUR);
@@ -665,7 +669,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
     // the kept day (the day tables' row): Π, its split and market making as they stood at the day's end; its Day
     // PnL, hedge and rebates as the desk kept them at the roll; Other what they leave
-    let kk = format!("dayreal:{day}");
+    let kk = money.key_at(&format!("dayreal:{day}"), ds);
     let kept: Option<String> = c.query_row("SELECT v FROM kv WHERE k = ?", [&kk], |r| r.get(0)).ok();
     let mut new_kept = None;
     if to >= ds + DAY

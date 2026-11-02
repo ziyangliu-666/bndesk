@@ -90,6 +90,7 @@ pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> 
             || days.iter().any(|d| moved(d.hedge)),
         rebates: accounts.iter().any(|a| a.rebates != 0.0) || days.iter().any(|d| moved(d.rebates)),
         mm: cfg.market_making,
+        earlier: None,
     }
 }
 
@@ -184,6 +185,8 @@ pub struct Desk {
     pub engines: Vec<EngineScraperRef>,
     pub public_feeds: Vec<FeedRef>,
     pub day_start: Rc<Cell<i64>>,
+    /// which stored money is in the desk's currency
+    pub money: crate::store::Series,
     pub series: Vec<P::SeriesPoint>,
     /// market making and the hedge legs' P&L at each series point (the day chart's bars draw them)
     series_x: Vec<(Option<f64>, Option<f64>)>,
@@ -224,7 +227,7 @@ fn repr(x: f64) -> String {
     format!("{x:?}")
 }
 
-fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store) {
+fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store, money: &crate::store::Series) {
     let (rows, state, ds) = {
         let mut p = pnl.borrow_mut();
         let (rows, state) = p.flush();
@@ -244,7 +247,7 @@ fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store) {
             backfilled_s: Some(r.backfilled_s),
         }));
     }
-    store.put(Row::Kv(format!("pnlstate:{ds}"), serde_json::to_string(&state).expect("state serializes")));
+    store.put(Row::Kv(money.key(&format!("pnlstate:{ds}")), serde_json::to_string(&state).expect("state serializes")));
 }
 
 impl Desk {
@@ -298,6 +301,7 @@ impl Desk {
             engines: cfg.engines.iter().map(|e| Rc::new(RefCell::new(EngineScraper::new(e.clone())))).collect(),
             public_feeds,
             day_start: Rc::new(Cell::new(day_start)),
+            money: crate::store::Series::one(&cfg.numeraire.asset),
             series: vec![],
             series_x: vec![],
             new_bars: None,
@@ -502,7 +506,11 @@ impl Desk {
 
     fn reload(&mut self) -> Result<()> {
         let ds = self.day_start();
-        let data = self.store.load(ds, (DAYS_SHOWN as i64 + 1) * 24).context("store load")?;
+        self.money = self.store.series(self.cfg.quote(), &self.cfg.numeraire.asset, CLOCK.now()).context("store series")?;
+        let mut data = self.store.load(ds, (DAYS_SHOWN as i64 + 1) * 24).context("store load")?;
+        // money in another currency stays stored and is not read; the hour the currency changed in starts again
+        data.equity.retain(|r| self.money.has(r.t));
+        data.hours.retain(|r| self.money.has(r.t));
         *self.fills.borrow_mut() = FillBook::new();
         *self.pnl.borrow_mut() = self.new_pnl_book();
         {
@@ -546,7 +554,7 @@ impl Desk {
             let mut pnl = self.pnl.borrow_mut();
             pnl.load_fills(&mut m, fills.fills.iter());
             // today's transfers of the desk's assets, as valued then (rows not valued yet are booked once they are)
-            pnl.load_flows(&mut m, &self.transfers.borrow().desk_flows(ds));
+            pnl.load_flows(&mut m, &self.transfers.borrow().desk_flows(ds.max(self.money.from())));
             let hours: Vec<pnl::HourRow> = data
                 .hours
                 .iter()
@@ -564,14 +572,14 @@ impl Desk {
                 })
                 .collect();
             pnl.load_hours(hours.iter());
-            let state = data.kv.get(&format!("pnlstate:{ds}")).and_then(|s| match serde_json::from_str::<PnlState>(s) {
+            let state = data.kv.get(&self.money.key(&format!("pnlstate:{ds}"))).and_then(|s| match serde_json::from_str::<PnlState>(s) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     warn!("pnlstate:{ds}: {e}");
                     None
                 }
             });
-            let legacy: Option<Value> = data.kv.get(&format!("pnlsym:{ds}")).and_then(|s| serde_json::from_str(s).ok());
+            let legacy: Option<Value> = data.kv.get(&self.money.key(&format!("pnlsym:{ds}"))).and_then(|s| serde_json::from_str(s).ok());
             pnl.load_state(state, legacy.as_ref());
             // the grid was live where desk rows carry its P&L (rows from before it existed have none)
             let ts: Vec<i64> = data.equity.iter().filter(|r| r.account == "*" && r.trading.is_some()).map(|r| r.t).collect();
@@ -581,14 +589,14 @@ impl Desk {
             }
         }
         self.alerts.borrow_mut().load(&data.alerts);
-        for (k, v) in &data.kv {
-            if let Some(day) = k.strip_prefix("dayreal:") {
-                match serde_json::from_str::<DayReal>(v) {
-                    Ok(d) => {
-                        self.day_real.insert(day.to_string(), d);
-                    }
-                    Err(e) => warn!("{k}: {e}"),
+        let mut days: Vec<(&str, usize, &String)> = data.kv.iter().filter_map(|(k, v)| self.money.day_key(k).map(|(d, n)| (d, n, v))).collect();
+        days.sort_by_key(|x| x.1);
+        for (day, _, v) in days {
+            match serde_json::from_str::<DayReal>(v) {
+                Ok(d) => {
+                    self.day_real.insert(day.to_string(), d);
                 }
+                Err(e) => warn!("dayreal:{day}: {e}"),
             }
         }
         if let (Some(b), Some(v)) = (&self.betas, data.kv.get("beta"))
@@ -643,7 +651,7 @@ impl Desk {
                 let rebate = self.exchanges.named(&a.cfg.exchange).is_some_and(|c| c.is_rebate(&r.info));
                 a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone(), rebate });
             }
-            if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
+            if let Some(v) = data.kv.get(&self.money.key(&format!("open:{}:{ds}", a.id))).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
             }
             // orders counted off the user stream today (read-only keys cannot ask Binance), so a restart keeps them
@@ -771,7 +779,8 @@ impl Desk {
         drop(m);
         let feeds = self.all_feeds().iter().map(|f| f.borrow().proto()).collect();
         let engines = self.engines.iter().map(|e| e.borrow().engine()).collect();
-        let desk = desk_shape(&self.cfg, &accounts, &days);
+        let mut desk = desk_shape(&self.cfg, &accounts, &days);
+        desk.earlier = self.money.earlier().map(|(until, currency)| P::Earlier { until, currency });
         self.view = Some(View {
             now,
             desk,
@@ -932,23 +941,25 @@ impl Desk {
             let mut m = self.market.borrow_mut();
             self.transfers.borrow_mut().value(&mut m, now);
             let tr = self.transfers.borrow();
+            // a transfer before the currency changed is in the opening equity it left behind
+            let since = ds.max(self.money.from());
             {
                 // Π books the same transfers Day PnL takes off; it waits for its own day roll, a couple of
                 // seconds after the desk's
                 let mut pnl = self.pnl.borrow_mut();
                 if pnl.day_start == ds {
-                    pnl.set_flows(&mut m, &tr.desk_flows(ds), now);
+                    pnl.set_flows(&mut m, &tr.desk_flows(since), now);
                 }
             }
             let mut tracked = self.tracked.borrow_mut();
             for a in &self.accounts {
                 let mut a = a.borrow_mut();
-                let td = tr.net_in_live(&a, ds);
+                let td = tr.net_in_live(&a, since);
                 a.transfers_day = td;
                 a.day_start = ds;
                 a.equity_mark = if a.can_open(&mut m) { Some((now, a.equity(&mut m))) } else { None };
                 if let Some(eo) = a.take_opening(&mut m, tr.ready()) {
-                    self.store.put(Row::Kv(format!("open:{}:{ds}", a.id), repr(eo)));
+                    self.store.put(Row::Kv(self.money.key(&format!("open:{}:{ds}", a.id)), repr(eo)));
                 }
                 for (s, (amt, _)) in &a.positions {
                     if *amt != 0.0 {
@@ -1070,7 +1081,7 @@ impl Desk {
         if let Some(r) = self.day_real.get(&day)
             && let Ok(v) = serde_json::to_string(r)
         {
-            self.store.put(Row::Kv(format!("dayreal:{day}"), v));
+            self.store.put(Row::Kv(self.money.key(&format!("dayreal:{day}")), v));
         }
     }
 
@@ -1104,7 +1115,7 @@ impl Desk {
             a.equity_open = opening_equity(a.equity_mark, ds, now_eq);
             a.funding_stream.retain(|x| x.0 >= ds);
             if let Some(eo) = a.equity_open {
-                self.store.put(Row::Kv(format!("open:{}:{ds}", a.id), repr(eo)));
+                self.store.put(Row::Kv(self.money.key(&format!("open:{}:{ds}", a.id)), repr(eo)));
             }
         }
         self.hub.borrow_mut().reset();
@@ -1140,7 +1151,7 @@ impl Desk {
         }
         if n.is_multiple_of(60 * TICKS_1S) {
             self.check_positions();
-            pnl_flush(&self.pnl, &self.store);
+            pnl_flush(&self.pnl, &self.store, &self.money);
             self.put_day_real(self.day_start());
             self.put_order_counts();
         }
@@ -1313,6 +1324,25 @@ async fn bootstrap(exchanges: &Exchanges, feeds: &[FeedRef], cfg: &Config) -> (M
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
+}
+
+/// A currency something on the desk has no way to: refused, where it would read as 0 for ever. With an exchange still to
+/// answer there may yet be one, so it is only said.
+fn check_currency(market: &mut Market, cfg: &Config, all_read: bool) -> Result<()> {
+    let mut assets: Vec<&str> = cfg.accounts.iter().chain(&cfg.master).filter(|a| a.futures()).map(|a| a.perp().market().settle).collect();
+    assets.extend(cfg.exchanges.iter().filter_map(|e| Venue::of(e).next()).map(|v| v.market().quote));
+    let quotes: Vec<String> = cfg.markets.iter().filter_map(|mc| market.info.get(&mc.venue).and_then(|i| i.get(&mc.symbol)).map(|i| i.quote.clone())).collect();
+    assets.extend(quotes.iter().map(String::as_str));
+    let none = market.unpriced(assets);
+    if none.is_empty() {
+        return Ok(());
+    }
+    let say = format!("desk.currency {}: nothing listed on {} prices {} in it", cfg.numeraire.asset, cfg.exchanges.join(", "), none.join(", "));
+    if all_read {
+        anyhow::bail!(say);
+    }
+    warn!("{say}, with an exchange still to answer");
+    Ok(())
 }
 
 /// An exchange that was down when the desk started: its listing joins the market when it comes back.
@@ -1496,10 +1526,11 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         .map(|(i, e)| Feed::shared(if i == 0 { "public rest".to_string() } else { format!("{e} rest") }, FeedKind::Rest, ""))
         .collect();
     let exchanges = Exchanges::open(&cfg.exchanges, &http, &public_feeds.iter().cloned().map(Some).collect::<Vec<_>>())?;
-    let (market, late) = tokio::select! {
+    let (mut market, late) = tokio::select! {
         m = bootstrap(&exchanges, &public_feeds, &cfg) => m,
         _ = &mut sig => return Ok(()),
     };
+    check_currency(&mut market, &cfg, late.is_empty())?;
     let desk: DeskRef = Rc::new(RefCell::new(Desk::new(cfg, market, exchanges.clone(), public_feeds.clone())));
     {
         let mut d = desk.borrow_mut();
@@ -1546,9 +1577,9 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     tasks.push(tokio::task::spawn_local(prune(desk.clone())));
     if !simulate {
         let d = desk.borrow();
-        let (pnl, store) = (d.pnl.clone(), d.store.clone());
+        let (pnl, store, money) = (d.pnl.clone(), d.store.clone(), d.money.clone());
         tasks.push(tokio::task::spawn_local(backfill::run((d.pnl.clone(), d.market.clone()), (d.fills.clone(), d.market.clone()),
-                                                          exchanges.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
+                                                          exchanges.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store, &money))));
     }
     if desk.borrow().betas.is_some() {
         tasks.push(tokio::task::spawn_local(beta_loop(desk.clone())));
@@ -1561,6 +1592,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min, d.exchanges.kline_source())
             .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
             .roles(d.cfg.roles.clone())
+            .money(d.money.clone())
     };
     history.warm();
     let app = server::make_app(&handle, auth, server::web_dist(), history);
@@ -1576,7 +1608,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     srv.cleanup().await;
     let d = desk.borrow();
     if d.pnl.borrow().started() {
-        pnl_flush(&d.pnl, &d.store);
+        pnl_flush(&d.pnl, &d.store, &d.money);
         d.put_order_counts();
         d.put_day_real(d.day_start());
     }
@@ -1751,7 +1783,7 @@ mod tests {
         let mut cfg = Config::default();
         let mut acct = P::Account::default();
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
-        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS[..2].iter().collect(), roles: P::Roles::default(), perps: false, hedge: false, rebates: false, mm: true });
+        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS[..2].iter().collect(), roles: P::Roles::default(), perps: false, hedge: false, rebates: false, mm: true, earlier: None });
         // a day kept with zeros is not a hedge or a rebate
         let zero = P::DayPnl { hedge: Some(0.0), rebates: Some(0.0), ..Default::default() };
         assert!(!desk_shape(&cfg, &[], std::slice::from_ref(&zero)).hedge);
@@ -1821,5 +1853,53 @@ mod tests {
         assert!(!in_flight(&[(3.8, Some(3.4)), (2.2, Some(2.7))], 50.0));
         assert!(!in_flight(&[(-80.0, Some(3.0)), (2.0, Some(2.0))], 50.0));
         assert!(!in_flight(&[(-380.7, None), (386.6, None)], 50.0));
+    }
+
+    /// A desk that changes currency reads none of what was stored in the old one, and all of it again if it changes back.
+    #[test]
+    fn a_desk_that_changes_currency_starts_a_new_series() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("d.db");
+        let ds = sessions::day_start(now_ms(), 0);
+        let yesterday = crate::pnl::utc_day(ds - DAY);
+        {
+            let c = crate::store::open(&db).unwrap();
+            let t = (now_ms() - 60_000).max(ds + 5000);
+            let t = t - t.rem_euclid(5000);
+            c.execute("INSERT INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, futures_notional) VALUES (?, '*', 1000, 5, 0, 0, 0)", [t]).unwrap();
+            c.execute("INSERT INTO kv VALUES (?, '990')", [format!("open:a:{ds}")]).unwrap();
+            c.execute("INSERT INTO kv VALUES (?, ?)", rusqlite::params![format!("dayreal:{yesterday}"), serde_json::to_string(&DayReal { pnl_day: 7.0, ..Default::default() }).unwrap()]).unwrap();
+        }
+        let desk = |asset: &str, par: bool| -> Desk {
+            let mut cfg = Config { db: db.clone(), currency: asset.into(), numeraire: crate::market::Numeraire { asset: asset.into(), par }, ..Default::default() };
+            cfg.accounts = vec![C::AccountCfg::new("a", "a", "", Role::Sub)];
+            let mut m = Market::new(Default::default(), 120.0, 100.0);
+            m.numeraire = cfg.numeraire.clone();
+            let mut d = Desk::new(cfg, m, Exchanges::open_once(&["binance".to_string()]).unwrap(), vec![]);
+            d.make_accounts();
+            d.reload().unwrap();
+            d
+        };
+        // unchanged: as it was
+        let d = desk("USDT", true);
+        assert_eq!((d.series.len(), d.day_real[&yesterday].pnl_day, d.accounts[0].borrow().equity_open), (1, 7.0, Some(990.0)));
+        assert!(d.money.earlier().is_none());
+        drop(d);
+        // in euros: nothing of it, and the desk says since when
+        let d = desk("EUR", false);
+        assert!(d.series.is_empty() && d.day_real.is_empty() && d.accounts[0].borrow().equity_open.is_none());
+        let (until, was) = d.money.earlier().unwrap();
+        assert!(until > ds - DAY && was == "USDT");
+        // what it stores goes under its own keys
+        assert_eq!(d.money.key("open:a:1"), "open:a:1#1");
+        drop(d);
+        let c = crate::store::open(&db).unwrap();
+        c.execute("INSERT INTO kv VALUES (?, ?)", rusqlite::params![format!("dayreal:{yesterday}#1"), serde_json::to_string(&DayReal { pnl_day: 1.0, ..Default::default() }).unwrap()]).unwrap();
+        // the stored rows are as they were
+        let n: i64 = c.query_row("SELECT count(*) FROM equity", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        // back: the old series reads again, the euros' does not, and today opens anew for the new span
+        let d = desk("USDT", true);
+        assert_eq!((d.series.len(), d.day_real[&yesterday].pnl_day, d.accounts[0].borrow().equity_open), (1, 7.0, None));
     }
 }

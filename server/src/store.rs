@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use rusqlite::types::{Value, ValueRef};
-use rusqlite::{Connection, Row as SqlRow, params};
+use rusqlite::{Connection, OptionalExtension, Row as SqlRow, params};
 
 use crate::fills::{FillRec, PATH_S, REF_ANCHORS, TK};
 use crate::protocol::{Marks, Venue};
@@ -58,6 +58,110 @@ const SQL_DIVIDEND: &str = "INSERT OR IGNORE INTO dividends (id, ts, account, as
 const SQL_ALERT: &str = "INSERT OR REPLACE INTO alerts VALUES (?,?,?,?,?,?)";
 const SQL_KV: &str = "INSERT OR REPLACE INTO kv VALUES (?,?)";
 const SQL_KV_DEL: &str = "DELETE FROM kv WHERE k = ?";
+
+/// Which stored money is in which currency. Rows carry no currency of their own, so the desk keeps when each began: a span
+/// from the first row on in what it was valued in, and a new one each time `[desk] currency` changes asset. It reads what
+/// falls in spans of the currency it has now, and leaves the rest where it is, to be read again if it changes back. Key-value
+/// money (`open:`, `pnlstate:`, `dayreal:`) is written under `<key>#<span>` from the second span on, since a day can be
+/// split; the first span's are the keys every older db has. No row is rewritten.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Span {
+    pub from: i64,
+    pub asset: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Series {
+    pub spans: Vec<Span>,
+}
+
+const SERIES_KEY: &str = "currency";
+
+impl Series {
+    /// A desk in one currency from the start.
+    pub fn one(asset: &str) -> Series {
+        Series { spans: vec![Span { from: 0, asset: asset.into() }] }
+    }
+
+    fn kept(c: &Connection) -> rusqlite::Result<Option<Vec<Span>>> {
+        let v: Option<String> = c.query_row("SELECT v FROM kv WHERE k = ?", [SERIES_KEY], |r| r.get(0)).optional()?;
+        Ok(v.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    /// What the db says, without changing it. A db from before there was a record is all in `before`, the first exchange's
+    /// quote, which is what it was valued in.
+    pub fn read(c: &Connection, before: &str) -> rusqlite::Result<Series> {
+        Ok(Series { spans: Series::kept(c)?.filter(|s| !s.is_empty()).unwrap_or_else(|| Series::one(before).spans) })
+    }
+
+    /// What the db says, and from `now` on a new span if the desk is valued in another asset than the last one was.
+    pub fn open(c: &Connection, before: &str, asset: &str, now: i64) -> rusqlite::Result<Series> {
+        let mut series = Series::read(c, before)?;
+        let last = series.spans.last().is_some_and(|s| s.asset == asset);
+        if !last {
+            series.spans.push(Span { from: now, asset: asset.into() });
+            tracing::warn!("desk.currency is {asset} now: a new series from {now}; figures in another currency stay stored and are not read");
+        }
+        if !last || Series::kept(c)?.is_none() {
+            let v = serde_json::to_string(&series.spans).expect("spans serialize");
+            c.execute(SQL_KV, params![SERIES_KEY, v])?;
+        }
+        Ok(series)
+    }
+
+    fn asset(&self) -> &str {
+        self.spans.last().map_or("", |s| s.asset.as_str())
+    }
+
+    fn span_of(&self, t: i64) -> usize {
+        self.spans.partition_point(|s| s.from <= t).saturating_sub(1)
+    }
+
+    /// When the span the desk is in began: figures before it in this currency are in an earlier span, if any.
+    pub fn from(&self) -> i64 {
+        self.spans.last().map_or(0, |s| s.from)
+    }
+
+    /// Stored figures of time `t` are in the currency the desk has now.
+    pub fn has(&self, t: i64) -> bool {
+        self.spans[self.span_of(t)].asset == self.asset()
+    }
+
+    /// All of [a, b) is: one currency over a past day, what a repair of it needs.
+    pub fn whole(&self, a: i64, b: i64) -> bool {
+        let (i, j) = (self.span_of(a), self.span_of(b - 1));
+        self.spans[i..=j].iter().all(|s| s.asset == self.asset())
+    }
+
+    /// A money key of the span the desk is in.
+    pub fn key(&self, base: &str) -> String {
+        self.key_at(base, i64::MAX)
+    }
+
+    /// A money key of the span time `t` is in.
+    pub fn key_at(&self, base: &str, t: i64) -> String {
+        match self.span_of(t) {
+            0 => base.to_string(),
+            k => format!("{base}#{k}"),
+        }
+    }
+
+    /// The day of a `dayreal:` key in this currency, and its span: a later span's stands over an earlier one's.
+    pub fn day_key<'a>(&self, k: &'a str) -> Option<(&'a str, usize)> {
+        let day = k.strip_prefix("dayreal:")?;
+        let (day, span) = match day.split_once('#') {
+            Some((d, n)) => (d, n.parse().ok()?),
+            None => (day, 0),
+        };
+        (self.spans.get(span)?.asset == self.asset()).then_some((day, span))
+    }
+
+    /// When a page should say so: the figures before this are in another currency, which is this one's.
+    pub fn earlier(&self) -> Option<(i64, String)> {
+        let i = self.spans.iter().rposition(|s| s.asset != self.asset())?;
+        Some((self.spans[i + 1].from, self.spans[i].asset.clone()))
+    }
+}
 
 /// equity row; `trading` / `hedged` are NULL in rows written before those columns existed. `realized`
 /// (realized + realized_old), `floating` and `hedge` (the futures legs' P&L) are the desk row's ("*")
@@ -496,6 +600,11 @@ impl Store {
         Ok(out)
     }
 
+    /// Which money the db holds is in which currency, from `now` on in `asset` (`before`: what a db with no record is in).
+    pub fn series(&self, before: &str, asset: &str, now: i64) -> rusqlite::Result<Series> {
+        Series::open(&self.connect()?, before, asset, now)
+    }
+
     /// Starts the writer thread; rows put before this wait in the queue.
     pub fn start(&self) -> rusqlite::Result<()> {
         let Some(rx) = self.rx.lock().unwrap().take() else { return Ok(()) };
@@ -850,5 +959,47 @@ mod tests {
         let c = Connection::open(&p).unwrap();
         let mode: String = c.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn a_change_of_currency_starts_a_series_and_changing_back_reads_the_first_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("d.db"));
+        let c = store.connect().unwrap();
+        // a db with no record is all in the first exchange's quote
+        let s = store.series("USDT", "USDT", 100).unwrap();
+        assert_eq!(s, Series::one("USDT"));
+        assert!(s.has(0) && s.has(i64::MAX - 1) && s.earlier().is_none());
+        assert_eq!((s.key("open:a:1"), s.from()), ("open:a:1".to_string(), 0));
+        // it stays what it was on the next start
+        assert_eq!(store.series("USDT", "USDT", 200).unwrap(), s);
+        let n: i64 = c.query_row("SELECT count(*) FROM kv WHERE k = 'currency'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        // to euros: what came before is not read
+        let s = store.series("USDT", "EUR", 1000).unwrap();
+        assert!(!s.has(999) && s.has(1000));
+        assert_eq!((s.from(), s.key("open:a:1"), s.earlier()), (1000, "open:a:1#1".to_string(), Some((1000, "USDT".to_string()))));
+        assert!(s.whole(1000, 2000) && !s.whole(500, 2000));
+        assert_eq!(s.day_key("dayreal:2026-11-02"), None);
+        assert_eq!(s.day_key("dayreal:2026-11-02#1"), Some(("2026-11-02", 1)));
+        // and back: the first span reads again, the euros do not, and a new series carries its own keys
+        let s = store.series("USDT", "USDT", 2000).unwrap();
+        assert!(s.has(999) && !s.has(1000) && !s.has(1999) && s.has(2000));
+        assert_eq!(s.key("pnlstate:1"), "pnlstate:1#2");
+        assert_eq!(s.key_at("dayreal:d", 500), "dayreal:d");
+        assert_eq!(s.day_key("dayreal:2026-11-01"), Some(("2026-11-01", 0)));
+        assert_eq!(s.day_key("dayreal:2026-11-02#1"), None);
+        assert_eq!(s.day_key("dayreal:2026-11-02#2"), Some(("2026-11-02", 2)));
+        assert_eq!(s.earlier(), Some((2000, "EUR".to_string())));
+        // a key from another desk's future is not read
+        assert_eq!(s.day_key("dayreal:2026-11-02#9"), None);
+    }
+
+    #[test]
+    fn a_db_from_before_the_record_changing_currency_as_it_upgrades() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("d.db"));
+        let s = store.series("USDT", "USDC", 500).unwrap();
+        assert!(!s.has(499) && s.has(500));
     }
 }

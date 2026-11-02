@@ -734,6 +734,16 @@ pub struct Desk {
     pub hedge: bool,
     pub rebates: bool,
     pub mm: bool,
+    /// Figures before this are in another currency, not shown (`[desk] currency` changed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub earlier: Option<Earlier>,
+}
+
+/// Up to when the desk's stored figures are in another currency, and which.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Earlier {
+    pub until: i64,
+    pub currency: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]

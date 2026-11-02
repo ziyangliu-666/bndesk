@@ -71,6 +71,8 @@ pub struct Api {
     keep_fine_ms: i64,
     keep_ms: i64,
     roles: P::Roles,
+    /// Desk rows in another currency than the desk's now stay in the db and are not read.
+    money: Option<crate::store::Series>,
 }
 
 /// What `/api/history` reads, kept in memory: the desk rows (account "*") by time, thinned as the store
@@ -94,9 +96,12 @@ const MIN: i64 = 60_000;
 
 impl Mem {
     /// Reads what was written since the last call (everything, the first time).
-    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64, roles: &P::Roles) -> rusqlite::Result<()> {
+    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64, roles: &P::Roles, money: Option<&crate::store::Series>) -> rusqlite::Result<()> {
         let from = self.rows.last().map_or(i64::MIN, |r| r.t - REREAD_MS);
-        let new = desk_rows(c, from, i64::MAX)?;
+        let mut new = desk_rows(c, from, i64::MAX)?;
+        if let Some(money) = money {
+            new.retain(|r| money.has(r.t));
+        }
         let keep = self.rows.partition_point(|r| r.t < from);
         self.rows.truncate(keep);
         self.rows.extend(new);
@@ -171,12 +176,20 @@ impl Api {
             keep_fine_ms: 7 * DAY,
             keep_ms: 365 * DAY,
             roles: P::Roles::default(),
+            money: None,
         })
     }
 
     pub fn roles(mut self: Arc<Self>, roles: P::Roles) -> Arc<Self> {
         if let Some(a) = Arc::get_mut(&mut self) {
             a.roles = roles;
+        }
+        self
+    }
+
+    pub fn money(mut self: Arc<Self>, money: crate::store::Series) -> Arc<Self> {
+        if let Some(a) = Arc::get_mut(&mut self) {
+            a.money = Some(money);
         }
         self
     }
@@ -203,10 +216,10 @@ impl Api {
 
     /// `f` on the in-memory history, brought up to date first.
     async fn with_mem<R: Send + 'static>(&self, f: impl FnOnce(&Mem) -> R + Send + 'static) -> Result<R, ApiError> {
-        let (mem, fine, keep, roles) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms, self.roles.clone());
+        let (mem, fine, keep, roles, money) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms, self.roles.clone(), self.money.clone());
         blocking(self, move |c| {
             let mut m = mem.lock().unwrap();
-            m.refresh(c, now_ms(), fine, keep, &roles)?;
+            m.refresh(c, now_ms(), fine, keep, &roles, money.as_ref())?;
             Ok(f(&m))
         })
         .await
@@ -718,13 +731,13 @@ mod tests {
         eq(now - 60_000, 2.0);
         fill("f1", now - 290_000, 5.0);
         let mut m = Mem::default();
-        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default()).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None).unwrap();
         assert_eq!(m.rows.len(), 2);
         eq(now - 60_000, 3.0); // rewritten
         eq(now, 4.0);
         fill("f1", now - 290_000, 7.0); // written again
         fill("f2", now - 10_000, 1.0);
-        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default()).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None).unwrap();
         assert_eq!(m.rows.iter().map(|r| r.pnl_day).collect::<Vec<_>>(), [1.0, 3.0, 4.0]);
         let f = m.flows(now - DAY, now + 1, 3_600_000, 0);
         assert_eq!(f.values().map(|v| v.1).sum::<i64>(), 2);
@@ -830,5 +843,20 @@ mod tests {
             assert_eq!(get(format!("/api/klines?{q}")).await.unwrap().status(), code, "{q}");
         }
         srv.cleanup().await;
+    }
+
+    #[test]
+    fn rows_in_another_currency_are_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = crate::store::open(&dir.path().join("d.db")).unwrap();
+        let now = 1000 * DAY;
+        for t in [now - 3000, now - 2000, now - 1000] {
+            c.execute("INSERT OR REPLACE INTO equity (t, account, pnl_day) VALUES (?, '*', 1)", [t]).unwrap();
+        }
+        let mut money = crate::store::Series::one("USDT");
+        money.spans.push(crate::store::Span { from: now - 2500, asset: "EUR".into() });
+        let mut m = Mem::default();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), Some(&money)).unwrap();
+        assert_eq!(m.rows.iter().map(|r| r.t).collect::<Vec<_>>(), [now - 2000, now - 1000]);
     }
 }

@@ -126,6 +126,7 @@ fn day_fills(c: &Connection, ds: i64) -> rusqlite::Result<Vec<FillRec>> {
 #[allow(clippy::too_many_arguments)]
 pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src: &impl Prices, roles: &Roles, ds: i64,
                            horizon_s: i64, now: i64, dry_run: bool) -> anyhow::Result<DayReport> {
+    let money = crate::store::Series::read(c, &market.borrow().numeraire.asset)?;
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let hms = horizon_s * 1000;
     let end = ds + DAY;
@@ -230,7 +231,7 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
     }
 
     // the day's kept split: market making at the day's end, the inventory P&L what trading leaves
-    let k = format!("dayreal:{}", rep.day);
+    let k = money.key_at(&format!("dayreal:{}", rep.day), ds);
     let kept: Option<String> = c.query_row("SELECT v FROM kv WHERE k = ?", [&k], |r| r.get(0)).optional()?;
     let mut new_kept = None;
     if let Some(v) = kept
@@ -287,12 +288,15 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
         }
     }
     let mut c = crate::store::open(&cfg.db)?;
+    let money = crate::store::Series::read(&c, cfg.quote())?;
     let mut reps = vec![];
     let mut ds = a;
     while ds <= b {
         let day = crate::pnl::utc_day(ds);
         if ds + DAY > today || ds >= fixed {
             eprintln!("{day}: skipped (today, or valued with the fix live)");
+        } else if !money.whole(ds, ds + DAY) || money.spans.last().is_none_or(|s| s.asset != cfg.numeraire.asset) {
+            eprintln!("{day}: skipped (its figures are in another currency than {})", cfg.currency);
         } else {
             let r = recompute_day(&mut c, &market, &rest, &cfg.roles, ds, cfg.mm_horizon_s, now, dry_run).await?;
             eprintln!("{day}: rows {} -> {}, kept {} -> {}{}", fmt(r.old_mm), fmt(r.new_mm), fmt(r.old_kept), fmt(r.new_kept),
