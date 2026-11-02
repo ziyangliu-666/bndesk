@@ -17,7 +17,7 @@ import { Scatter, instKey } from "./analysis/Scatter";
 import { Spark } from "./analysis/Spark";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
-import { cur, isPerp, kindWord, markets } from "../desk";
+import { cur, kindWord, markets, venueTag } from "../desk";
 
 const SIDES = [
   { value: "all" as SideF, label: "All" },
@@ -214,7 +214,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
       cell: (x) => (
         <span className="an-sym">
           {x.symbol}
-          {isPerp(x.venue) && <span className="an-tag">Perp</span>}
+          {venueTag(x.venue) && <span className="an-tag">{venueTag(x.venue)}</span>}
         </span>
       ),
       sort: (x) => x.symbol,

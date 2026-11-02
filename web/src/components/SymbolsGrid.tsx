@@ -11,7 +11,7 @@ import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, fVol, signCls, DEFA
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import { refLabel } from "./ui";
 import { hedgePnl, tradingPnl, useLegPnl } from "../selectors";
-import { cur, useDesk, isPerp, isHedge, roled, spotVenue } from "../desk";
+import { cur, useDesk, isHedge, roled, spotVenue, venueTag } from "../desk";
 
 /** A row, with its hedge leg's P&L today (perps) put in the row: AG Grid refreshes a row whose data changed. */
 type Row = SymbolRow & { _total?: boolean; _hedge?: number | null };
@@ -24,7 +24,7 @@ function SymbolCell(p: ICellRendererParams<Row>) {
   return (
     <span className={"sym" + (r.dust ? " dust" : "")} title={tip || undefined}>
       {r.symbol}
-      {isPerp(r.venue) && <span className="dk-tag">Perp</span>}
+      {venueTag(r.venue) && <span className="dk-tag">{venueTag(r.venue)}</span>}
     </span>
   );
 }
@@ -132,7 +132,7 @@ function columns(hide: boolean, d: Desk): ColDef<Row>[] {
     {
       field: "symbol",
       headerName: "Symbol",
-      headerTooltip: "Perp = USD-M perpetual. Muted rows: balance below min notional (dust). Hover a symbol for its reference",
+      headerTooltip: "Perp = perpetual. Muted rows: balance below min notional (dust). Hover a symbol for its reference",
       pinned: "left",
       width: 128,
       cellRenderer: SymbolCell,

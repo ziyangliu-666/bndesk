@@ -40,7 +40,7 @@ import {
 } from "./history/data";
 import "./history/history.css";
 import { useInstFills } from "./desk/instFills";
-import { cur, isPerp, spotVenue } from "../desk";
+import { cur, spotVenue, venueTag } from "../desk";
 
 const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
@@ -240,7 +240,7 @@ export function History() {
   ];
   const span = from == null || dayStart == null ? "" : `${ymd(range === "all" && desk.bars[0] ? desk.bars[0].t : from)} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
 
-  const instTitle = inst ? `${inst.symbol}${isPerp(inst.venue) ? " Perp" : ""} · ${RANGE_LABEL[range]}` : "";
+  const instTitle = inst ? `${inst.symbol}${venueTag(inst.venue) ? ` ${venueTag(inst.venue)}` : ""} · ${RANGE_LABEL[range]}` : "";
   return (
     <div className="page hx-page">
       <section className="panel hx-chart">

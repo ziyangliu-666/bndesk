@@ -6,7 +6,7 @@ import { useInstFills } from "./instFills";
 import { bps, compact, hms, int, price, qtyDecimals, qtyFixed } from "../../format";
 import type { Fill } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
-import { quoteOf, baseOf, isPerp, spotVenue } from "../../desk";
+import { quoteOf, baseOf, spotVenue, venueTag } from "../../desk";
 
 const N = 80;
 
@@ -120,7 +120,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: S
         <>
           <span className="dk-tr-sym">
             {baseOf(f.symbol)}
-            {isPerp(f.venue) && <span className="dk-tag">Perp</span>}
+            {venueTag(f.venue) && <span className="dk-tag">{venueTag(f.venue)}</span>}
             {f.conversion && <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">Conv</span>}
           </span>
           <span className={"fig " + side}>{price(f.price)}</span>

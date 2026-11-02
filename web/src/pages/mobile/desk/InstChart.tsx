@@ -24,7 +24,7 @@ import { C, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
 import type { Venue } from "../../../protocol";
 import { maskText } from "../../../mask";
-import { cur, isPerp } from "../../../desk";
+import { cur, isPerp, venueTag } from "../../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -113,7 +113,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   return (
     <ExChart
       id="m-inst"
-      title={symbol + (isPerp(venue) ? " Perp" : "")}
+      title={symbol + (venueTag(venue) ? ` ${venueTag(venue)}` : "")}
       className="in-chart"
       series={series}
       paneStretch={[1, 0.24]}

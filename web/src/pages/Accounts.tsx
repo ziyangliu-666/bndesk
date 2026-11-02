@@ -18,7 +18,7 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
-import { cur, quoteAsset, baseOf, useDesk, isPerp, isSpot, spotVenue, hasPerps, inventoryWord, notionalWord, roled } from "../desk";
+import { cur, quoteAsset, baseOf, useDesk, isSpot, spotVenue, hasPerps, inventoryWord, notionalWord, roled, venueTag } from "../desk";
 import type { Venue } from "../protocol";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
@@ -36,7 +36,7 @@ function SymCell(p: ICellRendererParams<{ symbol: string; venue?: string }>) {
   return (
     <span className="ops-sym">
       {d.symbol}
-      {isPerp(d.venue) && <span className="ops-perp">Perp</span>}
+      {venueTag(d.venue) && <span className="ops-perp">{venueTag(d.venue)}</span>}
     </span>
   );
 }

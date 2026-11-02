@@ -8,7 +8,7 @@ import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
 import { maskNode, useHide } from "../../mask";
 import { tradingPnl, useHedgePnl } from "../../selectors";
-import { cur, useDesk, isPerp, isHedge, hasPerps } from "../../desk";
+import { cur, useDesk, isPerp, isHedge, hasPerps, venueTag } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -90,7 +90,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
           { value: "all", label: "All" },
           { value: "held", label: "Held", title: `Inventory worth 1 ${cur()} or more` },
           { value: "quoted", label: "Quoted", title: "With resting orders of ours" },
-          ...(hasPerps(d) ? [{ value: "perp" as const, label: "Perp", title: "USD-M perpetuals" }] : []),
+          ...(hasPerps(d) ? [{ value: "perp" as const, label: "Perp", title: "Perpetuals" }] : []),
         ]}
         value={filter}
         onChange={setFilter}
@@ -114,7 +114,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
             >
               <span className="dk-mk-sym">
                 {r.symbol}
-                {isPerp(r.venue) && <span className="dk-tag">Perp</span>}
+                {venueTag(r.venue) && <span className="dk-tag">{venueTag(r.venue)}</span>}
               </span>
               <span className="fig">{maskNode(hide, usd(r.inv_value))}</span>
               <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>

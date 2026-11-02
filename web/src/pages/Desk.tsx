@@ -13,7 +13,7 @@ import { LatestFills } from "./desk/LatestFills";
 import { BottomPanel } from "./desk/BottomPanel";
 import { NamePicker } from "./desk/NamePicker";
 import "./desk/desk.css";
-import { isPerp, marketTitle } from "../desk";
+import { marketTitle, venueTag } from "../desk";
 
 const LADDER_KEY = "desk.ladder";
 
@@ -96,7 +96,7 @@ export function Desk() {
               <div className="dk-name-row">
                 <NamePicker sel={sel}>
                   <span className="dk-name-big">{sel.symbol}</span>
-                  {isPerp(sel.venue) && <span className="dk-tag">Perp</span>}
+                  {venueTag(sel.venue) && <span className="dk-tag">{venueTag(sel.venue)}</span>}
                 </NamePicker>
                 <button type="button" className="dk-x" onClick={() => selectInstrument(null)} title="Back to the desk (Esc)" aria-label="Back to the desk">
                   ✕

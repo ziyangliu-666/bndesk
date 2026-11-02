@@ -13,7 +13,7 @@ import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
-import { cur, quoteOf, baseOf, isPerp, isSpot, isHedge } from "../../desk";
+import { cur, quoteOf, baseOf, isPerp, isSpot, isHedge, venueTag } from "../../desk";
 
 type H = "1" | "10" | "60" | "300";
 const HS: H[] = ["1", "10", "60", "300"];
@@ -94,7 +94,7 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
         <div className="in-mid-sub m-fig">
           {/* the big figure is the book's mid: the chart's last close and the fair (legend) are the other two prices */}
           <span>Mid</span>
-          {isPerp(r.venue) && <span className="in-venue">Perp</span>}
+          {venueTag(r.venue) && <span className="in-venue">{venueTag(r.venue)}</span>}
           <span>
             24h <span className="in-venue">{pctText(chg)}</span>
           </span>

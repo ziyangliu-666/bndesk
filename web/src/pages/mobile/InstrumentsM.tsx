@@ -11,7 +11,7 @@ import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
-import { cur, quoteOf, baseOf, useDesk, isPerp, isHedge, hasPerps } from "../../desk";
+import { cur, quoteOf, baseOf, useDesk, isPerp, isHedge, hasPerps, venueTag } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type Key = "fills" | "name" | "chg" | "pnl" | "inv";
@@ -193,10 +193,10 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
       <span className="mk-c-l">
         <span className="mk-sym">
           {baseOf(r.symbol)}
-          <span className="mk-quote">/{quoteOf(r.symbol)}</span>
+          {quoteOf(r.symbol) && <span className="mk-quote">/{quoteOf(r.symbol)}</span>}
         </span>
         <span className="mk-sub">
-          {perp ? "Perp · " : ""}
+          {venueTag(r.venue) ? `${venueTag(r.venue)} · ` : ""}
           {int(r.fills_day)} fills
         </span>
       </span>

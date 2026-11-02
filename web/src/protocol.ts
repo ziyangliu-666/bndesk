@@ -224,6 +224,7 @@ export interface Account {
   orders_1d: number;
   orders_1d_limit: number;
   orders_source: "binance" | "stream"; // "stream": counted from the user stream, without rejected orders
+  no_order_limits?: boolean; // its exchange has no such windows: no meter, not an empty one
   open_orders: number;
   bids_notional: number;
   asks_notional: number;

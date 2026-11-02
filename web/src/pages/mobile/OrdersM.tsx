@@ -12,7 +12,7 @@ import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./rest/ops.css";
-import { cur, baseOf, isPerp, isSpot } from "../../desk";
+import { cur, baseOf, isPerp, isSpot, venueTag } from "../../desk";
 
 const base = (s: string) => baseOf(s);
 const MAX_ROWS = 200;
@@ -181,7 +181,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
               title={
                 <>
                   {sel.symbol}
-                  {isPerp(sel.venue) && <span className="r-tag">Perp</span>}
+                  {venueTag(sel.venue) && <span className="r-tag">{venueTag(sel.venue)}</span>}
                 </>
               }
               sub="The instrument's page"
@@ -210,7 +210,7 @@ const OrderRow = memo(
         title={
           <>
             {o.symbol}
-            {isPerp(o.venue) && <span className="r-tag">Perp</span>}
+            {venueTag(o.venue) && <span className="r-tag">{venueTag(o.venue)}</span>}
             <span className={"o-side " + (o.side === "buy" ? "o-buy" : "o-sell")}>{o.side === "buy" ? "Buy" : "Sell"}</span>
           </>
         }

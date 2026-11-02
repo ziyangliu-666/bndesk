@@ -18,7 +18,7 @@ import { Spark } from "../analysis/Spark";
 import { Empty, Row, Sec, Stats, type Stat } from "./rest/ui";
 import "../analysis/analysis.css";
 import "./rest/ops.css";
-import { cur, isPerp, kindWord, markets, marketOf } from "../../desk";
+import { cur, kindWord, markets, marketOf, venueTag } from "../../desk";
 
 const SIDES: { value: SideF; label: string }[] = [
   { value: "all", label: "All" },
@@ -160,7 +160,7 @@ function Instruments({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
           title={
             <>
               {x.symbol}
-              {isPerp(x.venue) && <span className="r-tag">Perp</span>}
+              {venueTag(x.venue) && <span className="r-tag">{venueTag(x.venue)}</span>}
             </>
           }
           sub={`${int(x.fills)} fills · ${maskText(hide, compact(x.notional))} · edge ${bps(x.edge)}`}

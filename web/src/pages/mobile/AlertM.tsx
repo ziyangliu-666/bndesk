@@ -11,7 +11,7 @@ import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
 import { Sec, Stats } from "./rest/ui";
-import { cur, quoteAsset, baseOf, isPerp, isTraded, marketOf, spotVenue, inventoryWord } from "../../desk";
+import { cur, quoteAsset, baseOf, isTraded, marketOf, spotVenue, inventoryWord, venueTag } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -196,7 +196,7 @@ function Subject({ a }: { a: Alert }) {
           title={
             <>
               {symbol}
-              {isPerp(venue) && <Tag>Perp</Tag>}
+              {venueTag(venue) && <Tag>{venueTag(venue)}</Tag>}
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol, venue } }}
@@ -425,7 +425,7 @@ function InstrumentsEv({ a, snap, dust }: { a: Alert; snap: Snapshot; dust: bool
             title={
               <>
                 {symbol}
-                {isPerp(venue) && <Tag>Perp</Tag>}
+                {venueTag(venue) && <Tag>{venueTag(venue)}</Tag>}
               </>
             }
             subtitle={

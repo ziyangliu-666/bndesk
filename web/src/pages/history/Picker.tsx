@@ -6,7 +6,7 @@ import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
 import { useHedgePnl } from "../../selectors";
 import type { SymbolRow, Venue } from "../../protocol";
-import { isHedge, isPerp } from "../../desk";
+import { isHedge, venueTag } from "../../desk";
 
 export function InstrumentPicker({
   value,
@@ -63,7 +63,7 @@ export function InstrumentPicker({
         {value ? (
           <>
             {value.symbol}
-            {isPerp(value.venue) && <span className="hx-perp">Perp</span>}
+            {venueTag(value.venue) && <span className="hx-perp">{venueTag(value.venue)}</span>}
           </>
         ) : (
           "Instrument"
@@ -110,7 +110,7 @@ export function InstrumentPicker({
               >
                 <span>
                   {r.symbol}
-                  {isPerp(r.venue) && <span className="hx-perp">Perp</span>}
+                  {venueTag(r.venue) && <span className="hx-perp">{venueTag(r.venue)}</span>}
                 </span>
                 <PnlCell r={r} hedge={hedgeOf(r)} hide={hide} />
               </button>

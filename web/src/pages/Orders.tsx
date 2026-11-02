@@ -15,7 +15,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
-import { cur, baseOf, isPerp, isTraded } from "../desk";
+import { cur, baseOf, isTraded, venueTag } from "../desk";
 
 const short = (s: string) => baseOf(s);
 
@@ -125,7 +125,7 @@ function SymbolCell(p: ICellRendererParams<OpenOrder>) {
   return (
     <span className="ops-sym">
       {o.symbol}
-      {isPerp(o.venue) && <span className="ops-perp">Perp</span>}
+      {venueTag(o.venue) && <span className="ops-perp">{venueTag(o.venue)}</span>}
     </span>
   );
 }

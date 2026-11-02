@@ -55,6 +55,15 @@ export function kindWord(m: Market): string {
   if (markets().filter((x) => x.kind === m.kind).length > 1) return m.name;
   return m.kind === "spot" ? "Spot" : "Perp";
 }
+/** The word beside a symbol's name: "Perp", or a market's name where the kind alone would not tell two apart. Nothing on
+ *  the desk's only spot market, whose rows have always gone untagged. */
+export function venueTag(v: Venue | null | undefined): string {
+  const m = marketOf(v);
+  if (!m) return "";
+  return m.kind === "spot" && markets().filter((x) => x.kind === "spot").length < 2 ? "" : kindWord(m);
+}
+/** Whose figure it is: the exchange of the market it came from. */
+export const exchangeOf = (v: Venue | null | undefined) => marketOf(v)?.exchange ?? "The exchange";
 /** "Spot", "USD-M perpetual". */
 export function marketTitle(v: Venue | null | undefined): string {
   const m = marketOf(v);
@@ -82,5 +91,6 @@ export function ruleApplies(rule: string): boolean {
   if (rule === "engine" || rule === "engine_latency") return !!useStore.getState().snap?.engines.length;
   if (rule === "futures_margin") return hasPerps(deskNow());
   if (rule === "exposure_gap") return deskNow().hedge;
+  if (rule === "orders_10s" || rule === "orders_1d") return useStore.getState().snap?.accounts.some((a) => !a.no_order_limits) ?? true;
   return true;
 }

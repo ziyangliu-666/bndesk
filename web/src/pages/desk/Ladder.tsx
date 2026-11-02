@@ -7,7 +7,7 @@ import { selectInstrument, useStore, type Instrument } from "../../store";
 import { bps, price, qtyDecimals, qtyFixed } from "../../format";
 import type { OpenOrder, SymbolRow } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
-import { quoteOf, baseOf, isPerp } from "../../desk";
+import { quoteOf, baseOf, venueTag } from "../../desk";
 
 interface Level {
   price: number;
@@ -148,7 +148,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
         {inst && (
           <button type="button" className="dk-lad-sym" onClick={() => selectInstrument(inst)} title="Open this instrument">
             {inst.symbol}
-            {isPerp(inst.venue) && <span className="dk-tag">Perp</span>}
+            {venueTag(inst.venue) && <span className="dk-tag">{venueTag(inst.venue)}</span>}
           </button>
         )}
       </div>

@@ -6,7 +6,7 @@ import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
 import { useHedgePnl } from "../../selectors";
-import { isPerp, isHedge } from "../../desk";
+import { isHedge, venueTag } from "../../desk";
 
 export function NamePicker({ sel, children }: { sel: Instrument | null; children: ReactNode }) {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -95,7 +95,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
                 >
                   <span>
                     {r ? r.symbol : "Desk"}
-                    {isPerp(r?.venue) && <span className="dk-tag">Perp</span>}
+                    {venueTag(r?.venue) && <span className="dk-tag">{venueTag(r?.venue)}</span>}
                   </span>
                   <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
                     {hedged && <span className="dk-mk-k">hedge </span>}

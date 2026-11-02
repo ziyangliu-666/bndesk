@@ -9,7 +9,7 @@ import { FillRow, TIP, useFillSheet } from "./shared";
 import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
-import { cur, deskNow, quoteAsset, isPerp, marketOf } from "../../desk";
+import { cur, deskNow, quoteAsset, isPerp, marketOf, venueTag } from "../../desk";
 
 const FILLS = 30;
 type Tab = "balance" | "instruments" | "orders" | "fills";
@@ -158,7 +158,7 @@ function Instruments({ id }: { id: string }) {
           title={
             <>
               {x.symbol}
-              {isPerp(x.venue) && <span className="r-tag">Perp</span>}
+              {venueTag(x.venue) && <span className="r-tag">{venueTag(x.venue)}</span>}
             </>
           }
           sub={x.share != null ? `${int(x.n)} fills · ${pct(x.share, 0)} of volume` : `${int(x.n)} fills`}
