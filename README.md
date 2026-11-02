@@ -31,4 +31,4 @@ A real-time, read-only dashboard for high-frequency market making on Binance, wr
 - The page's files are served brotli-compressed and cached for a year; the socket and the first page start loading together
 - Charts and the quote map draw on canvas, and grids render only the rows in view
 
-[Setup](docs/setup.md) | [Pages](docs/pages.md) | [Design](DESIGN.md) | [Security](SECURITY.md) | MIT
+[Setup](docs/setup.md) | [Pages](docs/pages.md) | [Design](DESIGN.md) | [Generalizing](docs/generalizing.md) | [Security](SECURITY.md) | MIT

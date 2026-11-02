@@ -11,6 +11,8 @@ It serves the desk on <http://127.0.0.1:8710>. With `--config ../desk.example.to
 
 Copy [desk.example.toml](../desk.example.toml) to `desk.toml` and fill in the accounts, the markets you care about and the alert thresholds. The desk needs read-only API keys: one on the master account for the sub-account list and transfers, and one per sub-account. Ed25519 and HMAC keys both work. `desk.toml` only names the environment variables that hold them.
 
+`[desk]` describes the desk to the pages and changes no figure. `currency` is the name on money figures (default USDT), USD or a USD stablecoin since nothing is converted, and `market_making = false` shows Trading PnL without its two parts. A desk with no futures, no rebates or no `[[engines]]` shows no empty columns or panels for them, without any setting.
+
 Binance counts request weight per IP address. Run the desk from a machine your trading processes do not share, or it will spend their weight.
 
 If the server listens on anything other than localhost it asks for a password. `cargo run --release -- --new-password` prints one along with the hash to put in `DESK_PASSWORD_HASH`.
