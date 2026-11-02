@@ -2142,7 +2142,7 @@ mod tests {
         /// A balance change the account's stream reports.
         fn stream(&self, acct: usize, t: i64, asset: &str, d: f64) {
             let e = serde_json::json!({"e": "balanceUpdate", "a": asset, "d": d.to_string(), "T": t});
-            self.accts[acct].borrow_mut().on_spot_event(&e).unwrap();
+            crate::binance::events::on_spot_event(&mut self.accts[acct].borrow_mut(), &e).unwrap();
         }
 
         fn slow(&mut self, now: i64) {

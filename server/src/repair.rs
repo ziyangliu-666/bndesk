@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::backfill::{interp_at, klines};
 use crate::beta::Betas;
 use crate::binance::rest::{CLOCK, Rest, client, governors, sync_time};
-use crate::binance::sign::credentials;
+use crate::sign::credentials;
 use crate::config::Config;
 use crate::fills::FillRec;
 use crate::market::{BookTicker, Market, STABLES};
@@ -470,8 +470,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let spot: Value = public.get("/api/v3/exchangeInfo", &[], 20, false).await?;
     let usdm: Value = public.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
     let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::SPOT, crate::market::parse_exchange_info(&spot));
-    info.insert(Venue::USDM, crate::market::parse_exchange_info(&usdm));
+    info.insert(Venue::SPOT, crate::binance::public::parse_exchange_info(&spot));
+    info.insert(Venue::USDM, crate::binance::public::parse_exchange_info(&usdm));
     let mut m = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
     for mc in &cfg.markets {
         m.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));

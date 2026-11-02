@@ -1,27 +1,16 @@
-//! Per-account state: balances, futures, orders, fees and user streams, from REST and WebSocket.
+//! Per-account state: balances, futures, orders and fees, as a connector reports them (`Account::apply`).
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::rc::Rc;
-use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::task::JoinHandle;
-
-use crate::binance::rest::{CLOCK, Params, Rest, RestError};
-use crate::binance::sign::{Credentials, query};
-use crate::binance::ws::{USDM_PRIVATE, WS_API, WsConn, WsHandle, run_ws, ws_api_call};
 use crate::config::AccountCfg;
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::FillRec;
 use crate::market::{Market, QUOTE, STABLES};
 use crate::pnl::Flow;
-use crate::params;
 use crate::protocol::{self as P, Role, Side, UserStream, Venue};
+use crate::sign::Credentials;
 
-pub const OPEN_STATES: [&str; 2] = ["NEW", "PARTIALLY_FILLED"];
 pub const MOVE_HOLD_MS: i64 = 180_000;
 pub const STALE_MS: i64 = 60_000;   // a stream value this much older than a REST request no longer outranks the REST one
 
@@ -66,22 +55,59 @@ impl Move {
     }
 }
 
-/// An asset distribution credited to the account (`/sapi/v1/asset/assetDividend`): an hourly market-maker
-/// rebate, an airdrop, a staking reward. Trading commissions do not show it, so Day PnL has it and Π does not.
+/// An asset distribution credited to the account: a market-maker rebate, an airdrop, a staking reward. Trading
+/// commissions do not show it, so Day PnL has it and Π does not. `rebate`, which the connector tells from its own
+/// description of it, is the desk's Rebates line; the others are kept but stay in Other.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dividend {
     pub ts: i64,
     pub asset: String,
     pub amount: f64,
     pub info: String,
+    pub rebate: bool,
 }
 
-impl Dividend {
-    /// A market-maker rebate ("Spot MM Rebate-Spot 26-10-15 07:00"): the desk's Rebates line. Other
-    /// distributions are kept but stay in Other.
-    pub fn rebate(&self) -> bool {
-        self.info.contains("MM Rebate")
-    }
+/// What an exchange says about an account, however it says it. A connector reads its own JSON into these and
+/// `Account::apply` holds what the desk does with them: which balance or position is newer than the one held (`u`,
+/// an update time; `t0`, when a request went out) is decided here, not in a connector.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    /// Free and locked of the assets named, as of `u`.
+    Balances { u: i64, rows: Vec<(String, f64, f64)> },
+    /// Every balance as of `u`: an asset absent is zero, an asset updated since keeps what it has.
+    BalanceSnapshot { u: i64, rows: HashMap<String, (f64, f64)> },
+    /// Every balance, from a read with no update time (through a parent account).
+    BalancesRead { rows: Vec<(String, f64, f64)> },
+    /// A balance change apart from trading.
+    Move(Move),
+    /// An order was placed at t, for a desk that counts them itself (`CountOrdersHere`).
+    OrderPlaced { t: i64 },
+    Order { venue: Venue, symbol: String, id: String, side: Side, price: f64, left: f64, open: bool, created: Option<i64> },
+    /// Every order resting on a market: (symbol, id, side, price, left, open, created).
+    #[allow(clippy::type_complexity)]
+    OpenOrders { venue: Venue, rows: Vec<(String, String, Side, f64, f64, bool, Option<i64>)> },
+    /// A fill as it happened; `perp_trade`, a perp's trade id: it also goes into the day of that symbol at once, since
+    /// the position moves with it.
+    Fill { fill: Box<FillRec>, perp_trade: Option<i64> },
+    /// What a perp account's update carries, as of `u`: funding in USD for the one position held, transfers (asset,
+    /// signed amount), the settlement asset's balance, and positions (symbol, amount, entry).
+    PerpUpdate { u: i64, funding: Option<f64>, moves: Vec<(String, f64)>, settle: Option<f64>, positions: Vec<(String, f64, f64)> },
+    /// The perp account read at `t0`: wallet in USD, of it the settlement asset's (balance, update time), and the
+    /// positions (symbol, amount, entry, update time).
+    PerpSnapshot { t0: i64, wallet: f64, settle: Option<(f64, i64)>, upnl: f64, available: f64, positions: Vec<(String, f64, f64, i64)> },
+    /// The perp account's totals and its positions (symbol, amount, entry), from reads with no update time.
+    PerpTotalsRead { wallet: f64, upnl: f64, available: f64 },
+    PerpPositionsRead { rows: Vec<(String, f64, f64)> },
+    /// A sweep of the day from `ds` begins: days before it go.
+    PerpDayStart { ds: i64 },
+    /// A symbol's day as swept; fills held that it does not list are newer than it and stay.
+    PerpDay { symbol: String, day: FutDay },
+    Fee { venue: Venue, symbol: String, maker: f64, taker: f64, now: i64 },
+    /// The exchange's own order counts and limits: (count, limit) per 10 s and per day.
+    OrderCounts { per_10s: Option<(i64, i64)>, per_day: Option<(i64, i64)> },
+    /// The exchange will not give order counts to this key: count `OrderPlaced` against these limits.
+    CountOrdersHere { per_10s: i64, per_day: i64 },
+    Distribution { id: String, row: Dividend },
 }
 
 /// (symbol, amt, entry, mark, upnl, notional) at live marks.
@@ -129,90 +155,12 @@ pub struct FutLeg {
     pub funding: f64,
 }
 
-// JSON helpers: Binance sends numbers as strings or numbers; a missing required field is Python's KeyError.
-
-fn get<'a>(v: &'a Value, k: &str) -> Result<&'a Value> {
-    v.get(k).ok_or_else(|| anyhow!("KeyError: {k}"))
-}
-
-fn to_f(v: &Value) -> Result<f64> {
-    match v {
-        Value::String(s) => s.trim().parse().map_err(|_| anyhow!("ValueError: could not convert {s:?} to float")),
-        Value::Number(n) => n.as_f64().ok_or_else(|| anyhow!("ValueError: {n}")),
-        Value::Bool(b) => Ok(f64::from(u8::from(*b))),
-        _ => bail!("ValueError: not a number: {v}"),
-    }
-}
-
-fn to_i(v: &Value) -> Result<i64> {
-    match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|x| x as i64)).ok_or_else(|| anyhow!("ValueError: {n}")),
-        Value::String(s) => s.trim().parse().map_err(|_| anyhow!("ValueError: invalid int {s:?}")),
-        Value::Bool(b) => Ok(i64::from(*b)),
-        _ => bail!("ValueError: not an int: {v}"),
-    }
-}
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-/// Python `float(v[k])`.
-fn f(v: &Value, k: &str) -> Result<f64> {
-    to_f(get(v, k)?)
-}
-
-/// Python `v.get(k) or ...`: the first truthy value among `keys`.
-fn first<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a Value> {
-    keys.iter().filter_map(|k| v.get(*k)).find(|x| truthy(x))
-}
-
-/// Python `int(v.get(a) or v.get(b) or default)`.
-fn int_or(v: &Value, keys: &[&str], default: i64) -> Result<i64> {
-    first(v, keys).map_or(Ok(default), to_i)
-}
-
-/// Python `float(v.get(k) or 0)`.
-fn f_or0(v: &Value, k: &str) -> Result<f64> {
-    first(v, &[k]).map_or(Ok(0.0), to_f)
-}
-
-fn s<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
-    get(v, k)?.as_str().ok_or_else(|| anyhow!("{k}: not a string"))
-}
-
-/// An id as Python's `str()` / f-string shows it.
-fn id_str(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Null => "None".into(),
-        other => other.to_string(),
-    }
-}
-
-fn side_of(s: &str) -> Side {
-    if s.eq_ignore_ascii_case("buy") { Side::Buy } else { Side::Sell }
-}
-
 fn venue_key(venue: Venue, x: impl std::fmt::Display) -> String {
     format!("{}:{x}", venue.as_str())
 }
 
-/// Python `f"{type(e).__name__}: {e}"[:200]`.
 fn same_fee(a: (f64, f64), b: (f64, f64)) -> bool {
     (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9
-}
-
-fn err_text(e: &anyhow::Error) -> String {
-    let s = if e.downcast_ref::<RestError>().is_some() { format!("RestError: {e}") } else { format!("{e:#}") };
-    s.chars().take(200).collect()
 }
 
 /// One Binance account as the monitor sees it: balances, futures, orders, fees.
@@ -244,8 +192,6 @@ pub struct Account {
     pub open: HashMap<String, Open>,       // venue:orderId -> order
     pub open_since: HashMap<String, i64>,  // venue:orderId -> creation time
     pub traded: HashSet<String>,           // venue:symbol filled or quoted
-    pub fee_turn: usize,
-    pub fee_next: [i64; Venue::COUNT],   // ms, indexed by Venue::index(); each venue's next per-symbol commission lookup
     pub fees: Vec<((Venue, String), (f64, f64))>,   // insertion-ordered like the Python dict
     pub first_fees: HashMap<(Venue, String), (f64, f64)>,   // the baseline a rate is compared with
     pub fee_changed: HashMap<(Venue, String), i64>,       // since when a rate differs from its baseline
@@ -256,10 +202,8 @@ pub struct Account {
     pub funding_stream: Vec<(i64, String, f64)>,
     pub day_start: i64,                      // set by the desk; the futures day below is read from it
     pub fut_day: HashMap<String, FutDay>,
-    /// spot symbols whose fills the desk tracks (set by the desk): the myTrades sweep reads these
+    /// spot symbols whose fills the desk tracks (set by the desk): a connector's sweep of the day's fills reads these
     pub spot_symbols: Vec<String>,
-    /// the myTrades sweep has covered today up to here (ms)
-    pub trades_upto: HashMap<String, i64>,   // spot symbol -> when the last sweep of it that succeeded started
     // symbol -> today's futures fills, funding and opening mark
     pub transfers_day: f64,
     pub updated: i64,
@@ -274,6 +218,7 @@ pub struct Account {
     pub dividends: BTreeMap<String, Dividend>,   // id -> today's asset distributions
     pub on_dividend: OnDividend,
     pub no_order_counts: bool,
+    pub stream_limits: (i64, i64),   // with no_order_counts: orders per 10 s and per day
     pub new_ts: VecDeque<i64>,
 }
 
@@ -314,8 +259,6 @@ impl Account {
             open: HashMap::new(),
             open_since: HashMap::new(),
             traded: HashSet::new(),
-            fee_turn: 0,
-            fee_next: [0; Venue::COUNT],
             fees: vec![],
             first_fees: HashMap::new(),
             fee_changed: HashMap::new(),
@@ -325,7 +268,6 @@ impl Account {
             day_start: 0,
             fut_day: HashMap::new(),
             spot_symbols: vec![],
-            trades_upto: HashMap::new(),
             transfers_day: 0.0,
             updated: 0,
             feeds,
@@ -339,6 +281,7 @@ impl Account {
             dividends: BTreeMap::new(),
             on_dividend: Rc::new(|_, _, _| {}),
             no_order_counts: false,
+            stream_limits: (0, 0),
             new_ts: VecDeque::new(),
             cfg,
         }
@@ -361,7 +304,7 @@ impl Account {
     pub fn rebates(&self, m: &mut Market) -> f64 {
         self.dividends
             .values()
-            .filter(|d| d.ts >= self.day_start && d.rebate())
+            .filter(|d| d.ts >= self.day_start && d.rebate)
             .map(|d| d.amount * m.asset_price_at(&d.asset, d.ts).or_else(|| m.asset_price(&d.asset)).unwrap_or(0.0))
             .sum()
     }
@@ -394,9 +337,8 @@ impl Account {
         if self.feeds.iter().all(|f| f.borrow().up) { UserStream::Up } else { UserStream::Down }
     }
 
-    /// Orders placed as seen on the user stream: stands in for /api/v3/rateLimit/order, which read-only keys may
-    /// not call. The limits are exchangeInfo's (market::order_limits). Orders Binance rejects never reach the
-    /// stream, so this can read lower than Binance's own count.
+    /// Orders placed as seen on the user stream, where the exchange will not tell a read-only key its own count.
+    /// Orders the exchange rejects never reach the stream, so this can read lower than its count.
     pub fn count_new(&mut self, t: i64) {
         if !self.no_order_counts {
             return;
@@ -413,7 +355,7 @@ impl Account {
         while self.new_ts.front().is_some_and(|&t| t <= now - 10_000) {
             self.new_ts.pop_front();
         }
-        let (l10, l1d) = crate::market::order_limits();
+        let (l10, l1d) = self.stream_limits;
         (self.orders_10s, self.orders_10s_limit, self.orders_1d_limit) = (self.new_ts.len() as i64, l10, l1d);
     }
 
@@ -553,49 +495,6 @@ impl Account {
         self.updated = now_ms();
     }
 
-    /// REST /api/v3/account: replaces the balances, except assets the user stream has set since the
-    /// snapshot's updateTime (absent from the snapshot = zero).
-    pub fn apply_spot_snapshot(&mut self, r: &Value) -> Result<()> {
-        let u = int_or(r, &["updateTime"], 0)?;
-        let mut rows: HashMap<String, (f64, f64)> = HashMap::new();
-        for b in get(r, "balances")?.as_array().ok_or_else(|| anyhow!("balances: not a list"))? {
-            rows.insert(s(b, "asset")?.to_string(), (f(b, "free")?, f(b, "locked")?));
-        }
-        let assets: HashSet<String> = self.balances.keys().chain(rows.keys()).cloned().collect();
-        for a in assets {
-            if self.bal_u.get(&a).copied().unwrap_or(0) > u {
-                continue;
-            }
-            let (f, l) = rows.get(&a).copied().unwrap_or((0.0, 0.0));
-            if f != 0.0 || l != 0.0 {
-                if a != QUOTE {
-                    self.touch_asset(&a);
-                }
-                self.balances.insert(a.clone(), (f, l));
-            } else {
-                self.balances.remove(&a);
-            }
-            self.bal_u.insert(a, u);
-        }
-        self.updated = now_ms();
-        Ok(())
-    }
-
-    /// outboundAccountPosition: absolute free / locked of the assets that changed, as of `u`.
-    pub fn apply_spot_position(&mut self, e: &Value) -> Result<()> {
-        let u = int_or(e, &["u", "E"], 0)?;
-        let mut rows = vec![];
-        for b in get(e, "B")?.as_array().ok_or_else(|| anyhow!("B: not a list"))? {
-            let a = s(b, "a")?;
-            if u >= self.bal_u.get(a).copied().unwrap_or(0) {
-                self.bal_u.insert(a.to_string(), u);
-                rows.push((a.to_string(), f(b, "f")?, f(b, "l")?));
-            }
-        }
-        self.set_balances(rows, false);
-        Ok(())
-    }
-
     /// REST futures wallet: `total` includes the USDT balance `usdt` as of `u`; a newer USDT balance from
     /// the stream is kept (unless the stream's is a minute older than the request at t0: then REST wins).
     pub fn set_fut_wallet(&mut self, total: f64, usdt: f64, u: i64, t0: i64) {
@@ -623,11 +522,11 @@ impl Account {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn order_update(&mut self, venue: Venue, symbol: &str, oid: &str, side: &str, price: f64, left: f64, status: &str,
+    pub fn order_update(&mut self, venue: Venue, symbol: &str, oid: &str, side: Side, price: f64, left: f64, open: bool,
                         created: Option<i64>) {
         let k = venue_key(venue, oid);
-        if OPEN_STATES.contains(&status) {
-            self.open.insert(k.clone(), Open { symbol: symbol.to_string(), venue, side: side_of(side), price, left });
+        if open {
+            self.open.insert(k.clone(), Open { symbol: symbol.to_string(), venue, side, price, left });
             self.open_since.entry(k).or_insert_with(|| created.filter(|c| *c != 0).unwrap_or_else(now_ms));
             self.traded.insert(venue_key(venue, symbol));
             self.touch_symbol(symbol, venue);
@@ -707,41 +606,163 @@ impl Account {
         out
     }
 
-    // user data events
+    // what a connector reports
 
-    pub fn on_spot_event(&mut self, e: &Value) -> Result<()> {
-        match e.get("e").and_then(Value::as_str) {
-            Some("outboundAccountPosition") => self.apply_spot_position(e)?,
-            Some("balanceUpdate") => {
-                // a transfer in or out, seconds before the transfer history shows it
-                let t = int_or(e, &["T", "E"], 0)?;
-                let t = if t != 0 { t } else { now_ms() };
-                self.moves.push(Move::new(t, s(e, "a")?, f(e, "d")?));
-            }
-            Some("executionReport") => {
-                let x = s(e, "x")?;
-                if x == "NEW" {
-                    let t = int_or(e, &["E"], 0)?;
-                    self.count_new(if t != 0 { t } else { now_ms() });
+    /// One thing the exchange said about this account. Runs while the account is borrowed (`on_fill` and the fee
+    /// and distribution callbacks run inside it and must not borrow it).
+    pub fn apply(&mut self, ev: Event) {
+        match ev {
+            Event::Balances { u, rows } => {
+                let mut fresh = Vec::with_capacity(rows.len());
+                for (a, f, l) in rows {
+                    if u >= self.bal_u.get(&a).copied().unwrap_or(0) {
+                        self.bal_u.insert(a.clone(), u);
+                        fresh.push((a, f, l));
+                    }
                 }
-                let sym = s(e, "s")?;
-                let created = first(e, &["O"]).map(to_i).transpose()?;
-                self.order_update(Venue::SPOT, sym, &id_str(get(e, "i")?), s(e, "S")?, f(e, "p")?, f(e, "q")? - f(e, "z")?,
-                                  s(e, "X")?, created);
-                if x == "TRADE" {
-                    self.traded.insert(venue_key(Venue::SPOT, sym));
-                    let mut fr = FillRec::new(format!("{}:spot:{sym}:{}", self.id, id_str(get(e, "t")?)), to_i(get(e, "T")?)?,
-                                              self.id.clone(), sym, Venue::SPOT, side_of(s(e, "S")?), f(e, "L")?, f(e, "l")?);
-                    fr.fee = f_or0(e, "n")?;
-                    fr.fee_asset = first(e, &["N"]).and_then(Value::as_str).unwrap_or("").to_string();
-                    fr.maker = truthy(get(e, "m")?);
-                    let cb = self.on_fill.clone();
-                    cb(fr);
+                self.set_balances(fresh, false);
+            }
+            Event::BalanceSnapshot { u, rows } => {
+                let assets: HashSet<String> = self.balances.keys().chain(rows.keys()).cloned().collect();
+                for a in assets {
+                    if self.bal_u.get(&a).copied().unwrap_or(0) > u {
+                        continue;
+                    }
+                    let (f, l) = rows.get(&a).copied().unwrap_or((0.0, 0.0));
+                    if f != 0.0 || l != 0.0 {
+                        if a != QUOTE {
+                            self.touch_asset(&a);
+                        }
+                        self.balances.insert(a.clone(), (f, l));
+                    } else {
+                        self.balances.remove(&a);
+                    }
+                    self.bal_u.insert(a, u);
+                }
+                self.updated = now_ms();
+                self.spot_loaded = true;
+            }
+            Event::BalancesRead { rows } => {
+                self.set_balances(rows, true);
+                self.spot_loaded = true;
+            }
+            Event::Move(mv) => self.moves.push(mv),
+            Event::OrderPlaced { t } => self.count_new(t),
+            Event::Order { venue, symbol, id, side, price, left, open, created } => {
+                self.order_update(venue, &symbol, &id, side, price, left, open, created);
+            }
+            Event::OpenOrders { venue, rows } => {
+                let pre = format!("{venue}:");
+                self.open.retain(|k, _| !k.starts_with(&pre));
+                for (symbol, id, side, price, left, open, created) in rows {
+                    self.order_update(venue, &symbol, &id, side, price, left, open, created);
+                }
+                let Account { open, open_since, .. } = self;
+                open_since.retain(|k, _| open.contains_key(k));
+            }
+            Event::Fill { fill, perp_trade } => {
+                self.traded.insert(venue_key(fill.venue, &fill.symbol));
+                if let Some(id) = perp_trade {
+                    self.fut_fill(&fill.symbol.clone(), id, &fill);
+                }
+                let cb = self.on_fill.clone();
+                cb(*fill);
+            }
+            Event::PerpUpdate { u, funding, moves, settle, positions } => {
+                let t = if u != 0 { u } else { now_ms() };
+                if let Some(usd) = funding {
+                    // no symbol on the event (a cross position sends the balance only): the one position held
+                    let held: Vec<&String> = self.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s).collect();
+                    if let [sym] = held[..]
+                        && usd != 0.0
+                    {
+                        let sym = sym.clone();
+                        let ds = self.day_start;
+                        self.funding_stream.retain(|x| x.0 >= ds);
+                        self.funding_stream.push((t, sym, usd));
+                    }
+                }
+                for (asset, d) in moves {
+                    self.moves.push(Move::new(t, &asset, d));
+                }
+                if let Some(wb) = settle
+                    && u >= self.fut_usdt_u
+                {
+                    self.fut_wallet += wb - self.fut_usdt;
+                    (self.fut_usdt, self.fut_usdt_u) = (wb, u);
+                }
+                for (symbol, amt, entry) in positions {
+                    self.set_position(&symbol, amt, entry, Some(u), 0);
+                }
+                self.updated = now_ms();
+            }
+            Event::PerpSnapshot { t0, wallet, settle, upnl, available, positions } => {
+                match settle {
+                    Some((balance, u)) => self.set_fut_wallet(wallet, balance, u, t0),
+                    None => self.fut_wallet = wallet,
+                }
+                self.fut_upnl_rest = upnl;
+                self.fut_available = available;
+                let mut seen = HashSet::new();
+                for (symbol, amt, entry, u) in positions {
+                    self.set_position(&symbol, amt, entry, Some(u), t0);
+                    seen.insert(symbol);
+                }
+                // a position absent from the snapshot is dropped unless the stream set it after the request went out
+                let gone: Vec<String> = self
+                    .positions
+                    .keys()
+                    .filter(|s| !seen.contains(*s) && self.pos_u.get(*s).copied().unwrap_or(0) < t0)
+                    .cloned()
+                    .collect();
+                for s in gone {
+                    self.positions.remove(&s);
+                    self.pos_u.remove(&s);
+                }
+                self.fut_loaded = true;
+                self.updated = now_ms();
+            }
+            Event::PerpTotalsRead { wallet, upnl, available } => {
+                (self.fut_wallet, self.fut_upnl_rest, self.fut_available) = (wallet, upnl, available);
+            }
+            Event::PerpPositionsRead { rows } => {
+                let seen: HashSet<String> = rows.iter().map(|r| r.0.clone()).collect();
+                for (symbol, amt, entry) in rows {
+                    self.set_position(&symbol, amt, entry, None, 0);
+                }
+                self.positions.retain(|s, _| seen.contains(s));
+                self.fut_loaded = true;
+                self.updated = now_ms();
+            }
+            Event::PerpDayStart { ds } => {
+                if self.fut_day.values().any(|d| d.ds != ds) {
+                    self.fut_day.clear();
                 }
             }
-            _ => {}
+            Event::PerpDay { symbol, mut day } => {
+                // fills the stream added while the sweep was answering are newer than its list: kept
+                if let Some(cur) = self.fut_day.get(&symbol).filter(|c| c.ds == day.ds) {
+                    for (id, t) in &cur.trades {
+                        day.trades.entry(*id).or_insert(*t);
+                    }
+                }
+                self.fut_day.insert(symbol, day);
+            }
+            Event::Fee { venue, symbol, maker, taker, now } => self.set_fee(venue, &symbol, maker, taker, now),
+            Event::OrderCounts { per_10s, per_day } => {
+                if let Some((n, limit)) = per_10s {
+                    (self.orders_10s, self.orders_10s_limit) = (n, limit);
+                }
+                if let Some((n, limit)) = per_day {
+                    (self.orders_1d, self.orders_1d_limit) = (n, limit);
+                }
+            }
+            Event::CountOrdersHere { per_10s, per_day } => {
+                self.no_order_counts = true;
+                self.stream_limits = (per_10s, per_day);
+            }
+            Event::Distribution { id, row } => self.add_dividend(&id, row),
         }
-        Ok(())
     }
 
     /// A user-stream futures fill into today's fills, at once: the position moves with it, so leaving it to the
@@ -765,786 +786,9 @@ impl Account {
         d.trades.entry(id).or_insert((f.ts, sq, f.price, fee));
     }
 
-    pub fn on_fut_event(&mut self, e: &Value) -> Result<()> {
-        match e.get("e").and_then(Value::as_str) {
-            Some("ORDER_TRADE_UPDATE") => {
-                let o = get(e, "o")?;
-                let sym = s(o, "s")?;
-                let created = first(e, &["T"]).map(to_i).transpose()?;
-                self.order_update(Venue::USDM, sym, &id_str(get(o, "i")?), s(o, "S")?, f(o, "p")?, f(o, "q")? - f(o, "z")?,
-                                  s(o, "X")?, created);
-                if s(o, "x")? == "TRADE" {
-                    self.traded.insert(venue_key(Venue::USDM, sym));
-                    let mut fr = FillRec::new(format!("{}:usdm:{sym}:{}", self.id, id_str(get(o, "t")?)), to_i(get(o, "T")?)?,
-                                              self.id.clone(), sym, Venue::USDM, side_of(s(o, "S")?), f(o, "L")?, f(o, "l")?);
-                    fr.fee = f_or0(o, "n")?;
-                    fr.fee_asset = first(o, &["N"]).and_then(Value::as_str).unwrap_or("").to_string();
-                    fr.maker = o.get("m").is_some_and(truthy);
-                    self.fut_fill(sym, to_i(get(o, "t")?)?, &fr);
-                    let cb = self.on_fill.clone();
-                    cb(fr);
-                }
-            }
-            Some("ACCOUNT_UPDATE") => {
-                let a = get(e, "a")?;
-                let u = int_or(e, &["T", "E"], 0)?;
-                let empty = vec![];
-                let bs = a.get("B").and_then(Value::as_array).unwrap_or(&empty);
-                let reason = a.get("m").and_then(Value::as_str);
-                if reason == Some("FUNDING_FEE") {
-                    // no symbol on the event (a cross position sends the balance only): the one position held
-                    let held: Vec<&String> = self.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s).collect();
-                    let usd: f64 = bs
-                        .iter()
-                        .filter(|b| matches!(b.get("a").and_then(Value::as_str), Some("USDT" | "USDC")))
-                        .map(|b| f_or0(b, "bc"))
-                        .sum::<Result<f64>>()?;
-                    if let [sym] = held[..]
-                        && usd != 0.0
-                    {
-                        let sym = sym.clone();
-                        let ds = self.day_start;
-                        self.funding_stream.retain(|x| x.0 >= ds);
-                        self.funding_stream.push((if u != 0 { u } else { now_ms() }, sym, usd));
-                    }
-                }
-                if !matches!(reason, Some("ORDER" | "FUNDING_FEE")) {
-                    // transfers: "bc" is the wallet change apart from P&L
-                    for b in bs {
-                        let bc = f_or0(b, "bc")?;
-                        if bc != 0.0 {
-                            self.moves.push(Move::new(if u != 0 { u } else { now_ms() }, s(b, "a")?, bc));
-                        }
-                    }
-                }
-                for b in bs {
-                    if b.get("a").and_then(Value::as_str) == Some("USDT") && u >= self.fut_usdt_u {
-                        let wb = f(b, "wb")?;
-                        self.fut_wallet += wb - self.fut_usdt;
-                        (self.fut_usdt, self.fut_usdt_u) = (wb, u);
-                    }
-                }
-                for p in a.get("P").and_then(Value::as_array).unwrap_or(&empty) {
-                    if matches!(p.get("ps").and_then(Value::as_str).unwrap_or("BOTH"), "BOTH" | "LONG" | "SHORT") {
-                        self.set_position(s(p, "s")?, f(p, "pa")?, f(p, "ep")?, Some(u), 0);
-                    }
-                }
-                self.updated = now_ms();
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// REST /fapi/v3/account, requested at t0 (server clock): a position or USDT balance the stream has
-    /// updated since the snapshot's own updateTime is kept; a position absent from the snapshot is dropped
-    /// unless the stream set it after the request went out.
-    pub fn apply_fut_snapshot(&mut self, r: &Value, t0: i64) -> Result<()> {
-        let empty = vec![];
-        let usdt = r
-            .get("assets")
-            .and_then(Value::as_array)
-            .unwrap_or(&empty)
-            .iter()
-            .find(|a| a.get("asset").and_then(Value::as_str) == Some("USDT"));
-        match usdt {
-            Some(usdt) => {
-                self.set_fut_wallet(f(r, "totalWalletBalance")?, f(usdt, "walletBalance")?, int_or(usdt, &["updateTime"], 0)?, t0)
-            }
-            None => self.fut_wallet = f(r, "totalWalletBalance")?,
-        }
-        self.fut_upnl_rest = f(r, "totalUnrealizedProfit")?;
-        self.fut_available = f(r, "availableBalance")?;
-        let mut seen = HashSet::new();
-        for p in r.get("positions").and_then(Value::as_array).unwrap_or(&empty) {
-            let amt = f(p, "positionAmt")?;
-            if amt != 0.0 {
-                let upnl = match p.get("unrealizedProfit").or_else(|| p.get("unRealizedProfit")) {
-                    Some(v) => to_f(v)?,
-                    None => 0.0,
-                };
-                let notional = f(p, "notional")?;
-                let sym = s(p, "symbol")?;
-                self.set_position(sym, amt, (notional - upnl) / amt, Some(int_or(p, &["updateTime"], 0)?), t0);
-                seen.insert(sym.to_string());
-            }
-        }
-        let gone: Vec<String> = self
-            .positions
-            .keys()
-            .filter(|s| !seen.contains(*s) && self.pos_u.get(*s).copied().unwrap_or(0) < t0)
-            .cloned()
-            .collect();
-        for s in gone {
-            self.positions.remove(&s);
-            self.pos_u.remove(&s);
-        }
-        self.fut_loaded = true;
-        self.updated = now_ms();
-        Ok(())
-    }
 }
 
-// live connections
-
-/// The REST GETs an account makes (a fake in tests).
-pub trait RestGet {
-    fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, signed: bool) -> impl Future<Output = Result<Value>>;
-}
-
-impl RestGet for Rest {
-    async fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, signed: bool) -> Result<Value> {
-        self.get(path, params, weight, signed).await
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Job {
-    SpotAccount,
-    RateLimits,
-    OpenOrders,
-    Commissions,
-    FutAccount,
-    FutToday,
-    SpotTrades,
-    Dividends,
-    MasterSpot,
-    MasterFut,
-}
-
-async fn run_job(job: Job, acct: &AccountRef, rest: &Rest) -> Result<()> {
-    match job {
-        Job::SpotAccount => spot_account(acct, rest).await,
-        Job::RateLimits => rate_limits(acct, rest).await,
-        Job::OpenOrders => open_orders(acct, rest).await,
-        Job::Commissions => commissions(acct, rest).await,
-        Job::FutAccount => fut_account(acct, rest).await,
-        Job::FutToday => fut_today(acct, rest).await,
-        Job::SpotTrades => spot_trades(acct, rest).await,
-        Job::Dividends => dividends(acct, rest).await,
-        Job::MasterSpot => master_spot(acct, rest).await,
-        Job::MasterFut => master_fut(acct, rest).await,
-    }
-}
-
-async fn poll(acct: AccountRef, rest: Rest, job: Job, every: f64, delay: f64) {
-    tokio::time::sleep(Duration::from_secs_f64(delay)).await;
-    loop {
-        let r = run_job(job, &acct, &rest).await;
-        let feed = acct.borrow().rest_feed.clone();
-        match r {
-            Ok(()) => feed.borrow_mut().set_up(true, Some("")),
-            Err(e) => {
-                feed.borrow_mut().set_up(false, Some(&err_text(&e)));
-                if matches!(job, Job::SpotTrades | Job::FutToday | Job::Dividends) {
-                    // the passes that fill in the day's records: a failure leaves the day short
-                    tracing::warn!("{} {job:?}: {e:#}", acct.borrow().id);
-                }
-                // a failed pass is tried again within a minute, not after its full period
-                tokio::time::sleep(Duration::from_secs_f64(every.min(60.0))).await;
-                continue;
-            }
-        }
-        tokio::time::sleep(Duration::from_secs_f64(every)).await;
-    }
-}
-
-/// The account's own key: user streams and REST polls, as `spawn_local` tasks (abort to stop).
-/// `rest` carries the account's credentials and its `rest_feed`.
-pub fn start(acct: &AccountRef, rest: Rest) -> Vec<JoinHandle<()>> {
-    let (has_creds, futures) = {
-        let a = acct.borrow();
-        (a.creds.is_some(), a.cfg.futures)
-    };
-    if !has_creds {
-        return vec![];
-    }
-    let p = |job, every, delay| tokio::task::spawn_local(poll(acct.clone(), rest.clone(), job, every, delay));
-    let mut tasks = vec![
-        tokio::task::spawn_local(spot_user(acct.clone())),
-        p(Job::SpotAccount, 15.0, 0.0),
-        p(Job::RateLimits, 15.0, 0.0),
-        p(Job::OpenOrders, 60.0, 0.0),
-        p(Job::Commissions, 60.0, 5.0),
-        p(Job::SpotTrades, 600.0, 20.0),
-        p(Job::Dividends, 300.0, 30.0),
-    ];
-    if futures {
-        tasks.push(tokio::task::spawn_local(fut_user(acct.clone(), rest.clone())));
-        tasks.push(p(Job::FutAccount, 10.0, 0.0));
-        tasks.push(p(Job::FutToday, 60.0, 8.0));
-    }
-    tasks
-}
-
-/// Today's spot fills from REST, for those the user stream did not deliver (the monitor down or the
-/// stream dropping): each tracked or traded symbol from where its last sweep reached, less 15 min. The
-/// fill ids are the stream's, so a fill already seen is not added twice. Each symbol keeps its own progress: a
-/// request that fails is tried again twice, then the sweep goes on to the next symbol and the error is
-/// returned at the end (the poll retries within a minute), so one bad answer never holds back the rest.
-pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let (ds, syms, id, on_fill) = {
-        let a = acct.borrow();
-        if a.day_start == 0 {
-            return Ok(());
-        }
-        let mut syms: Vec<String> = a.spot_symbols.clone();
-        syms.extend(a.traded.iter().filter_map(|k| k.strip_prefix("spot:")).map(String::from));
-        syms.sort();
-        syms.dedup();
-        (a.day_start, syms, a.id.clone(), a.on_fill.clone())
-    };
-    let mut failed: Vec<String> = vec![];
-    let mut first_err = None;
-    for sym in syms {
-        let from = {
-            let a = acct.borrow();
-            if a.day_start != ds {
-                return Ok(());   // the day rolled while sweeping
-            }
-            match a.trades_upto.get(&sym) {
-                Some(&u) if u > ds => (u - 15 * 60_000).max(ds),
-                _ => ds,
-            }
-        };
-        let started = CLOCK.now();
-        let mut start = from;
-        let mut tries = 0;
-        let ok = loop {
-            let q: Params = params!["symbol" => sym, "startTime" => start, "limit" => 1000];
-            let r = match rest.get_json("/api/v3/myTrades", &q, 20, true).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tries += 1;
-                    let refused = e.downcast_ref::<RestError>().is_some_and(|re| (400..500).contains(&re.status));
-                    if refused || tries >= 3 {
-                        first_err.get_or_insert(e);
-                        break false;
-                    }
-                    tokio::time::sleep(Duration::from_secs(2 * tries)).await;
-                    continue;
-                }
-            };
-            let rows = r.as_array().ok_or_else(|| anyhow!("myTrades: not a list"))?;
-            for x in rows {
-                let ts = to_i(get(x, "time")?)?;
-                if ts < ds {
-                    continue;
-                }
-                let side = if truthy(get(x, "isBuyer")?) { Side::Buy } else { Side::Sell };
-                let mut fr = FillRec::new(format!("{id}:spot:{sym}:{}", id_str(get(x, "id")?)), ts, id.clone(), &sym,
-                                          Venue::SPOT, side, f(x, "price")?, f(x, "qty")?);
-                fr.fee = f_or0(x, "commission")?;
-                fr.fee_asset = first(x, &["commissionAsset"]).and_then(Value::as_str).unwrap_or("").to_string();
-                fr.maker = truthy(get(x, "isMaker")?);
-                on_fill(fr);
-            }
-            match rows.last() {
-                Some(last) if rows.len() >= 1000 => start = to_i(get(last, "time")?)? + 1,
-                _ => break true,
-            }
-        };
-        let mut a = acct.borrow_mut();
-        if a.day_start != ds {
-            return Ok(());
-        }
-        if ok {
-            a.trades_upto.insert(sym, started);
-        } else {
-            failed.push(sym);
-        }
-    }
-    match first_err {
-        Some(e) => Err(e.context(format!("myTrades of {} not swept: {}", failed.len(), failed.join(", ")))),
-        None => Ok(()),
-    }
-}
-
-/// Today's asset distributions (the hourly market-maker rebate among them), the whole day each time: a day
-/// holds a row an hour per kind, so one request of weight 10 every few minutes; the first one backfills.
-pub async fn dividends(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let ds = acct.borrow().day_start;
-    if ds == 0 {
-        return Ok(());   // the desk has not set the day yet
-    }
-    let q: Params = params!["startTime" => ds, "endTime" => CLOCK.now(), "limit" => 500];
-    let r = rest.get_json("/sapi/v1/asset/assetDividend", &q, 10, true).await?;
-    let mut a = acct.borrow_mut();
-    if a.day_start != ds {
-        return Ok(());   // the day rolled while asking
-    }
-    for x in r.get("rows").and_then(Value::as_array).into_iter().flatten() {
-        let d = Dividend {
-            ts: to_i(get(x, "divTime")?)?,
-            asset: s(x, "asset")?.to_string(),
-            amount: f(x, "amount")?,
-            info: first(x, &["enInfo"]).and_then(Value::as_str).unwrap_or("").to_string(),
-        };
-        a.add_dividend(&id_str(get(x, "id")?), d);
-    }
-    Ok(())
-}
-
-/// The market-maker rebates credited in [from, to), for a past day: each row goes to on_dividend (the store
-/// keeps it), and the rebates are summed at the asset's price now (USDT at 1, another stablecoin at its USDT pair).
-pub async fn rebates_between(acct: &AccountRef, rest: &impl RestGet, from: i64, to: i64) -> Result<f64> {
-    let q: Params = params!["startTime" => from, "endTime" => to - 1, "limit" => 500];
-    let r = rest.get_json("/sapi/v1/asset/assetDividend", &q, 10, true).await?;
-    let a = acct.borrow();
-    let mut m = a.market.as_ref().map(|m| m.borrow_mut());
-    let mut sum = 0.0;
-    for x in r.get("rows").and_then(Value::as_array).into_iter().flatten() {
-        let d = Dividend {
-            ts: to_i(get(x, "divTime")?)?,
-            asset: s(x, "asset")?.to_string(),
-            amount: f(x, "amount")?,
-            info: first(x, &["enInfo"]).and_then(Value::as_str).unwrap_or("").to_string(),
-        };
-        (a.on_dividend)(&a, &id_str(get(x, "id")?), &d);
-        if d.rebate() {
-            let px = m.as_mut().and_then(|m| m.asset_price(&d.asset)).or_else(|| STABLES.contains(&d.asset.as_str()).then_some(1.0));
-            sum += d.amount * px.unwrap_or(0.0);
-        }
-    }
-    Ok(sum)
-}
-
-/// No key of its own: `master_rest` carries the master's credentials and this account's `rest_feed`.
-pub fn start_via_master(acct: &AccountRef, master_rest: Rest, delay: f64) -> Vec<JoinHandle<()>> {
-    vec![
-        tokio::task::spawn_local(poll(acct.clone(), master_rest.clone(), Job::MasterSpot, 30.0, delay)),
-        tokio::task::spawn_local(poll(acct.clone(), master_rest, Job::MasterFut, 30.0, delay + 2.0)),
-    ]
-}
-
-pub async fn master_spot(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let email = acct.borrow().email.clone();
-    let r = rest.get_json("/sapi/v3/sub-account/assets", &params!["email" => email], 60, true).await?;
-    let mut rows = vec![];
-    for b in get(&r, "balances")?.as_array().ok_or_else(|| anyhow!("balances: not a list"))? {
-        rows.push((s(b, "asset")?.to_string(), f(b, "free")?, f(b, "locked")?));
-    }
-    let mut a = acct.borrow_mut();
-    a.set_balances(rows, true);
-    a.spot_loaded = true;
-    Ok(())
-}
-
-pub async fn master_fut(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let email = acct.borrow().email.clone();
-    let q: Params = params!["email" => email, "futuresType" => 1];
-    let r = rest.get_json("/sapi/v2/sub-account/futures/account", &q, 10, true).await?;
-    let a = get(&r, "futureAccountResp")?;
-    let wallet = f(a, "totalWalletBalance")?;
-    let upnl = f(a, "totalUnrealizedProfit")?;
-    let avail = match a.get("maxWithdrawAmount").or_else(|| a.get("availableBalance")) {
-        Some(v) => to_f(v)?,
-        None => 0.0,
-    };
-    {
-        let mut ac = acct.borrow_mut();
-        (ac.fut_wallet, ac.fut_upnl_rest, ac.fut_available) = (wallet, upnl, avail);
-    }
-    let r = rest.get_json("/sapi/v2/sub-account/futures/positionRisk", &q, 10, true).await?;
-    let mut rows = vec![];
-    if let Some(ps) = r.get("futurePositionRiskVOS").and_then(Value::as_array) {
-        for p in ps {
-            let amt = f(p, "positionAmount")?;
-            if amt != 0.0 {
-                rows.push((s(p, "symbol")?.to_string(), amt, f(p, "entryPrice")?));
-            }
-        }
-    }
-    let mut ac = acct.borrow_mut();
-    let seen: HashSet<String> = rows.iter().map(|r| r.0.clone()).collect();
-    for (sym, amt, entry) in rows {
-        ac.set_position(&sym, amt, entry, None, 0);
-    }
-    ac.positions.retain(|s, _| seen.contains(s));
-    ac.fut_loaded = true;
-    ac.updated = now_ms();
-    Ok(())
-}
-
-pub async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let r = rest.get_json("/api/v3/account", &params!["omitZeroBalances" => "true"], 20, true).await?;
-    let mut a = acct.borrow_mut();
-    a.apply_spot_snapshot(&r)?;
-    if let Some(c) = first(&r, &["commissionRates"]) {
-        a.set_fee(Venue::SPOT, "*", f(c, "maker")?, f(c, "taker")?, CLOCK.now());
-    }
-    a.spot_loaded = true;
-    Ok(())
-}
-
-pub async fn fut_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let t0 = CLOCK.now();
-    let r = rest.get_json("/fapi/v3/account", &[], 5, true).await?;
-    acct.borrow_mut().apply_fut_snapshot(&r, t0)
-}
-
-/// Today's futures fills, funding and each symbol's mark at the day start, from REST: complete
-/// across monitor restarts, unlike the user stream.
-pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let (ds, syms, market, aid, on_fill) = {
-        let mut a = acct.borrow_mut();
-        let ds = a.day_start;
-        if ds == 0 {
-            return Ok(());
-        }
-        if a.fut_day.values().any(|d| d.ds != ds) {
-            a.fut_day.clear();
-        }
-        let mut syms: HashSet<String> =
-            a.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s.clone()).collect();
-        syms.extend(a.traded.iter().filter_map(|k| k.strip_prefix("usdm:")).map(String::from));
-        syms.extend(a.fut_day.keys().cloned());
-        (ds, syms, a.market.clone(), a.id.clone(), a.on_fill.clone())
-    };
-    if syms.is_empty() {
-        return Ok(());
-    }
-    let mut funding: HashMap<String, f64> = HashMap::new();
-    let rest_t = CLOCK.now();
-    let mut t = ds;
-    loop {
-        let q: Params = params!["incomeType" => "FUNDING_FEE", "startTime" => t, "limit" => 1000];
-        let r = rest.get_json("/fapi/v1/income", &q, 30, true).await?;
-        let rows = r.as_array().ok_or_else(|| anyhow!("income: not a list"))?;
-        for x in rows {
-            *funding.entry(s(x, "symbol")?.to_string()).or_insert(0.0) += f(x, "income")?;
-        }
-        match rows.last() {
-            Some(last) if rows.len() >= 1000 => t = to_i(get(last, "time")?)? + 1,
-            _ => break,
-        }
-    }
-    let mut all: Vec<String> = syms.into_iter().chain(funding.keys().cloned()).collect::<HashSet<_>>().into_iter().collect();
-    all.sort();
-    for sym in all {
-        let mut d = acct.borrow().fut_day.get(&sym).cloned().unwrap_or_else(|| FutDay::new(ds));
-        let mut trades = BTreeMap::new();
-        let mut swept: Vec<FillRec> = vec![];
-        let mut frm: Option<i64> = None;
-        loop {
-            let mut q: Params = params!["symbol" => sym, "limit" => 1000];
-            match frm {
-                Some(id) => q.push(("fromId".into(), id.to_string())),
-                None => q.push(("startTime".into(), ds.to_string())),
-            }
-            let r = rest.get_json("/fapi/v1/userTrades", &q, 5, true).await?;
-            let rows = r.as_array().ok_or_else(|| anyhow!("userTrades: not a list"))?;
-            for x in rows {
-                let ts = to_i(get(x, "time")?)?;
-                if ts < ds {
-                    continue;
-                }
-                let qty = f(x, "qty")?;
-                let mut fee = f(x, "commission")?;
-                let asset = s(x, "commissionAsset")?;
-                if !matches!(asset, "USDT" | "USDC")
-                    && let Some(m) = &market
-                {
-                    fee *= m.borrow_mut().asset_price(asset).unwrap_or(0.0);
-                }
-                let tid = to_i(get(x, "id")?)?;
-                let side = if s(x, "side")? == "BUY" { Side::Buy } else { Side::Sell };
-                trades.insert(tid, (ts, if side == Side::Buy { qty } else { -qty }, f(x, "price")?, fee));
-                // the fill itself, as the stream would have given it (same id: one the stream gave is not added again)
-                let mut fr = FillRec::new(format!("{aid}:usdm:{sym}:{tid}"), ts, aid.clone(), &sym, Venue::USDM, side,
-                                          f(x, "price")?, qty);
-                fr.fee = f(x, "commission")?;
-                fr.fee_asset = asset.to_string();
-                fr.maker = x.get("maker").is_some_and(truthy);
-                swept.push(fr);
-            }
-            match rows.last() {
-                Some(last) if rows.len() >= 1000 => frm = Some(to_i(get(last, "id")?)? + 1),
-                _ => break,
-            }
-        }
-        d.trades = trades;
-        d.funding = funding.get(&sym).copied().unwrap_or(0.0);
-        d.rest_t = rest_t;
-        if d.m0.is_none() {
-            let q: Params = params!["symbol" => sym, "interval" => "1m", "startTime" => ds, "limit" => 1];
-            let k = rest.get_json("/fapi/v1/markPriceKlines", &q, 1, false).await?;
-            if let Some(k0) = k.as_array().and_then(|k| k.first())
-                && to_i(&k0[0])? == ds
-            {
-                d.m0 = Some(to_f(&k0[1])?);
-            }
-        }
-        for fr in swept {
-            on_fill(fr);
-        }
-        // fills the stream added while REST was answering are newer than its list: kept
-        let mut a = acct.borrow_mut();
-        if let Some(cur) = a.fut_day.get(&sym).filter(|c| c.ds == d.ds) {
-            for (id, t) in &cur.trades {
-                d.trades.entry(*id).or_insert(*t);
-            }
-        }
-        a.fut_day.insert(sym, d);
-    }
-    Ok(())
-}
-
-pub async fn rate_limits(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    if acct.borrow().no_order_counts {
-        return Ok(());
-    }
-    let rows = match rest.get_json("/api/v3/rateLimit/order", &[], 40, true).await {
-        Ok(r) => r,
-        Err(e) if e.downcast_ref::<RestError>().is_some() => {
-            if !e.to_string().contains("-2015") {
-                return Err(e);
-            }
-            let id = acct.borrow().id.clone();
-            tracing::warn!("{id}: /api/v3/rateLimit/order refused (-2015, a read-only key): order counts from the user stream instead");
-            acct.borrow_mut().no_order_counts = true;   // this endpoint wants a trading key; read-only keys get -2015
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
-    let mut a = acct.borrow_mut();
-    for r in rows.as_array().ok_or_else(|| anyhow!("rateLimit/order: not a list"))? {
-        if s(r, "rateLimitType")? != "ORDERS" {
-            continue;
-        }
-        let count = match r.get("count") {
-            Some(v) => to_i(v)?,
-            None => 0,
-        };
-        match s(r, "interval")? {
-            "SECOND" => (a.orders_10s, a.orders_10s_limit) = (count, to_i(get(r, "limit")?)?),
-            "DAY" => (a.orders_1d, a.orders_1d_limit) = (count, to_i(get(r, "limit")?)?),
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-pub async fn open_orders(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let orders = rest.get_json("/api/v3/openOrders", &[], 80, true).await?;
-    let mut rows = vec![];
-    for o in orders.as_array().ok_or_else(|| anyhow!("openOrders: not a list"))? {
-        let created = first(o, &["time"]).map(to_i).transpose()?;
-        rows.push((s(o, "symbol")?.to_string(), id_str(get(o, "orderId")?), s(o, "side")?.to_string(), f(o, "price")?,
-                   f(o, "origQty")? - f(o, "executedQty")?, s(o, "status")?.to_string(), created));
-    }
-    let mut a = acct.borrow_mut();
-    a.open.retain(|k, _| !k.starts_with("spot:"));
-    for (sym, oid, side, price, left, status, created) in rows {
-        a.order_update(Venue::SPOT, &sym, &oid, &side, price, left, &status, created);
-    }
-    let Account { open, open_since, .. } = &mut *a;
-    open_since.retain(|k, _| open.contains_key(k));
-    Ok(())
-}
-
-/// One symbol per venue per lookup (hourly), rotating: the spot endpoint costs 20 weight a symbol.
-/// Until a venue has a symbol to ask about, its account-wide default rate stands in; so polled each
-/// minute, and a venue's hour counts from its first lookup.
-pub async fn commissions(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
-    let now = CLOCK.now();
-    let (spot, usdm, turn) = {
-        let mut a = acct.borrow_mut();
-        let (si, ui) = (Venue::SPOT.index(), Venue::USDM.index());
-        let mut spot: Vec<String> = if now >= a.fee_next[si] {
-            a.traded.iter().filter_map(|k| k.strip_prefix("spot:")).map(String::from).collect()
-        } else {
-            vec![]
-        };
-        spot.sort();
-        let mut usdm: Vec<String> = if !a.cfg.futures || now < a.fee_next[ui] {
-            vec![]
-        } else {
-            let mut set: HashSet<String> =
-                a.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(p, _)| p.clone()).collect();
-            set.extend(a.traded.iter().filter_map(|k| k.strip_prefix("usdm:")).map(String::from));
-            set.into_iter().collect()
-        };
-        usdm.sort();
-        if spot.is_empty() && usdm.is_empty() {
-            return Ok(());
-        }
-        let turn = a.fee_turn;
-        a.fee_turn += 1;
-        if !spot.is_empty() {
-            a.fee_next[si] = now + 3_600_000;
-        }
-        (spot, usdm, turn)
-    };
-    if !spot.is_empty() {
-        let sym = &spot[turn % spot.len()];
-        let r = rest.get_json("/api/v3/account/commission", &params!["symbol" => sym], 20, true).await?;
-        let parts: Vec<&Value> = ["standardCommission", "specialCommission", "taxCommission"]
-            .iter()
-            .map(|k| first(&r, &[k]).unwrap_or(&Value::Null))
-            .collect();
-        let sum = |k: &str| -> Result<f64> {
-            parts.iter().map(|p| p.get(k).map_or(Ok(0.0), to_f)).sum()
-        };
-        let (maker, taker) = (sum("maker")?, sum("taker")?);
-        acct.borrow_mut().set_fee(Venue::SPOT, sym, maker, taker, now);
-    }
-    if !usdm.is_empty() {
-        acct.borrow_mut().fee_next[Venue::USDM.index()] = now + 3_600_000;
-        let sym = &usdm[turn % usdm.len()];
-        let r = rest.get_json("/fapi/v1/commissionRate", &params!["symbol" => sym], 20, true).await?;
-        let (maker, taker) = (f(&r, "makerCommissionRate")?, f(&r, "takerCommissionRate")?);
-        acct.borrow_mut().set_fee(Venue::USDM, sym, maker, taker, now);
-    }
-    Ok(())
-}
-
-#[derive(Serialize)]
-struct LogonParams<'a> {
-    #[serde(rename = "apiKey")]
-    api_key: &'a str,
-    timestamp: i64,
-    signature: String,
-}
-
-fn status_msg(m: &Value) -> String {
-    m.get("error")
-        .and_then(|e| e.get("msg"))
-        .or_else(|| m.get("status"))
-        .map_or_else(|| "None".into(), id_str)
-}
-
-/// Spot user data over the WS API: `session.logon` (Ed25519) then subscribe, or a signed subscribe (HMAC).
-async fn spot_user(acct: AccountRef) {
-    let (feed, creds) = {
-        let a = acct.borrow();
-        (a.feeds[0].clone(), a.creds.clone().expect("spot user stream without credentials"))
-    };
-    let ws_ref: Rc<RefCell<Option<WsHandle>>> = Rc::default();
-    let w1 = ws_ref.clone();
-    let on_open = async move |ws: &mut WsConn| -> Result<()> {
-        *w1.borrow_mut() = Some(ws.handle());
-        let timestamp = CLOCK.now();
-        let payload = query(&[("apiKey", creds.api_key.clone()), ("timestamp", timestamp.to_string())]);
-        let params = LogonParams { api_key: &creds.api_key, timestamp, signature: creds.signer.sign(&payload) };
-        if creds.signer.kind() == "ed25519" {
-            ws_api_call(ws, "logon", "session.logon", Some(&params)).await?;
-            // subscribe only once logged on
-            let r = tokio::time::timeout(Duration::from_secs(10), ws.recv_text()).await.map_err(|_| anyhow!("session.logon: timeout"))??;
-            let r: Value = serde_json::from_str(&r)?;
-            if r.get("status").and_then(Value::as_i64) != Some(200) {
-                bail!("session.logon: {}", status_msg(&r));
-            }
-            ws_api_call(ws, "sub", "userDataStream.subscribe", None::<()>).await?;
-        } else {
-            ws_api_call(ws, "sub", "userDataStream.subscribe.signature", Some(&params)).await?;
-        }
-        Ok(())
-    };
-    let f2 = feed.clone();
-    let on_msg = move |raw: &str| {
-        let Ok(m) = serde_json::from_str::<Value>(raw) else { return };
-        let close = || {
-            if let Some(ws) = ws_ref.borrow().as_ref() {
-                ws.close();
-            }
-        };
-        if let Some(e) = m.get("event").filter(|e| !e.is_null()) {
-            if e.get("e").and_then(Value::as_str) == Some("eventStreamTerminated") {
-                f2.borrow_mut().error = "event stream terminated".into();
-                close();
-            } else if let Err(err) = acct.borrow_mut().on_spot_event(e) {
-                tracing::warn!("spot user event: {err:#}");
-            }
-        } else if m.get("status").and_then(Value::as_i64).unwrap_or(200) != 200 {
-            f2.borrow_mut().error = format!("{}: {}", m.get("id").map_or_else(|| "None".into(), id_str), status_msg(&m));
-            close();
-        }
-    };
-    run_ws(|| WS_API.to_string(), feed, on_msg, on_open, None).await;
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ListenKey {
-    listen_key: String,
-}
-
-#[derive(Default)]
-struct FutState {
-    key: String,
-    ws: Option<WsHandle>,
-}
-
-async fn new_key(rest: &Rest, feed: &FeedRef, state: &RefCell<FutState>) {
-    loop {
-        let r: Result<ListenKey> = rest.listen_key("POST").await;
-        match r {
-            Ok(k) => {
-                state.borrow_mut().key = k.listen_key;
-                return;
-            }
-            Err(e) => {
-                let d: String = format!("listenKey: {e:#}").chars().take(200).collect();
-                feed.borrow_mut().set_up(false, Some(&d));
-                tokio::time::sleep(Duration::from_secs(30)).await;
-            }
-        }
-    }
-}
-
-async fn renew(rest: Rest, feed: FeedRef, state: Rc<RefCell<FutState>>) {
-    new_key(&rest, &feed, &state).await;
-    let ws = state.borrow().ws.clone();
-    if let Some(ws) = ws {
-        ws.close();
-    }
-}
-
-async fn keepalive(rest: Rest, feed: FeedRef, state: Rc<RefCell<FutState>>) {
-    loop {
-        tokio::time::sleep(Duration::from_secs(1800)).await;
-        let r: Result<Value> = rest.listen_key("PUT").await;
-        if r.is_err() {
-            renew(rest.clone(), feed.clone(), state.clone()).await;
-        }
-    }
-}
-
-struct AbortOnDrop(JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// USD-M user data: listenKey stream, kept alive every 30 min, renewed when it expires.
-async fn fut_user(acct: AccountRef, rest: Rest) {
-    let feed = acct.borrow().feeds[1].clone();
-    let state: Rc<RefCell<FutState>> = Rc::default();
-    new_key(&rest, &feed, &state).await;
-    let _ka = AbortOnDrop(tokio::task::spawn_local(keepalive(rest.clone(), feed.clone(), state.clone())));
-    let s1 = state.clone();
-    let on_open = async move |ws: &mut WsConn| -> Result<()> {
-        s1.borrow_mut().ws = Some(ws.handle());
-        Ok(())
-    };
-    let (f2, s2) = (feed.clone(), state.clone());
-    let on_msg = move |raw: &str| {
-        let Ok(m) = serde_json::from_str::<Value>(raw) else { return };
-        if m.get("e").and_then(Value::as_str) == Some("listenKeyExpired") {
-            f2.borrow_mut().error = "listen key expired".into();
-            tokio::task::spawn_local(renew(rest.clone(), f2.clone(), s2.clone()));
-        } else if let Err(err) = acct.borrow_mut().on_fut_event(&m) {
-            tracing::warn!("usdm user event: {err:#}");
-        }
-    };
-    let s3 = state.clone();
-    run_ws(move || format!("{USDM_PRIVATE}{}", s3.borrow().key), feed, on_msg, on_open, None).await;
-}
-
-/// One universal transfer: (time, from email, to email, asset, amount), and its USD value, fixed when first
+/// One transfer: (time, from email, to email, asset, amount), and its USD value, fixed when first
 /// valued (the asset's price at the time, or the value of the stream move it confirms).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transfer {
@@ -1564,11 +808,27 @@ fn confirms(r: &Transfer, mv: &Move, email: &str) -> bool {
         && (if mv.d > 0.0 { r.to.to_lowercase() } else { r.frm.to_lowercase() }) == email
 }
 
+/// A past day's distributions, as a connector read them: each goes to on_dividend (the store keeps it), and the rebates
+/// are summed at the asset's price now (USDT at 1, another stablecoin at its USDT pair).
+pub fn past_rebates(acct: &AccountRef, rows: &[(String, Dividend)]) -> f64 {
+    let a = acct.borrow();
+    let mut m = a.market.as_ref().map(|m| m.borrow_mut());
+    let mut sum = 0.0;
+    for (id, d) in rows {
+        (a.on_dividend)(&a, id, d);
+        if d.rebate {
+            let px = m.as_mut().and_then(|m| m.asset_price(&d.asset)).or_else(|| STABLES.contains(&d.asset.as_str()).then_some(1.0));
+            sum += d.amount * px.unwrap_or(0.0);
+        }
+    }
+    sum
+}
+
 pub type TransfersRef = Rc<RefCell<Transfers>>;
 /// Called once per new transfer record (the store keeps them).
 pub type OnRecord = Rc<dyn Fn(&str, &Transfer)>;
 
-/// Master-key view: universal transfers since the day start, and the sub-account list.
+/// What the master's key sees: transfers since the day start, as a connector finds them.
 pub struct Transfers {
     pub loaded: bool,   // opening equity waits for the first history
     pub master: Option<AccountRef>,
@@ -1732,82 +992,13 @@ impl Transfers {
     }
 }
 
-pub async fn transfers_poll(t: &TransfersRef, rest: &impl RestGet, n: u64, day_start: &impl Fn() -> i64) -> Result<()> {
-    if n.is_multiple_of(60) {
-        let r = rest.get_json("/sapi/v1/sub-account/list", &params!["limit" => 200], 1, true).await?;
-        let empty = vec![];
-        let subs = r.get("subAccounts").and_then(Value::as_array).unwrap_or(&empty);
-        let frozen = subs.iter().filter(|s| s.get("isFreeze").is_some_and(truthy)).count();
-        t.borrow_mut().sub_info =
-            format!("{} sub-accounts", subs.len()) + &if frozen > 0 { format!(", {frozen} frozen") } else { String::new() };
-    }
-    let start = day_start();
-    let (master_email, froms) = {
-        let tb = t.borrow();
-        let master_email = tb.master.as_ref().map(|m| m.borrow().email.clone()).unwrap_or_default();
-        let mut froms: Vec<Option<String>> = vec![None];
-        for a in &tb.accounts {
-            let a = a.borrow();
-            if !a.email.is_empty() && a.role == Role::Sub {
-                froms.push(Some(a.email.clone()));
-            }
-        }
-        (master_email, froms)
-    };
-    for frm in froms {
-        let mut p: Params = params!["startTime" => start, "endTime" => CLOCK.now(), "limit" => 500];
-        if let Some(frm) = frm {
-            p.push(("fromEmail".into(), frm));
-        }
-        let r = rest.get_json("/sapi/v1/sub-account/universalTransfer", &p, 1, true).await?;
-        let mut tb = t.borrow_mut();
-        for x in r.get("result").and_then(Value::as_array).into_iter().flatten() {
-            if x.get("status").and_then(Value::as_str).unwrap_or("SUCCESS") != "SUCCESS" {
-                continue;
-            }
-            let email = |k: &str| first(x, &[k]).and_then(Value::as_str).map_or_else(|| master_email.clone(), String::from);
-            let rec = Transfer {
-                ts: to_i(get(x, "createTimeStamp")?)?,
-                frm: email("fromEmail"),
-                to: email("toEmail"),
-                asset: s(x, "asset")?.to_string(),
-                amount: f(x, "amount")?,
-                usd: None,
-            };
-            tb.add(&id_str(get(x, "tranId")?), rec);
-        }
-    }
-    let mut tb = t.borrow_mut();
-    tb.feed.borrow_mut().hit(1);
-    tb.loaded = true;
-    let d = format!("{} transfers today; {}", tb.records.len(), tb.sub_info);
-    tb.feed.borrow_mut().set_up(true, Some(&d));
-    Ok(())
-}
-
-/// Poll the transfer history every minute (the sub-account list hourly); `rest` carries the master's key.
-pub async fn run_transfers(t: TransfersRef, rest: Rest, day_start: impl Fn() -> i64) {
-    let ok = t.borrow().master.as_ref().is_some_and(|m| m.borrow().creds.is_some());
-    if !ok {
-        return;
-    }
-    let mut n = 0u64;
-    loop {
-        if let Err(e) = transfers_poll(&t, &rest, n, &day_start).await {
-            let feed = t.borrow().feed.clone();
-            feed.borrow_mut().set_up(false, Some(&err_text(&e)));
-        }
-        n += 1;
-        tokio::time::sleep(Duration::from_secs(60)).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::events::{apply_fut_snapshot, apply_spot_snapshot, on_fut_event, on_spot_event};
     use crate::market::{BookTicker, Info, SymbolInfo};
     use approx::assert_relative_eq;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn info(spot: &[(&str, SymbolInfo)]) -> Info {
         let mut i = Info::new();
@@ -1854,17 +1045,17 @@ mod tests {
     #[test]
     fn snapshot_read_before_fill_applied_after_does_not_double_count() {
         let (mut a, m) = acct();
-        a.apply_spot_snapshot(&snap(50, 1.0, 900.0)).unwrap();
+        apply_spot_snapshot(&mut a, &snap(50, 1.0, 900.0)).unwrap();
         assert_relative_eq!(eq(&a, &m), 1000.0);
         let stale = snap(100, 1.0, 900.0);   // read now ...
-        a.on_spot_event(&pos(200, &[("X", 0.0, 0.0), ("USDT", 1000.0, 0.0)])).unwrap();   // ... the fill on the stream
+        on_spot_event(&mut a, &pos(200, &[("X", 0.0, 0.0), ("USDT", 1000.0, 0.0)])).unwrap();   // ... the fill on the stream
         assert_relative_eq!(eq(&a, &m), 1000.0);
-        a.apply_spot_snapshot(&stale).unwrap();   // ... applied late
+        apply_spot_snapshot(&mut a, &stale).unwrap();   // ... applied late
         assert_relative_eq!(eq(&a, &m), 1000.0);
         assert!(a.balances.get("X").is_none_or(|x| *x == (0.0, 0.0)));
-        a.on_spot_event(&pos(300, &[("USDT", 950.0, 50.0)])).unwrap();
+        on_spot_event(&mut a, &pos(300, &[("USDT", 950.0, 50.0)])).unwrap();
         assert_relative_eq!(eq(&a, &m), 1000.0);
-        a.apply_spot_snapshot(&json!({"updateTime": 300, "balances": [{"asset": "USDT", "free": "950", "locked": "50"}]}))
+        apply_spot_snapshot(&mut a, &json!({"updateTime": 300, "balances": [{"asset": "USDT", "free": "950", "locked": "50"}]}))
             .unwrap();
         assert_eq!(a.balances, HashMap::from([("USDT".to_string(), (950.0, 50.0))]));
         assert_relative_eq!(eq(&a, &m), 1000.0);
@@ -1873,10 +1064,10 @@ mod tests {
     #[test]
     fn stream_event_older_than_snapshot_is_dropped() {
         let (mut a, _m) = acct();
-        a.apply_spot_snapshot(&snap(500, 2.0, 800.0)).unwrap();
-        a.on_spot_event(&pos(400, &[("X", 1.0, 0.0), ("USDT", 900.0, 0.0)])).unwrap();
+        apply_spot_snapshot(&mut a, &snap(500, 2.0, 800.0)).unwrap();
+        on_spot_event(&mut a, &pos(400, &[("X", 1.0, 0.0), ("USDT", 900.0, 0.0)])).unwrap();
         assert!(a.balances["X"] == (2.0, 0.0) && a.balances["USDT"] == (800.0, 0.0));
-        a.on_spot_event(&pos(500, &[("X", 3.0, 0.0)])).unwrap();   // same update time: absolute values, applied
+        on_spot_event(&mut a, &pos(500, &[("X", 3.0, 0.0)])).unwrap();   // same update time: absolute values, applied
         assert_eq!(a.balances["X"], (3.0, 0.0));
     }
 
@@ -1897,25 +1088,25 @@ mod tests {
     #[test]
     fn futures_snapshot_does_not_overwrite_newer_stream_position_or_wallet() {
         let (mut a, _m) = acct();
-        a.apply_fut_snapshot(&fut(&[("YUSDT", 5.0, 100)], (1000.0, 100), 1003.0), 150).unwrap();
+        apply_fut_snapshot(&mut a, &fut(&[("YUSDT", 5.0, 100)], (1000.0, 100), 1003.0), 150).unwrap();
         assert!(a.positions["YUSDT"].0 == 5.0);
         assert_relative_eq!(a.fut_wallet, 1003.0);
         let stale = fut(&[("YUSDT", 5.0, 100)], (1000.0, 100), 1003.0);   // read at 300 ...
-        a.on_fut_event(&acct_update(400, Some(998.0), &[("YUSDT", 2.0), ("ZUSDT", -1.0)])).unwrap();   // ... a fill at 400
+        on_fut_event(&mut a, &acct_update(400, Some(998.0), &[("YUSDT", 2.0), ("ZUSDT", -1.0)])).unwrap();   // ... a fill at 400
         assert!(a.positions["YUSDT"].0 == 2.0);
         assert_relative_eq!(a.fut_wallet, 1001.0);
-        a.apply_fut_snapshot(&stale, 300).unwrap();
+        apply_fut_snapshot(&mut a, &stale, 300).unwrap();
         assert!(a.positions["YUSDT"].0 == 2.0 && a.positions["ZUSDT"].0 == -1.0);
         assert_relative_eq!(a.fut_wallet, 1001.0);
         // a later snapshot that saw the fill wins, and drops what it no longer lists
-        a.apply_fut_snapshot(&fut(&[("YUSDT", 2.0, 400)], (998.0, 400), 1001.5), 500).unwrap();
+        apply_fut_snapshot(&mut a, &fut(&[("YUSDT", 2.0, 400)], (998.0, 400), 1001.5), 500).unwrap();
         assert_eq!(a.positions.len(), 1);
         assert_eq!(a.positions["YUSDT"].0, 2.0);
         assert_relative_eq!(a.positions["YUSDT"].1, 10.0);
         assert_relative_eq!(a.fut_wallet, 1001.5);
         // a stream value a minute older than the request no longer pins anything
-        a.on_fut_event(&acct_update(600, None, &[("YUSDT", 7.0)])).unwrap();
-        a.apply_fut_snapshot(&fut(&[("YUSDT", 3.0, 0)], (998.0, 0), 1001.5), 70_000).unwrap();
+        on_fut_event(&mut a, &acct_update(600, None, &[("YUSDT", 7.0)])).unwrap();
+        apply_fut_snapshot(&mut a, &fut(&[("YUSDT", 3.0, 0)], (998.0, 0), 1001.5), 70_000).unwrap();
         assert_eq!(a.positions["YUSDT"].0, 3.0);
     }
 
@@ -2034,7 +1225,7 @@ mod tests {
         bnb(&mut m, 1_000, 750.0);
         let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
         let mut t = Transfers::new(None, vec![a.clone()]);
-        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
+        on_spot_event(&mut a.borrow_mut(), &json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
         t.value(&mut m, 2_000);
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -3750.0);
         let d = t.desk_flows(0);
@@ -2047,7 +1238,7 @@ mod tests {
         assert!(d.len() == 1 && d[0].key == "t:1" && d[0].qty == -5.0);
         assert_relative_eq!(d[0].px, 750.0);
         // an unconfirmed move drops after MOVE_HOLD_MS, from Day PnL and from the desk's flows alike
-        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "2", "T": 70_000})).unwrap();
+        on_spot_event(&mut a.borrow_mut(), &json!({"e": "balanceUpdate", "a": "BNB", "d": "2", "T": 70_000})).unwrap();
         t.value(&mut m, 71_000);
         assert_eq!(t.desk_flows(0).len(), 2);
         t.value(&mut m, 70_000 + MOVE_HOLD_MS);
@@ -2063,8 +1254,8 @@ mod tests {
         let b = Account::new(cfg("b", "b@x.io"), None, "").shared();
         let mut t = Transfers::new(None, vec![a.clone(), b.clone()]);
         // seen on both streams first, then in the history
-        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
-        b.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "BNB", "d": "5", "T": 1_000})).unwrap();
+        on_spot_event(&mut a.borrow_mut(), &json!({"e": "balanceUpdate", "a": "BNB", "d": "-5", "T": 1_000})).unwrap();
+        on_spot_event(&mut b.borrow_mut(), &json!({"e": "balanceUpdate", "a": "BNB", "d": "5", "T": 1_000})).unwrap();
         t.value(&mut m, 2_000);
         let d = t.desk_flows(0);
         assert_relative_eq!(d.iter().map(|f| f.qty * f.px).sum::<f64>(), 0.0);
@@ -2138,47 +1329,6 @@ mod tests {
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -7550.0);
     }
 
-    struct FakeRest {
-        calls: RefCell<Vec<(String, String, i64)>>,
-    }
-
-    impl RestGet for FakeRest {
-        async fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, _signed: bool) -> Result<Value> {
-            let sym = params.iter().find(|(k, _)| k == "symbol").map(|x| x.1.clone()).unwrap();
-            self.calls.borrow_mut().push((path.into(), sym, weight));
-            Ok(json!({"standardCommission": {"maker": "0.0001", "taker": "0.0002"}}))
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn resting_notional_and_commission_rotation() {
-        let a = Account::new(cfg("a", ""), None, "").shared();
-        let r = FakeRest { calls: RefCell::new(vec![]) };
-        commissions(&a, &r).await.unwrap();   // no symbol seen yet: waits, the default rate stands
-        assert!(a.borrow().fee_next[Venue::SPOT.index()] == 0 && r.calls.borrow().is_empty());
-        {
-            let mut a = a.borrow_mut();
-            a.order_update(Venue::SPOT, "XUSDT", "1", "BUY", 10.0, 3.0, "NEW", None);
-            a.order_update(Venue::SPOT, "XUSDT", "2", "SELL", 12.0, 1.0, "PARTIALLY_FILLED", None);
-            a.order_update(Venue::SPOT, "YUSDT", "3", "BUY", 5.0, 2.0, "NEW", None);
-            a.order_update(Venue::SPOT, "YUSDT", "3", "BUY", 5.0, 0.0, "FILLED", None);
-            assert_eq!(a.resting(), (30.0, 12.0));
-        }
-        for _ in 0..3 {
-            commissions(&a, &r).await.unwrap();
-            commissions(&a, &r).await.unwrap();   // within the hour: no lookup
-            a.borrow_mut().fee_next[Venue::SPOT.index()] = 0;
-        }
-        let syms: Vec<String> = r.calls.borrow().iter().map(|c| c.1.clone()).collect();
-        assert_eq!(syms, ["XUSDT", "YUSDT", "XUSDT"]);   // one symbol per poll, rotating
-        assert!(r.calls.borrow().iter().all(|c| c.0 == "/api/v3/account/commission" && c.2 == 20));
-        let rows = a.borrow().fee_rows();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].venue.is_spot() && !rows[0].changed);
-        assert_relative_eq!(rows[0].maker_bps, 1.0);
-        assert_relative_eq!(rows[0].taker_bps, 2.0);
-    }
-
     #[test]
     fn fee_change_holds_a_day_then_becomes_the_baseline() {
         type Log = Rc<RefCell<Vec<String>>>;
@@ -2239,67 +1389,14 @@ mod tests {
         assert!(!c.fee_rows()[0].changed);
     }
 
-    struct DivRest(Value);
-
-    impl RestGet for DivRest {
-        async fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, _signed: bool) -> Result<Value> {
-            assert_eq!((path, weight), ("/sapi/v1/asset/assetDividend", 10));
-            assert_eq!(params[0], ("startTime".to_string(), "3600000".to_string()));
-            Ok(self.0.clone())
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn dividends_book_the_day_rebates() {
-        let (mut a, m) = acct();
-        let kept: Rc<RefCell<Vec<String>>> = Rc::default();
-        let k2 = kept.clone();
-        a.on_dividend = Rc::new(move |_, id, _| k2.borrow_mut().push(id.to_string()));
-        let a = a.shared();
-        let row = |id: i64, t: i64, asset: &str, amount: &str, info: &str| {
-            json!({"id": id, "tranId": id * 10, "asset": asset, "amount": amount, "divTime": t, "enInfo": info})
-        };
-        let r = DivRest(json!({"rows": [
-            row(1, 3_700_000, "USDT", "0.25", "Spot MM Rebate-Spot 26-10-15 07:00"),
-            row(2, 7_300_000, "USDT", "0.5", "Spot MM Rebate-Spot 26-10-15 08:00"),
-            row(3, 7_300_000, "X", "2", "Launchpool distribution"),
-        ], "total": 3}));
-        dividends(&a, &r).await.unwrap();   // the desk has not set the day: nothing asked
-        assert!(a.borrow().dividends.is_empty());
-        a.borrow_mut().day_start = 3_600_000;
-        dividends(&a, &r).await.unwrap();
-        dividends(&a, &r).await.unwrap();   // the same rows again: kept once
-        assert_eq!(*kept.borrow(), ["1", "2", "3"]);
-        // the distribution of X is kept but is not a rebate
-        assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.75);
-        a.borrow_mut().day_start = 7_000_000;
-        assert_relative_eq!(a.borrow().rebates(&mut m.borrow_mut()), 0.5);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_past_day_sums_its_rebates_and_keeps_every_row() {
-        let (mut a, _m) = acct();
-        let kept: Rc<RefCell<Vec<String>>> = Rc::default();
-        let k2 = kept.clone();
-        a.on_dividend = Rc::new(move |_, id, _| k2.borrow_mut().push(id.to_string()));
-        let a = a.shared();
-        let r = DivRest(json!({"rows": [
-            {"id": 1, "asset": "USDT", "amount": "0.25", "divTime": 3_700_000, "enInfo": "Spot MM Rebate-Spot 26-10-13 07:00"},
-            {"id": 2, "asset": "X", "amount": "2", "divTime": 3_800_000, "enInfo": "Launchpool distribution"},
-        ]}));
-        assert_relative_eq!(rebates_between(&a, &r, 3_600_000, 3_600_000 + 86_400_000).await.unwrap(), 0.25);
-        assert_eq!(*kept.borrow(), ["1", "2"]);
-        assert!(a.borrow().dividends.is_empty());   // a past day's rows do not count today
-    }
-
     #[test]
     fn stream_moves_count_until_history_confirms() {
         let mut m = Market::new(info(&[]), 120.0, 100.0);
         let a = Account::new(cfg("a", "a@x.io"), None, "").shared();
         let b = Account::new(cfg("b", "b@x.io"), None, "").shared();
         let mut t = Transfers::new(None, vec![a.clone(), b.clone()]);
-        a.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "USDT", "d": "-363", "T": 1_000})).unwrap();
-        b.borrow_mut().on_spot_event(&json!({"e": "balanceUpdate", "a": "USDT", "d": "363", "T": 1_000})).unwrap();
+        on_spot_event(&mut a.borrow_mut(), &json!({"e": "balanceUpdate", "a": "USDT", "d": "-363", "T": 1_000})).unwrap();
+        on_spot_event(&mut b.borrow_mut(), &json!({"e": "balanceUpdate", "a": "USDT", "d": "363", "T": 1_000})).unwrap();
         // before the history poll: the move is already out of both accounts' PnL
         t.value(&mut m, 2_000);
         assert_relative_eq!(t.net_in_live(&a.borrow(), 0), -363.0);
@@ -2353,7 +1450,7 @@ mod tests {
         // funding on the stream: the balance only, no symbol; the one position held takes it
         let ev = |t: i64, bc: &str| json!({"e": "ACCOUNT_UPDATE", "E": t, "T": t, "a": {"m": "FUNDING_FEE",
             "B": [{"a": "USDT", "wb": "1000", "cw": "1000", "bc": bc}]}});
-        a.on_fut_event(&ev(3_000, "0.7")).unwrap();
+        on_fut_event(&mut a, &ev(3_000, "0.7")).unwrap();
         assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
         // the next REST pass has it: counted once
         let d = a.fut_day.get_mut("XUSDT").unwrap();
@@ -2361,7 +1458,7 @@ mod tests {
         assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
         // with two positions held the stream cannot tell whose it is: REST books it
         a.positions.insert("YUSDT".into(), (1.0, 10.0));
-        a.on_fut_event(&ev(5_000, "1.0")).unwrap();
+        on_fut_event(&mut a, &ev(5_000, "1.0")).unwrap();
         assert_relative_eq!(a.fut_leg(&m, "XUSDT").funding, -1.5 + 0.7);
     }
 
@@ -2377,7 +1474,7 @@ mod tests {
         let mut d = FutDay::new(1_000);
         d.m0 = Some(100.0);
         a.fut_day.insert("XUSDT".into(), d);
-        a.on_fut_event(&json!({"e": "ORDER_TRADE_UPDATE", "E": 2_001, "T": 2_000, "o": {"s": "XUSDT", "S": "SELL", "i": 9,
+        on_fut_event(&mut a, &json!({"e": "ORDER_TRADE_UPDATE", "E": 2_001, "T": 2_000, "o": {"s": "XUSDT", "S": "SELL", "i": 9,
             "p": "90", "q": "2", "z": "2", "X": "FILLED", "x": "TRADE", "t": 77, "L": "90", "l": "2", "n": "0.07",
             "N": "USDT", "m": false, "T": 2_000}})).unwrap();
         a.positions.insert("XUSDT".into(), (-2.0, 90.0));
@@ -2399,11 +1496,11 @@ mod tests {
         let mut a = Account::new(cfg("a", ""), None, "");
         a.on_fill = Rc::new(move |f| g.borrow_mut().push(f));
         a.no_order_counts = true;
-        a.on_spot_event(&json!({"e": "executionReport", "E": 1_000, "s": "XUSDT", "S": "BUY", "x": "NEW", "X": "NEW",
+        on_spot_event(&mut a, &json!({"e": "executionReport", "E": 1_000, "s": "XUSDT", "S": "BUY", "x": "NEW", "X": "NEW",
                                 "i": 7, "p": "10", "q": "2", "z": "0", "O": 900})).unwrap();
         assert_eq!(a.orders_10s, 1);
         assert_eq!(a.open_since["spot:7"], 900);
-        a.on_spot_event(&json!({"e": "executionReport", "E": 1_100, "s": "XUSDT", "S": "BUY", "x": "TRADE", "X": "FILLED",
+        on_spot_event(&mut a, &json!({"e": "executionReport", "E": 1_100, "s": "XUSDT", "S": "BUY", "x": "TRADE", "X": "FILLED",
                                 "i": 7, "p": "10", "q": "2", "z": "2", "t": 55, "T": 1_050, "L": "10", "l": "2",
                                 "n": "0.001", "N": "BNB", "m": true})).unwrap();
         assert!(a.open.is_empty() && a.open_since.is_empty());

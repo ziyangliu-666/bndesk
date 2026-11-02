@@ -7,11 +7,16 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::rc::Rc;
 
 use anyhow::Result;
-use desk::accounts::{self as ac, Account, AccountRef, Dividend, RestGet, Transfer, Transfers, TransfersRef};
-use desk::binance::rest::{CLOCK, RestError};
+use desk::accounts::{self as ac, Account, AccountRef, Dividend, Transfer, Transfers, TransfersRef};
+use desk::binance::account::{self as bn, Passes, commissions, dividends, fut_account, fut_today, master_fut, master_spot, open_orders, rate_limits,
+                             spot_account, spot_trades};
+use desk::binance::events as ev;
+use desk::binance::public::{parse_exchange_info, parse_order_limits};
+use desk::binance::rest::{RestError, RestGet};
+use desk::clock::CLOCK;
 use desk::config::{AccountCfg, Config, MarketCfg, Ref};
 use desk::fills::{FillBook, FillRec};
-use desk::market::{Info, Market, Venue, parse_exchange_info, parse_order_limits};
+use desk::market::{Info, Market, Venue};
 use desk::metrics as me;
 use desk::pnl::PnlBook;
 use desk::protocol::{self as P, Role};
@@ -21,11 +26,11 @@ use serde_json::{Value, json};
 // ---- how the session reaches the desk: all of Binance's JSON goes in through these ----
 
 fn spot_event(a: &AccountRef, e: &Value) {
-    a.borrow_mut().on_spot_event(e).unwrap();
+    ev::on_spot_event(&mut a.borrow_mut(), e).unwrap();
 }
 
 fn fut_event(a: &AccountRef, e: &Value) {
-    a.borrow_mut().on_fut_event(e).unwrap();
+    ev::on_fut_event(&mut a.borrow_mut(), e).unwrap();
 }
 
 fn book(m: &Rc<RefCell<Market>>, venue: Venue, raw: &str) {
@@ -48,41 +53,8 @@ fn limits(spot: &Value) -> Value {
     json!([a, b])
 }
 
-async fn spot_account(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::spot_account(a, r).await
-}
-async fn fut_account(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::fut_account(a, r).await
-}
-async fn rate_limits(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::rate_limits(a, r).await
-}
-async fn open_orders(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::open_orders(a, r).await
-}
-async fn commissions(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::commissions(a, r).await
-}
-async fn spot_trades(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::spot_trades(a, r).await
-}
-async fn fut_today(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::fut_today(a, r).await
-}
-async fn dividends(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::dividends(a, r).await
-}
 async fn rebates_between(a: &AccountRef, r: &Script, from: i64, to: i64) -> Result<f64> {
-    ac::rebates_between(a, r, from, to).await
-}
-async fn master_spot(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::master_spot(a, r).await
-}
-async fn master_fut(a: &AccountRef, r: &Script) -> Result<()> {
-    ac::master_fut(a, r).await
-}
-async fn transfers_poll(t: &TransfersRef, r: &Script, n: u64, ds: i64) -> Result<()> {
-    ac::transfers_poll(t, r, n, &move || ds).await
+    Ok(ac::past_rebates(a, &bn::distributions(r, from, to).await?))
 }
 
 // ---- the script ----
@@ -343,6 +315,7 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
     }
     let (mm, sub, via) = (by_id["mm"].clone(), by_id["sub"].clone(), by_id["via"].clone());
     via.borrow_mut().use_master();
+    let mm_passes = Passes::new(mm.clone());
     let master = Account::new(AccountCfg::new("master", "master", "master@x.io", Role::Master), None, "").shared();
     let transfers: TransfersRef = {
         let mut tr = Transfers::new(Some(master), accounts.clone());
@@ -415,8 +388,8 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
     // commissions: the account's default until a symbol is seen, one symbol per venue per hour, rotating
     r.on("/api/v3/account/commission", json!({"standardCommission": {"maker": "0.0001", "taker": "0.0002"}, "taxCommission": {"maker": "0.00001", "taker": "0"}, "specialCommission": {}}));
     r.on("/fapi/v1/commissionRate", json!({"makerCommissionRate": "0.0002", "takerCommissionRate": "0.0005"}));
-    commissions(&mm, &r).await.unwrap();
-    commissions(&mm, &r).await.unwrap();
+    commissions(&mm_passes, &r).await.unwrap();
+    commissions(&mm_passes, &r).await.unwrap();
     CLOCK.set_fixed(Some(t(1)));
 
     // the user streams
@@ -482,7 +455,7 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
     for _ in 0..4 {
         r.on("/sapi/v1/sub-account/universalTransfer", rows.clone());
     }
-    transfers_poll(&transfers, &r, 0, D).await.unwrap();
+    bn::transfers_poll(&transfers, &r, 0, &|| D).await.unwrap();
     let feed = transfers.borrow().feed.clone();
     let feed = (feed.borrow().up, feed.borrow().detail.clone(), feed.borrow().msgs);
     out.push(json!({"transfers_feed": feed, "sub_info": transfers.borrow().sub_info, "loaded": transfers.borrow().loaded}));
@@ -495,7 +468,7 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
         {"id": 400, "time": D - 10, "isBuyer": false, "price": "1", "qty": "1", "commission": "0", "commissionAsset": "USDT", "isMaker": false}]));
     r.refuse("/api/v3/myTrades", 400, r#"{"code":-1121,"msg":"Invalid symbol."}"#);
     r.on("/api/v3/myTrades", json!([]));
-    errors.push(format!("{:#}", spot_trades(&mm, &r).await.unwrap_err()));
+    errors.push(format!("{:#}", spot_trades(&mm_passes, &r).await.unwrap_err()));
     r.on("/sapi/v1/asset/assetDividend", json!({"rows": [
         {"id": 31, "divTime": t(4), "asset": "USDT", "amount": "0.25", "enInfo": "Spot MM Rebate-Spot 26-10-15 07:00"},
         {"id": 32, "divTime": t(5), "asset": "BNB", "amount": "0.001", "enInfo": "Spot MM Rebate-Spot 26-10-15 08:00"},
@@ -524,10 +497,10 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
     // fee changes held across the session
     tick(t(13), 102.0, 102.2);
     CLOCK.set_fixed(Some(t(70)));
-    mm.borrow_mut().fee_next = [0, 0];
+    mm_passes.commissions_due();
     r.on("/api/v3/account/commission", json!({"standardCommission": {"maker": "0.0003", "taker": "0.0004"}}));
     r.on("/fapi/v1/commissionRate", json!({"makerCommissionRate": "0.0001", "takerCommissionRate": "0.0005"}));
-    commissions(&mm, &r).await.unwrap();
+    commissions(&mm_passes, &r).await.unwrap();
     out.push(s.figures(t(71)));
     tick(t(72), 103.0, 103.1);
     out.push(s.figures(t(80)));

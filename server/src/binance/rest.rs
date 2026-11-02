@@ -9,7 +9,7 @@ pub use crate::clock::{CLOCK, TimeSync};
 use crate::clock::now_s;
 use crate::feeds::FeedRef;
 
-use super::sign::{Credentials, query, quote};
+use crate::sign::{Credentials, query, quote};
 use super::weight::{Governor, Governors};
 
 pub const SPOT: &str = "https://api.binance.com";
@@ -18,12 +18,7 @@ pub const FAPI: &str = "https://fapi.binance.com";
 /// The only non-GET calls the monitor makes: creating and keeping alive a USD-M listen key.
 pub const ALLOWED_WRITES: [(&str, &str); 2] = [("POST", "/fapi/v1/listenKey"), ("PUT", "/fapi/v1/listenKey")];
 
-#[derive(Debug, thiserror::Error)]
-#[error("HTTP {status}: {}", body.chars().take(200).collect::<String>())]
-pub struct RestError {
-    pub status: u16,
-    pub body: String,
-}
+pub use crate::connector::RestError;
 
 /// Python's PermissionError for a write the read-only monitor refuses.
 #[derive(Debug, thiserror::Error)]
@@ -126,6 +121,17 @@ impl Rest {
             return Err(RestError { status, body: String::from_utf8_lossy(&body).into_owned() }.into());
         }
         Ok(serde_json::from_slice(&body)?)
+    }
+}
+
+/// The REST GETs an account makes (a fake in tests).
+pub trait RestGet {
+    fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, signed: bool) -> impl std::future::Future<Output = anyhow::Result<serde_json::Value>>;
+}
+
+impl RestGet for Rest {
+    async fn get_json(&self, path: &str, params: &[(String, String)], weight: i64, signed: bool) -> anyhow::Result<serde_json::Value> {
+        self.get(path, params, weight, signed).await
     }
 }
 

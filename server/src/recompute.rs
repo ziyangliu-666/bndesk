@@ -271,8 +271,8 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
     let spot: serde_json::Value = rest.get("/api/v3/exchangeInfo", &[], 20, false).await?;
     let usdm: serde_json::Value = rest.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
     let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::SPOT, crate::market::parse_exchange_info(&spot));
-    info.insert(Venue::USDM, crate::market::parse_exchange_info(&usdm));
+    info.insert(Venue::SPOT, crate::binance::public::parse_exchange_info(&spot));
+    info.insert(Venue::USDM, crate::binance::public::parse_exchange_info(&usdm));
     let market = Rc::new(RefCell::new(Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps)));
     {
         let mut m = market.borrow_mut();

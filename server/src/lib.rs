@@ -5,6 +5,8 @@ pub mod protocol;
 pub mod beta;
 pub mod config;
 pub mod sessions;
+pub mod sign;
+pub mod connector;
 pub mod binance;
 pub mod market;
 pub mod fills;

@@ -12,7 +12,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::accounts::{Account, AccountRef, MarketRef, OnFill, Open, Transfer, TransfersRef};
 use crate::app::Desk;
-use crate::binance::rest::CLOCK;
+use crate::clock::CLOCK;
 use crate::config::{AccountCfg, MarketCfg, Ref};
 use crate::feeds::now_ms;
 use crate::fills::FillRec;

@@ -19,8 +19,10 @@ use crate::accounts::{self, Account, AccountRef, Dividend, MarketRef, OnDividend
 use crate::alerts::Alerts;
 use crate::backfill;
 use crate::beta::Betas;
+use crate::binance::account as binance_account;
+use crate::binance::public::{ORDER_LIMITS, parse_exchange_info, parse_order_limits};
 use crate::binance::rest::{CLOCK, RESYNC, Rest, client, governors, sync_time};
-use crate::binance::sign::credentials;
+use crate::sign::credentials;
 use crate::binance::weight::Governors;
 use crate::binance::ws::{SPOT_STREAM, StreamMux, USDM_MARKET, USDM_PUBLIC};
 use crate::clock::now_s;
@@ -28,7 +30,7 @@ use crate::config::{self as C, Config};
 use crate::engine::{self, EngineScraper, EngineScraperRef};
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::{FillBook, FillRec};
-use crate::market::{BookTicker, Info, Inst, Market, parse_exchange_info};
+use crate::market::{BookTicker, Info, Inst, Market};
 use crate::metrics::{
     FillAgg, HOUR, MmSplit, account_row, aggregate, mm_split, beta_weighted_spot, exposure, hedge_day, inventory_assets, markout_stats,
     open_orders, symbol_rows,
@@ -584,7 +586,8 @@ impl Desk {
             let pre = format!("{}:", a.id);
             for r in data.dividends.iter().filter(|r| r.id.starts_with(&pre)) {
                 let id = r.id[pre.len()..].to_string();
-                a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone() });
+                a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone(),
+                                                  rebate: binance_account::is_rebate(&r.info) });
             }
             if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
@@ -1223,8 +1226,8 @@ async fn bootstrap(http: &reqwest::Client, govs: &Governors, feed: &FeedRef, cfg
                 feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", CLOCK.offset_ms())));
                 let mut info: Info = HashMap::new();
                 info.insert(Venue::SPOT, parse_exchange_info(&spot));
-                if let (Some(s10), Some(day)) = crate::market::parse_order_limits(&spot) {
-                    let _ = crate::market::ORDER_LIMITS.set((s10, day));
+                if let (Some(s10), Some(day)) = parse_order_limits(&spot) {
+                    let _ = ORDER_LIMITS.set((s10, day));
                     info!("spot order limits from exchangeInfo: {s10} per 10 s, {day} per day");
                 }
                 info.insert(Venue::USDM, parse_exchange_info(&usdm));
@@ -1379,8 +1382,8 @@ async fn rebate_days(desk: DeskRef, keyed: Vec<(AccountRef, Rest)>) {
         let mut sum = 0.0;
         let mut all = true;
         for (a, rest) in &keyed {
-            match accounts::rebates_between(a, rest, ds, ds + DAY).await {
-                Ok(x) => sum += x,
+            match binance_account::distributions(rest, ds, ds + DAY).await {
+                Ok(rows) => sum += accounts::past_rebates(a, &rows),
                 Err(e) => {
                     warn!("rebates of {day}, {}: {e:#}", a.borrow().id);
                     all = false;
@@ -1456,10 +1459,10 @@ pub async fn run(mut cfg: Config) -> Result<()> {
                     (ab.via_master, ab.creds.clone(), ab.rest_feed.clone())
                 };
                 if via && let Some(mc) = &master_creds {
-                    tasks.extend(accounts::start_via_master(a, Rest::new(http.clone(), govs.clone(), Some(mc.clone()), Some(feed)),
+                    tasks.extend(binance_account::start_via_master(a, Rest::new(http.clone(), govs.clone(), Some(mc.clone()), Some(feed)),
                                                             i as f64 * 3.0));
                 } else {
-                    tasks.extend(accounts::start(a, Rest::new(http.clone(), govs.clone(), creds, Some(feed))));
+                    tasks.extend(binance_account::start(a, Rest::new(http.clone(), govs.clone(), creds, Some(feed))));
                 }
             }
             if let Some(mc) = master_creds {
@@ -1467,7 +1470,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
                 let feed = t.borrow().feed.clone();
                 let ds = d.day_start.clone();
                 let rest = Rest::new(http.clone(), govs.clone(), Some(mc), Some(feed));
-                tasks.push(tokio::task::spawn_local(accounts::run_transfers(t, rest, move || ds.get())));
+                tasks.push(tokio::task::spawn_local(binance_account::run_transfers(t, rest, move || ds.get())));
             }
         }
         for e in &d.engines {
