@@ -1114,7 +1114,7 @@ pub fn start_via_master(acct: &AccountRef, master_rest: Rest, delay: f64) -> Vec
     ]
 }
 
-async fn master_spot(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn master_spot(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let email = acct.borrow().email.clone();
     let r = rest.get_json("/sapi/v3/sub-account/assets", &params!["email" => email], 60, true).await?;
     let mut rows = vec![];
@@ -1127,7 +1127,7 @@ async fn master_spot(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
-async fn master_fut(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn master_fut(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let email = acct.borrow().email.clone();
     let q: Params = params!["email" => email, "futuresType" => 1];
     let r = rest.get_json("/sapi/v2/sub-account/futures/account", &q, 10, true).await?;
@@ -1163,7 +1163,7 @@ async fn master_fut(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
-async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let r = rest.get_json("/api/v3/account", &params!["omitZeroBalances" => "true"], 20, true).await?;
     let mut a = acct.borrow_mut();
     a.apply_spot_snapshot(&r)?;
@@ -1174,7 +1174,7 @@ async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
-async fn fut_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn fut_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let t0 = CLOCK.now();
     let r = rest.get_json("/fapi/v3/account", &[], 5, true).await?;
     acct.borrow_mut().apply_fut_snapshot(&r, t0)
@@ -1287,7 +1287,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
-async fn rate_limits(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn rate_limits(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     if acct.borrow().no_order_counts {
         return Ok(());
     }
@@ -1322,7 +1322,7 @@ async fn rate_limits(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     Ok(())
 }
 
-async fn open_orders(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
+pub async fn open_orders(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let orders = rest.get_json("/api/v3/openOrders", &[], 80, true).await?;
     let mut rows = vec![];
     for o in orders.as_array().ok_or_else(|| anyhow!("openOrders: not a list"))? {
@@ -1729,7 +1729,7 @@ impl Transfers {
     }
 }
 
-async fn transfers_poll(t: &TransfersRef, rest: &impl RestGet, n: u64, day_start: &impl Fn() -> i64) -> Result<()> {
+pub async fn transfers_poll(t: &TransfersRef, rest: &impl RestGet, n: u64, day_start: &impl Fn() -> i64) -> Result<()> {
     if n.is_multiple_of(60) {
         let r = rest.get_json("/sapi/v1/sub-account/list", &params!["limit" => 200], 1, true).await?;
         let empty = vec![];
