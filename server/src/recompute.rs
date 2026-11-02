@@ -269,7 +269,9 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
     let fixed = day_start_of(FIRST_FIXED_DAY, cfg.day_start_min)?;
     let rest = crate::connector::Exchanges::open_once(&cfg.exchanges)?;
     let info = rest.instruments().await?;
-    let market = Rc::new(RefCell::new(Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps)));
+    let mut market = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
+    market.numeraire = cfg.numeraire.clone();
+    let market = Rc::new(RefCell::new(market));
     {
         let mut m = market.borrow_mut();
         for mc in &cfg.markets {

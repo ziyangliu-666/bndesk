@@ -238,9 +238,10 @@ async fn work(book: &impl BookAccess, fills: &impl FillAccess, src: &impl Prices
         });
         let Some((key, ds)) = key else { continue };
         let rows = src.bars(&key, "1m", ds, ds).await?;
-        book.with(|b, _| {
+        book.with(|b, m| {
             if let Some(px) = Bars::new(rows).at(b.day_start).filter(|v| *v != 0.0) {
-                b.m0.insert(base.clone(), px);
+                let unit = b.pos.get(base).and_then(|p| m.unit(p.inst)).unwrap_or(1.0);
+                b.m0.insert(base.clone(), px * unit);
             }
         });
     }

@@ -38,7 +38,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::fills::{FillRec, sign};
-use crate::market::{Inst, InstId, Market, QUOTE, Venue};
+use crate::market::{Inst, InstId, Market, Venue};
 use crate::protocol::{self as P, InstRole, Roles, Side};
 
 pub const HOUR: i64 = 3_600_000;
@@ -519,10 +519,10 @@ impl PnlBook {
         (base, own)
     }
 
-    /// USD per unit of a fill's quote: a perp's price is USD, as its wallet is.
+    /// The desk's currency per unit of a fill's quote: of a perp, what it settles in.
     fn quote_px(m: &mut Market, f: &PFill) -> f64 {
         if !f.venue.is_spot() {
-            return 1.0;
+            return m.find(&f.symbol, f.venue).and_then(|i| m.unit(i)).unwrap_or(1.0);
         }
         let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
         quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0)
@@ -536,7 +536,7 @@ impl PnlBook {
         if f.flow.is_some() {
             s.usd += sq * f.price;
         } else {
-            let quote = if f.venue.is_spot() { m.insts[inst].quote.as_str() } else { QUOTE };
+            let quote = if f.venue.is_spot() || !m.numeraire.par { m.insts[inst].quote.as_str() } else { m.numeraire.asset.as_str() };
             let c = s.cash.get(quote).copied().unwrap_or(0.0) + sq * f.price;
             s.cash.insert(quote, c);
         }
@@ -945,7 +945,7 @@ impl PnlBook {
         self.hours.get_mut(&hour).expect("block")
     }
 
-    /// (price, fee) of a fill in USDT, at today's conversion prices.
+    /// (price, fee) of a fill in the desk's currency, at today's conversion prices.
     fn usd(m: &mut Market, f: &PFill) -> (f64, f64) {
         if f.flow.is_some() {
             return (f.price, 0.0);
@@ -1146,6 +1146,8 @@ impl PnlBook {
             base: String,
             key: String,
             rkey: Option<String>,
+            // bars are the instrument's own price: what a unit of it is worth now
+            unit: f64,
             q: f64,
             m: Option<f64>,
             r: Option<f64>,
@@ -1164,13 +1166,14 @@ impl PnlBook {
             if m0.is_none() && g.a == self.d_s() && let Some(&v) = self.m0.get(base) {
                 m0 = Some(v);
             }
-            let m0 = nz(m0).or(px(Some(&key), g.a));
+            let unit = m.unit(self.pos[base].inst).unwrap_or(1.0);
+            let m0 = nz(m0).or(px(Some(&key), g.a).map(|x| x * unit));
             let r0 = nz(r0).or(px(rkey.as_deref(), g.a));
             if g.a == self.d_s() && !self.m0.contains_key(base) && !self.pos[base].perp && let Some(v) = nz(m0) {
                 self.m0.insert(base.clone(), v);
             }
             let fl = self.gap_fills(base, g);
-            st.push(St { base: base.clone(), key, rkey, q: self.q_at(base, g.a), m: m0, r: r0, fl, i: 0, hedge: self.pos[base].hedge });
+            st.push(St { base: base.clone(), key, rkey, unit, q: self.q_at(base, g.a), m: m0, r: r0, fl, i: 0, hedge: self.pos[base].hedge });
         }
         let bv = self.beta_vs.clone();
         let mut rb_prev = nz(g.rb0).or(px(bv.as_deref(), g.a));
@@ -1181,7 +1184,7 @@ impl PnlBook {
             for s in st.iter_mut() {
                 let e = if last { *g.end.as_ref().and_then(|e| e.get(&s.base)).unwrap_or(&none) } else { none };
                 let (m_prev, r_prev) = (s.m, s.r);
-                let mm = nz(e.0).or(nz(px(Some(&s.key), t))).or(m_prev);
+                let mm = nz(e.0).or(nz(px(Some(&s.key), t)).map(|x| x * s.unit)).or(m_prev);
                 let r = nz(e.1).or(nz(px(s.rkey.as_deref(), t))).or(r_prev);
                 if let (Some(mp), Some(mv), false) = (m_prev, mm, s.hedge) {
                     d_pi += s.q * (mv - mp);
@@ -1264,7 +1267,7 @@ impl PnlBook {
                 && p.q != 0.0
             {
                 let half = (inst.ask - inst.bid) / 2.0 / mid * 1e4;
-                out += (p.q * mid).abs() * (half + (self.taker_bps)(inst)) / 1e4;
+                out += (p.q * mid * m.unit(p.inst).unwrap_or(1.0)).abs() * (half + (self.taker_bps)(inst)) / 1e4;
             }
         }
         out
@@ -1273,8 +1276,8 @@ impl PnlBook {
     /// Closed-form trading P&L of one base today: Q_T M(T) - Q0 M(D) - cash paid - fees.
     pub fn pi_k(&self, m: &mut Market, p: &Pos) -> f64 {
         let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return 0.0 };
-        let m0 = self.m0_of(p).unwrap_or(mt);
-        let funding = self.perp_of(p, i64::MAX).funding;
+        let m0 = self.m0_of(m, p).unwrap_or(mt);
+        let funding = self.funding_of(m, p, i64::MAX);
         let Some(s) = self.sums.get(&p.base) else { return p.q0 * (mt - m0) + funding };
         let mut out = (p.q0 + s.sq) * mt - p.q0 * m0;
         for (a, v) in s.cash.iter() {
@@ -1290,9 +1293,14 @@ impl PnlBook {
         if p.perp { (self.perp_day)(&p.key, upto) } else { PerpDay::default() }
     }
 
-    /// M_k(D): the day's kept one, a perp's from the accounts, else M when booking began.
-    fn m0_of(&self, p: &Pos) -> Option<f64> {
-        nz(self.m0.get(&p.base).copied()).or_else(|| nz(self.perp_of(p, i64::MAX).m0)).or(nz(p.m_start))
+    /// A perp's funding up to `upto`, in the desk's currency at what it settles in now.
+    fn funding_of(&self, m: &Market, p: &Pos, upto: i64) -> f64 {
+        self.perp_of(p, upto).funding * m.unit(p.inst).unwrap_or(1.0)
+    }
+
+    /// M_k(D), in the desk's currency: the day's kept one, a perp's from the accounts, else M when booking began.
+    fn m0_of(&self, m: &Market, p: &Pos) -> Option<f64> {
+        nz(self.m0.get(&p.base).copied()).or_else(|| nz(self.perp_of(p, i64::MAX).m0).map(|x| x * m.unit(p.inst).unwrap_or(1.0))).or(nz(p.m_start))
     }
 
     /// Π_k split over today's fills in time order, in USD: (realized, realized_old, floating). Sells take
@@ -1307,7 +1315,7 @@ impl PnlBook {
     /// stood at `upto` when the market is set to that time's prices (`desk repair-day`).
     pub fn fifo_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> (f64, f64, f64) {
         let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return (0.0, 0.0, 0.0) };
-        let m0 = self.m0_of(p).unwrap_or(mt);
+        let m0 = self.m0_of(m, p).unwrap_or(mt);
         if p.perp {
             return self.fifo_perp(m, p, upto, mt, m0);
         }
@@ -1363,17 +1371,19 @@ impl PnlBook {
         let mut opening = p.q0;
         let mut fills: Vec<&Rc<PFill>> = self.day_fills.get(&p.base).map(|v| v.iter().map(|x| &x.2).filter(|f| f.ts <= upto).collect()).unwrap_or_default();
         fills.sort_by_key(|f| f.ts);
-        let (mut realized, mut old, mut fees) = (self.perp_of(p, upto).funding, 0.0, 0.0);
+        let unit = m.unit(p.inst).unwrap_or(1.0);
+        let (mut realized, mut old, mut fees) = (self.funding_of(m, p, upto), 0.0, 0.0);
         for f in fills {
             if f.fee != 0.0 && !f.fee_asset.is_empty() {
                 fees += f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
             }
             let s = sign(f.side);
+            let price = f.price * unit;
             let mut left = f.qty;
             while left > 1e-15 {
                 let Some(lot) = lots.front_mut().filter(|l| l.0 * s < 0.0) else { break };
                 let take = lot.0.abs().min(left);
-                realized += take * -s * (f.price - lot.1);
+                realized += take * -s * (price - lot.1);
                 lot.0 += s * take;
                 left -= take;
                 if lot.0.abs() <= 1e-15 {
@@ -1382,12 +1392,12 @@ impl PnlBook {
             }
             if left > 1e-15 && opening * s < 0.0 {
                 let take = opening.abs().min(left);
-                old += take * -s * (f.price - m0);
+                old += take * -s * (price - m0);
                 opening += s * take;
                 left -= take;
             }
             if left > 1e-15 {
-                lots.push_back((s * left, f.price));
+                lots.push_back((s * left, price));
             }
         }
         let floating = lots.iter().map(|(q, c)| q * (mt - c)).sum::<f64>() + opening * (mt - m0);
@@ -1397,7 +1407,7 @@ impl PnlBook {
     /// `pi_k` over the fills and flows at or before `upto` (ms), at the market's prices now.
     pub fn pi_k_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> f64 {
         let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return 0.0 };
-        let m0 = self.m0_of(p).unwrap_or(mt);
+        let m0 = self.m0_of(m, p).unwrap_or(mt);
         let mut out = -p.q0 * m0;
         let mut q = p.q0;
         for (_, sq, f) in self.day_fills.get(&p.base).map(Vec::as_slice).unwrap_or(&[]) {
@@ -1414,7 +1424,7 @@ impl PnlBook {
                 out -= f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
             }
         }
-        out + q * mt + self.perp_of(p, upto).funding
+        out + q * mt + self.funding_of(m, p, upto)
     }
 
     /// (Π, realized, realized_old, floating) over the fills and flows at or before `upto`, at the market's
@@ -1454,8 +1464,8 @@ impl PnlBook {
     }
 
     /// The funding in Π today.
-    pub fn funding(&self) -> f64 {
-        self.pos.values().filter(|p| !p.hedge).map(|p| self.perp_of(p, i64::MAX).funding).sum()
+    pub fn funding(&self, m: &Market) -> f64 {
+        self.pos.values().filter(|p| !p.hedge).map(|p| self.funding_of(m, p, i64::MAX)).sum()
     }
 
     /// The spot assets that hedge, as legs at `upto` (ms): what a perp's leg is (`Account::fut_leg`), from Π's closed form.
@@ -1471,7 +1481,7 @@ impl PnlBook {
                 venue: m.insts[p.inst].venue,
                 qty0: p.q0,
                 qty: self.q_upto(&p.base, upto),
-                mark0: self.m0_of(p),
+                mark0: self.m0_of(m, p),
                 mark,
                 fills: fills.iter().filter(|x| x.2.flow.is_none() && x.2.ts <= upto).count() as i64,
                 price_pnl: pnl.map(|x| x + fees),
@@ -1531,7 +1541,7 @@ impl PnlBook {
             mm_unmarked_fills: 0,
             mm_unmarked_notional: 0.0,
             inventory: pi,
-            funding_day: self.funding(),
+            funding_day: self.funding(m),
         }
     }
 

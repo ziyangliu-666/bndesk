@@ -154,12 +154,8 @@ pub async fn day_pass(p: &Passes, read: &impl Reads) -> Result<()> {
         }
         if let Some(tid) = perp {
             let sq = if f.side == Side::Buy { f.qty } else { -f.qty };
-            let fee = if matches!(f.fee_asset.as_str(), "USDC" | "USDT" | "") {
-                f.fee
-            } else {
-                let m = p.acct.borrow().market.clone();
-                f.fee * m.and_then(|m| m.borrow_mut().asset_price(&f.fee_asset)).unwrap_or(0.0)
-            };
+            let m = p.acct.borrow().market.clone();
+            let fee = m.map_or(f.fee, |m| m.borrow_mut().settled(&f.fee_asset, f.fee));
             trades.entry(f.symbol.clone()).or_default().insert(tid, (f.ts, sq, f.price, fee));
         }
         swept.push(f);

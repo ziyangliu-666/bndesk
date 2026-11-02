@@ -462,6 +462,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     // the market: the configured instruments and every one filled
     let info = public.instruments().await?;
     let mut m = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
+    m.numeraire = cfg.numeraire.clone();
     for mc in &cfg.markets {
         m.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));
     }

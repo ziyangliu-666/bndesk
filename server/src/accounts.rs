@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::config::AccountCfg;
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::FillRec;
-use crate::market::{Market, QUOTE, STABLES};
+use crate::market::Market;
 use crate::pnl::Flow;
 use crate::protocol::{self as P, InstRole, Role, Roles, Side, UserStream, Venue};
 use crate::sign::Credentials;
@@ -80,8 +80,8 @@ pub enum Event {
     BalanceSnapshot { u: i64, rows: HashMap<String, (f64, f64)> },
     /// Every balance, from a read with no update time (through a parent account).
     BalancesRead { rows: Vec<(String, f64, f64)> },
-    /// Funding paid on a perp at `t`, for an exchange that says which perp.
-    Funding { t: i64, symbol: String, usd: f64 },
+    /// Funding paid on a perp at `t`, in what it settles in, for an exchange that says which perp.
+    Funding { t: i64, symbol: String, amount: f64 },
     /// A balance change apart from trading.
     Move(Move),
     /// An order was placed at t, for a desk that counts them itself (`CountOrdersHere`).
@@ -93,10 +93,10 @@ pub enum Event {
     /// A fill as it happened; `perp_trade`, a perp's trade id: it also goes into the day of that symbol at once, since
     /// the position moves with it.
     Fill { fill: Box<FillRec>, perp_trade: Option<i64> },
-    /// What a perp account's update carries, as of `u`: funding in USD for the one position held, transfers (asset,
+    /// What a perp account's update carries, as of `u`: funding in what it settles in for the one position held, transfers (asset,
     /// signed amount), the settlement asset's balance, and positions (symbol, amount, entry).
     PerpUpdate { u: i64, funding: Option<f64>, moves: Vec<(String, f64)>, settle: Option<f64>, positions: Vec<(String, f64, f64)> },
-    /// The perp account read at `t0`: wallet in USD, of it the settlement asset's (balance, update time), and the
+    /// The perp account read at `t0`: wallet in its market's `settle`, of it that asset's (balance, update time), and the
     /// positions (symbol, amount, entry, update time).
     PerpSnapshot { t0: i64, wallet: f64, settle: Option<(f64, i64)>, upnl: f64, available: f64, positions: Vec<(String, f64, f64, i64)> },
     /// The perp account's totals and its positions (symbol, amount, entry), from reads with no update time.
@@ -114,7 +114,8 @@ pub enum Event {
     Distribution { id: String, row: Dividend },
 }
 
-/// (symbol, amt, entry, mark, upnl, notional) at live marks.
+/// (symbol, amt, entry, mark, upnl, notional) at live marks: entry and mark in the perp's own price, upnl and notional in the
+/// desk's currency.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LivePosition {
     pub symbol: String,
@@ -126,8 +127,8 @@ pub struct LivePosition {
     pub notional: f64,
 }
 
-/// One futures symbol's day: fills by trade id (time, signed qty, price, fee in USD), funding received, mark
-/// at the start. REST fills the day in; the user stream adds each fill as it happens, so the fills always
+/// One futures symbol's day: fills by trade id (time, signed qty, price, fee in the desk's currency), funding received
+/// and mark at the start, in what it settles in. REST fills the day in; the user stream adds each fill as it happens, so the fills always
 /// match the live position until the next REST pass.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FutDay {
@@ -307,7 +308,17 @@ impl Account {
 
     /// Python's `valued` property (`self.market` passed in: the caller holds the market borrow).
     pub fn valued(&self, m: &mut Market) -> bool {
-        self.ready() && self.spot_parts(m).3
+        self.ready() && self.spot_parts(m).3 && !self.settlement_due(m)
+    }
+
+    /// What this account's perps settle in has a price coming, and equity would count them at 0 until it does.
+    fn settlement_due(&self, m: &mut Market) -> bool {
+        if m.numeraire.par || !self.cfg.futures() {
+            return false;
+        }
+        let mut assets = vec![self.perp.market().settle.to_string()];
+        assets.extend(self.positions.iter().filter(|(_, p)| p.0 != 0.0).filter_map(|(s, _)| m.find(s, self.perp).map(|i| m.insts[i].quote.clone())));
+        assets.iter().any(|a| m.waiting(a, QUOTE_WAIT_MS))
     }
 
     /// Valued, and every position held has its mark or has had `QUOTE_WAIT_MS` to get one. Until then `live_positions`
@@ -331,7 +342,7 @@ impl Account {
         self.equity_open
     }
 
-    /// Today's market-maker rebates, USD at each asset's price when credited.
+    /// Today's market-maker rebates, at each asset's price when credited.
     pub fn rebates(&self, m: &mut Market) -> f64 {
         self.dividends
             .values()
@@ -348,14 +359,15 @@ impl Account {
         }
     }
 
-    /// Notional of resting (bids, asks).
-    pub fn resting(&self) -> (f64, f64) {
+    /// Notional of resting (bids, asks), in the desk's currency.
+    pub fn resting(&self, m: &Market) -> (f64, f64) {
         let (mut b, mut a) = (0.0, 0.0);
         for o in self.open.values() {
+            let unit = m.find(&o.symbol, o.venue).and_then(|i| m.unit(i)).unwrap_or(1.0);
             if o.side == Side::Buy {
-                b += o.price * o.left;
+                b += o.price * o.left * unit;
             } else {
-                a += o.price * o.left;
+                a += o.price * o.left * unit;
             }
         }
         (b, a)
@@ -401,34 +413,25 @@ impl Account {
 
     // valuation
 
-    /// (quote free, quote locked, inventory value, all priced). Quote = the stablecoins, in USDT: USDT at 1,
-    /// another at its USDT pair's price (`Market::asset_price`, the price transfers are valued at too, so a
-    /// stablecoin that comes in and is converted makes no P&L of its own); one whose pair is listed but not
-    /// yet quoted holds the valuation back, like any asset.
+    /// (quote free, quote locked, inventory value, all priced), in the desk's currency. Quote = the stablecoins and the
+    /// currency itself: that at 1, another at its price (`Market::asset_price`, the price transfers are valued at too, so
+    /// a stablecoin that comes in and is converted makes no P&L of its own); one whose pair is listed but not yet quoted
+    /// holds the valuation back, like any asset.
     pub fn spot_parts(&self, m: &mut Market) -> (f64, f64, f64, bool) {
         let (mut qf, mut ql, mut inv) = (0.0, 0.0, 0.0);
         let mut priced = true;
         for (a, &(f, l)) in &self.balances {
-            if STABLES.contains(&a.as_str()) {
-                let px = if a == QUOTE {
-                    1.0
-                } else {
-                    let inst = m.asset_inst(a);
-                    let quoted = inst.and_then(|i| m.px(i)).is_some_and(|p| p > 0.0);
-                    if !quoted && f + l != 0.0 {
-                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > QUOTE_WAIT_MS);
-                    }
-                    m.asset_price(a).unwrap_or(1.0)
-                };
+            if m.is_cash(a) {
+                if f + l != 0.0 && m.waiting(a, QUOTE_WAIT_MS) {
+                    priced = false;
+                }
+                let px = m.asset_price(a).unwrap_or(0.0);
                 qf += f * px;
                 ql += l * px;
             } else if f + l > 0.0 {
                 match m.asset_price(a) {
                     // wait briefly for a quote; then an unquoted asset counts as 0
-                    None => {
-                        let inst = m.asset_inst(a);
-                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > QUOTE_WAIT_MS);
-                    }
+                    None => priced = priced && !m.waiting(a, QUOTE_WAIT_MS),
                     Some(p) => inv += (f + l) * p,
                 }
             }
@@ -448,13 +451,16 @@ impl Account {
                 .and_then(|i| m.insts[i].mark.filter(|x| *x != 0.0).or_else(|| m.insts[i].mid()))
                 .filter(|x| *x != 0.0)
                 .unwrap_or(entry);
-            out.push(LivePosition { symbol: s.clone(), venue: self.perp, amt, entry, mark, upnl: (mark - entry) * amt, notional: amt * mark });
+            // (a settlement asset with no price yet holds `valued` back; past that it counts as 0, as any unquoted asset)
+            let unit = m.find(s, self.perp).map_or(1.0, |i| m.unit(i).unwrap_or(0.0));
+            out.push(LivePosition { symbol: s.clone(), venue: self.perp, amt, entry, mark, upnl: (mark - entry) * amt * unit, notional: amt * mark * unit });
         }
         out
     }
 
-    /// Today on futures symbol s. Price P&L = Q0 (M_T - M_D) + sum s q (M_T - p): the same closed form as
-    /// the spot Π; None while the opening mark is unknown and a position was held at the start.
+    /// Today on futures symbol s, in the desk's currency at what it settles in now. Price P&L = Q0 (M_T - M_D) +
+    /// sum s q (M_T - p): the same closed form as the spot Π; None while the opening mark is unknown and a position was held
+    /// at the start.
     pub fn fut_leg(&self, m: &Market, s: &str) -> FutLeg {
         let q = self.positions.get(s).map_or(0.0, |p| p.0);
         let mark = m
@@ -466,13 +472,14 @@ impl Account {
         };
         let q0 = q - d.trades.values().map(|t| t.1).sum::<f64>();
         let fees = d.trades.values().map(|t| t.3).sum();
+        let unit = m.find(s, self.perp).and_then(|i| m.unit(i)).unwrap_or(1.0);
         let price = match mark {
             Some(mk) if d.m0.is_some() || q0.abs() < 1e-12 => Some(
-                d.m0.map_or(0.0, |m0| q0 * (mk - m0)) + d.trades.values().map(|&(_, sq, px, _)| sq * (mk - px)).sum::<f64>(),
+                (d.m0.map_or(0.0, |m0| q0 * (mk - m0)) + d.trades.values().map(|&(_, sq, px, _)| sq * (mk - px)).sum::<f64>()) * unit,
             ),
             _ => None,
         };
-        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: self.day_funding(d, s) }
+        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: self.day_funding(d, s) * unit }
     }
 
     /// REST's funding as of its pass, and what the stream reported after it (REST picks that up within a minute).
@@ -482,7 +489,8 @@ impl Account {
         d.funding + streamed
     }
 
-    /// Today's funding and opening mark on perp symbol s, where the market cannot be asked (the P&L book holds it).
+    /// Today's funding and opening mark on perp symbol s, in what it settles in, where the market cannot be asked (the P&L
+    /// book holds it, and converts them).
     pub fn perp_day(&self, s: &str) -> crate::pnl::PerpDay {
         self.fut_day.get(s).filter(|d| d.ds == self.day_start).map_or_else(Default::default, |d| crate::pnl::PerpDay { funding: self.day_funding(d, s), m0: d.m0 })
     }
@@ -491,23 +499,27 @@ impl Account {
     pub fn hedge_value(&self, m: &mut Market) -> f64 {
         self.balances
             .iter()
-            .filter(|(a, _)| !STABLES.contains(&a.as_str()) && self.roles.asset(a) == InstRole::Hedge)
-            .filter(|(_, b)| b.0 + b.1 > 0.0)
-            .map(|(a, b)| (b.0 + b.1) * m.asset_price(a).unwrap_or(0.0))
+            .filter(|(a, b)| self.roles.asset(a) == InstRole::Hedge && b.0 + b.1 > 0.0)
+            .map(|(a, b)| if m.is_cash(a) { 0.0 } else { (b.0 + b.1) * m.asset_price(a).unwrap_or(0.0) })
             .sum()
     }
 
     pub fn fut_upnl(&self, m: &Market) -> f64 {
         if self.positions.is_empty() {
-            self.fut_upnl_rest
+            self.fut_upnl_rest * self.wallet_rate(m)
         } else {
             self.live_positions(m).iter().map(|p| p.upnl).sum()
         }
     }
 
+    /// What a unit of this account's perp wallet is worth in the desk's currency.
+    pub fn wallet_rate(&self, m: &Market) -> f64 {
+        m.settle_rate(self.perp.market().settle)
+    }
+
     pub fn equity(&self, m: &mut Market) -> f64 {
         let (qf, ql, inv, _) = self.spot_parts(m);
-        qf + ql + inv + self.fut_wallet + self.fut_upnl(m)
+        qf + ql + inv + self.fut_wallet * self.wallet_rate(m) + self.fut_upnl(m)
     }
 
     // updates (shared by live streams, REST and the simulator)
@@ -538,7 +550,7 @@ impl Account {
             if f != 0.0 || l != 0.0 || !replace {
                 self.balances.insert(a.to_string(), (f, l));
             }
-            if a != QUOTE && f + l > 0.0 {
+            if f + l > 0.0 {
                 self.touch_asset(a);
             }
         }
@@ -680,9 +692,7 @@ impl Account {
                     }
                     let (f, l) = rows.get(&a).copied().unwrap_or((0.0, 0.0));
                     if f != 0.0 || l != 0.0 {
-                        if a != QUOTE {
-                            self.touch_asset(&a);
-                        }
+                        self.touch_asset(&a);
                         self.balances.insert(a.clone(), (f, l));
                     } else {
                         self.balances.remove(&a);
@@ -696,11 +706,11 @@ impl Account {
                 self.set_balances(rows, true);
                 self.spot_loaded = true;
             }
-            Event::Funding { t, symbol, usd } => {
+            Event::Funding { t, symbol, amount } => {
                 let ds = self.day_start;
                 self.funding_stream.retain(|x| x.0 >= ds);
                 if t >= ds && !self.funding_stream.iter().any(|x| x.0 == t && x.1 == symbol) {
-                    self.funding_stream.push((t, symbol, usd));
+                    self.funding_stream.push((t, symbol, amount));
                 }
             }
             Event::Move(mv) => self.moves.push(mv),
@@ -829,12 +839,12 @@ impl Account {
         if ds == 0 || f.ts < ds {
             return;
         }
-        let mut fee = f.fee;
-        if !matches!(f.fee_asset.as_str(), "USDT" | "USDC" | "")
-            && let Some(m) = &self.market
-        {
-            fee *= m.try_borrow_mut().ok().and_then(|mut m| m.asset_price(&f.fee_asset)).unwrap_or(0.0);
-        }
+        let fee = match self.market.as_ref().map(|m| m.try_borrow_mut()) {
+            Some(Ok(mut m)) => m.settled(&f.fee_asset, f.fee),
+            // the market is held borrowed: a dollar fee as it is, the next sweep has it right
+            Some(Err(_)) if !matches!(f.fee_asset.as_str(), "USDT" | "USDC" | "") => 0.0,
+            _ => f.fee,
+        };
         let d = self.fut_day.entry(sym.to_string()).or_insert_with(|| FutDay::new(ds));
         if d.ds != ds {
             *d = FutDay::new(ds);
@@ -866,7 +876,7 @@ fn confirms(r: &Transfer, mv: &Move, email: &str) -> bool {
 }
 
 /// A past day's distributions, as a connector read them: each goes to on_dividend (the store keeps it), and the rebates
-/// are summed at the asset's price now (USDT at 1, another stablecoin at its USDT pair).
+/// are summed at the asset's price now.
 pub fn past_rebates(acct: &AccountRef, rows: &[(String, Dividend)]) -> f64 {
     let a = acct.borrow();
     let mut m = a.market.as_ref().map(|m| m.borrow_mut());
@@ -874,7 +884,10 @@ pub fn past_rebates(acct: &AccountRef, rows: &[(String, Dividend)]) -> f64 {
     for (id, d) in rows {
         (a.on_dividend)(&a, id, d);
         if d.rebate {
-            let px = m.as_mut().and_then(|m| m.asset_price(&d.asset)).or_else(|| STABLES.contains(&d.asset.as_str()).then_some(1.0));
+            let px = match m.as_mut() {
+                Some(m) => m.asset_price(&d.asset),
+                None => crate::market::is_stable(&d.asset).then_some(1.0),
+            };
             sum += d.amount * px.unwrap_or(0.0);
         }
     }
@@ -1030,7 +1043,7 @@ impl Transfers {
         out
     }
 
-    /// Net transfers into the account since `since`, in USD at their fixed values (Day PnL takes them off).
+    /// Net transfers into the account since `since`, in the desk's currency at their fixed values (Day PnL takes them off).
     pub fn net_in_live(&self, acct: &Account, since: i64) -> f64 {
         self.legs(acct, since).iter().map(|l| l.qty * l.px).sum()
     }

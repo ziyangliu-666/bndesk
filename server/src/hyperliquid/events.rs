@@ -133,7 +133,7 @@ pub fn on_user_message(a: &mut Account, names: &Names, m: &Value, t0: i64, unifi
         "userFundings" if !snapshot => {
             for x in data.get("fundings").and_then(Value::as_array).into_iter().flatten() {
                 if let Some((symbol, PERP)) = names.symbol(text(x, "coin")?) {
-                    a.apply(Event::Funding { t: int(x, "time")?, symbol: symbol.to_string(), usd: num(x, "usdc")? });
+                    a.apply(Event::Funding { t: int(x, "time")?, symbol: symbol.to_string(), amount: num(x, "usdc")? });
                 }
             }
         }

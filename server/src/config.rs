@@ -6,7 +6,7 @@ use serde::Deserialize;
 use toml::{Table, Value};
 
 use crate::beta::BetaCfg;
-use crate::market::{QUOTE, is_stable};
+use crate::market::Numeraire;
 use crate::protocol::{InstRole, Role, Roles, Venue};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -201,8 +201,10 @@ pub struct Config {
     pub keep_days: f64,
     /// market making is marked at the instrument's own mid this long after each fill (a markout horizon)
     pub mm_horizon_s: i64,
-    /// The name money figures carry: a name, not a conversion (figures are valued at USDT = 1).
+    /// The name money figures carry.
     pub currency: String,
+    /// What they are valued in.
+    pub numeraire: Numeraire,
     /// Split Trading PnL into market making and inventory on the pages (the store keeps both either way).
     pub market_making: bool,
     pub markets: Vec<MarketCfg>,
@@ -241,7 +243,8 @@ impl Config {
             mark_max_spread_bps: 100.0,
             keep_days: 365.0,
             mm_horizon_s: 60,
-            currency: QUOTE.into(),
+            currency: Numeraire::default().asset,
+            numeraire: Numeraire::default(),
             market_making: true,
             markets: vec![],
             target_ratio: None,
@@ -272,7 +275,7 @@ impl Config {
 
     /// The asset the desk's cash is quoted in: its first exchange's.
     pub fn quote(&self) -> &'static str {
-        self.exchanges.first().and_then(|e| Venue::of(e).next()).map_or(QUOTE, |v| v.market().quote)
+        first_quote(&self.exchanges)
     }
 }
 
@@ -280,6 +283,27 @@ impl Default for Config {
     fn default() -> Self {
         Config::new("")
     }
+}
+
+/// The first exchange's quote.
+fn first_quote(exchanges: &[String]) -> &'static str {
+    exchanges.first().and_then(|e| Venue::of(e).next()).map_or(Venue::SPOT.market().quote, |v| v.market().quote)
+}
+
+/// `[desk] currency` as the name on figures and what they are valued in. Unset, or "USD", which no market lists, is the
+/// first exchange's quote; any other is an asset, and everything is converted to it. A desk on Binance alone that names
+/// none keeps what it has always done (`Numeraire::par`).
+fn numeraire(currency: Option<&str>, exchanges: &[String]) -> Result<(String, Numeraire)> {
+    let quote = first_quote(exchanges);
+    if let Some(c) = currency
+        && (c.is_empty() || !c.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
+    {
+        bail!("desk.currency: {c:?} is not an asset's name: capitals, as a market lists it (USDT, USDC, EUR, BTC)");
+    }
+    let named = currency.is_some_and(|c| c != "USD");
+    let binance_alone = exchanges.iter().all(|e| e.eq_ignore_ascii_case(DEFAULT_EXCHANGE));
+    let asset = currency.filter(|_| named).unwrap_or(quote);
+    Ok((currency.unwrap_or(quote).to_string(), Numeraire { asset: asset.to_string(), par: binance_alone && !named }))
 }
 
 /// "HH:MM" -> minutes. Config strings are checked by `load`; panics on a malformed one elsewhere.
@@ -648,6 +672,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
             Ok(EngineCfg { name: get("name")?, url: get("url")? })
         })
         .collect::<Result<_>>()?;
+    let (currency, numeraire) = numeraire(opt_s(table(&raw, "desk")?, "currency")?, &exchanges)?;
     let c = Config {
         path: path.clone(),
         listen: s(srv, "listen", "127.0.0.1:8710")?.into(),
@@ -678,15 +703,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         beta_vs: beta_vs(exp, &exchanges[0])?,
         sessions: array(&raw, "sessions")?.iter().map(|x| typed(x, "sessions")).collect::<Result<_>>()?,
         events: array(&raw, "events")?.iter().map(|x| typed(x, "events")).collect::<Result<_>>()?,
-        currency: {
-            let quote = Venue::of(&exchanges[0]).next().map_or(QUOTE, |v| v.market().quote);
-            let c = s(table(&raw, "desk")?, "currency", quote)?;
-            // figures are not converted, so the name has to be a dollar's
-            if c != "USD" && !is_stable(c) {
-                bail!("desk.currency: {c:?} would label figures valued at USDT = 1 with no conversion: USD or a USD stablecoin");
-            }
-            c.into()
-        },
+        currency,
+        numeraire,
         market_making: b(table(&raw, "desk")?, "market_making", true)?,
         fee_expiry: opt_s(table(&raw, "fees")?, "expiry")?.map(String::from),
         alerts: match raw.get("alerts") {
@@ -916,14 +934,20 @@ mod tests {
     }
 
     #[test]
-    fn currency_is_a_dollars_name() {
-        let dir = tempfile_dir("currency");
-        let p = dir.join("c.toml");
-        std::fs::write(&p, "[desk]\ncurrency = \"USD\"\nmarket_making = false\n").unwrap();
-        let c = load(&p).unwrap();
-        assert_eq!((c.currency.as_str(), c.market_making), ("USD", false));
-        std::fs::write(&p, "[desk]\ncurrency = \"EUR\"\n").unwrap();
-        assert!(load(&p).unwrap_err().to_string().contains("no conversion"));
+    fn a_currency_is_what_figures_are_valued_in() {
+        let d = tempfile::tempdir().unwrap();
+        let num = |text: &str| load(write(&d, text)).map(|c| (c.currency.clone(), c.numeraire.asset.clone(), c.numeraire.par));
+        // named by nothing, or by USD which no market lists: the first exchange's quote, as a desk on Binance has it
+        assert_eq!(num("").unwrap(), ("USDT".to_string(), "USDT".to_string(), true));
+        assert_eq!(num("[desk]\ncurrency = \"USD\"\nmarket_making = false\n").unwrap(), ("USD".to_string(), "USDT".to_string(), true));
+        // an asset is an asset, whichever
+        assert_eq!(num("[desk]\ncurrency = \"USDT\"\n").unwrap(), ("USDT".to_string(), "USDT".to_string(), false));
+        assert_eq!(num("[desk]\ncurrency = \"EUR\"\n").unwrap(), ("EUR".to_string(), "EUR".to_string(), false));
+        // beside another exchange nothing is at par
+        let hl = "[[accounts]]\nid = \"h\"\nexchange = \"hyperliquid\"\naddress_env = \"X\"\n";
+        assert_eq!(num(hl).unwrap(), ("USDC".to_string(), "USDC".to_string(), false));
+        assert_eq!(num(&format!("[[accounts]]\nid = \"b\"\napi_key_env = \"Y\"\n{hl}")).unwrap(), ("USDT".to_string(), "USDT".to_string(), false));
+        assert!(num("[desk]\ncurrency = \"eur\"\n").unwrap_err().to_string().contains("not an asset"));
     }
 
     fn tempfile_dir(name: &str) -> PathBuf {

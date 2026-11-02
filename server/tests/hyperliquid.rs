@@ -22,7 +22,7 @@ use desk::hyperliquid::Hyperliquid;
 use desk::hyperliquid::events::{on_user_message, perp_state, spot_state, transfer_of};
 use desk::hyperliquid::names::{Names, NamesRef};
 use desk::hyperliquid::rest::READS;
-use desk::market::{Book, Info, Mark, Market, SymbolInfo, Venue};
+use desk::market::{Book, Info, Mark, Market, Numeraire, SymbolInfo, Venue};
 use desk::metrics as me;
 use desk::pnl::PnlBook;
 use desk::protocol::{InstRole, Role, Roles};
@@ -305,6 +305,8 @@ struct Desk {
     fills: Rc<RefCell<FillBook>>,
     pnl: Rc<RefCell<PnlBook>>,
     cfg: Config,
+    /// What a USDC is worth in the desk's currency: its figures are the same desk's in USDC, by this.
+    rate: f64,
 }
 
 fn account(id: &str, exchange: &str, markets: Vec<Venue>, m: &Rc<RefCell<Market>>, roles: &Roles, email: &str) -> AccountRef {
@@ -319,13 +321,20 @@ fn account(id: &str, exchange: &str, markets: Vec<Venue>, m: &Rc<RefCell<Market>
 
 impl Desk {
     fn new(roles: Roles, beside_binance: bool) -> Desk {
+        Desk::valued_in(roles, beside_binance, "USDC", &[], 1.0)
+    }
+
+    /// A desk valued in `currency`, with these prices on Binance's spot for the way there.
+    fn valued_in(roles: Roles, beside_binance: bool, currency: &str, way: &[(&str, &str, &str, f64)], rate: f64) -> Desk {
         CLOCK.set_fixed(Some(t(0)));
         let mut i: Info = HashMap::new();
         i.insert(Venue::HL, HashMap::from([("BTC".to_string(), SymbolInfo::new("BTC", "USDC", 10.0))]));
         i.insert(Venue::HL_SPOT, HashMap::from([("HYPEUSDC".to_string(), SymbolInfo::new("HYPE", "USDC", 10.0))]));
         i.insert(Venue::USDM, HashMap::from([("HHHUSDT".to_string(), SymbolInfo::new("HHH", "USDT", 5.0))]));
-        i.insert(Venue::SPOT, HashMap::new());
-        let m = Rc::new(RefCell::new(Market::new(i, 120.0, 100.0)));
+        i.insert(Venue::SPOT, way.iter().map(|(s, b, q, _)| (s.to_string(), SymbolInfo::new(b, q, 5.0))).collect());
+        let mut m = Market::new(i, 120.0, 100.0);
+        m.numeraire = Numeraire { asset: currency.into(), par: false };
+        let m = Rc::new(RefCell::new(m));
         let mut accounts = vec![account("h", "hyperliquid", vec![Venue::HL, Venue::HL_SPOT], &m, &roles, ME)];
         if beside_binance {
             accounts.push(account("b", "binance", vec![Venue::SPOT, Venue::USDM], &m, &roles, "b@x.io"));
@@ -352,7 +361,11 @@ impl Desk {
             });
         }
         let transfers = Rc::new(RefCell::new(Transfers::new(None, accounts.clone())));
-        Desk { m, names: names(), accounts, transfers, fills, pnl, cfg }
+        let d = Desk { m, names: names(), accounts, transfers, fills, pnl, cfg, rate };
+        for (s, _, _, px) in way {
+            d.price(t(0), s, Venue::SPOT, *px);
+        }
+        d
     }
 
     fn price(&self, at: i64, sym: &str, venue: Venue, px: f64) {
@@ -447,7 +460,7 @@ fn session(d: &Desk, x: &mut Exchange) -> (f64, f64, f64, f64) {
     day.m0 = Some(100.0);
     d.accounts[0].borrow_mut().apply(Event::PerpDay { symbol: "BTC".into(), day: day.clone() });
     d.start();
-    assert_relative_eq!(d.accounts[0].borrow().equity_open.unwrap(), 500.0 + 200.0 + 1000.0 + 20.0);
+    assert_relative_eq!(d.accounts[0].borrow().equity_open.unwrap(), (500.0 + 200.0 + 1000.0 + 20.0) * d.rate, max_relative = 1e-12);
 
     d.price(t(1), "BTC", Venue::HL, 101.0);
     x.mark = 101.0;
@@ -544,6 +557,50 @@ fn a_desk_beside_binance_adds_both_up_with_a_position_each() {
     let m = d.m.borrow();
     assert_eq!(d.accounts[0].borrow().live_positions(&m)[0].venue, Venue::HL);
     assert_eq!(d.accounts[1].borrow().live_positions(&m)[0].venue, Venue::USDM);
+    CLOCK.set_fixed(None);
+}
+
+/// The same session in other currencies: a USDC worth 0.99 USDT, and the desk in euros by two pairs, one of them turned
+/// over. With the rate still, every part is the desk's in USDC times the rate, the parts add up, and nothing is taken as a
+/// dollar.
+#[test]
+fn a_desk_in_another_currency_has_the_same_session_at_its_price() {
+    let run = |roles: Roles, currency: &str, way: &[(&str, &str, &str, f64)], rate: f64| {
+        let d = Desk::valued_in(roles, false, currency, way, rate);
+        let mut x = Exchange { wallet: 1000.0, amt: 2.0, entry: 90.0, mark: 100.0, tid: 100 };
+        let f = session(&d, &mut x);
+        CLOCK.set_fixed(None);
+        f
+    };
+    for roles in [traded_perps(), Roles::default()] {
+        let usdc = run(roles.clone(), "USDC", &[], 1.0);
+        assert!(usdc.0.abs() > 1.0);
+        let usdt = run(roles.clone(), "USDT", &[("USDCUSDT", "USDC", "USDT", 0.99)], 0.99);
+        let eur = run(roles.clone(), "EUR", &[("USDCUSDT", "USDC", "USDT", 0.99), ("EURUSDT", "EUR", "USDT", 1.25)], 0.99 / 1.25);
+        for (got, rate) in [(usdt, 0.99), (eur, 0.99 / 1.25)] {
+            assert_relative_eq!(got.0, usdc.0 * rate, max_relative = 1e-9);
+            assert_relative_eq!(got.1, usdc.1 * rate, max_relative = 1e-9);
+            assert_relative_eq!(got.2, usdc.2 * rate, epsilon = 1e-9);
+            assert_relative_eq!(got.3, 0.0, epsilon = 1e-9);
+        }
+    }
+}
+
+/// A USDC that moves: Other holds what the opening balances made on it, in the desk's currency, and nothing else moves.
+#[test]
+fn what_cash_makes_on_the_currency_is_real_money_in_other() {
+    let d = Desk::valued_in(Roles::default(), false, "USDT", &[("USDCUSDT", "USDC", "USDT", 1.0)], 1.0);
+    d.price(t(0), "BTC", Venue::HL, 100.0);
+    d.price(t(0), "HYPEUSDC", Venue::HL_SPOT, 20.0);
+    d.balances(1000.0, 0.0);
+    d.start();
+    d.figures(t(1));
+    d.price(t(2), "USDCUSDT", Venue::SPOT, 0.99);
+    let (day, trading, hedge, other) = d.figures(t(3));
+    assert_relative_eq!(day, -10.0, max_relative = 1e-9);
+    assert_relative_eq!(trading, 0.0, epsilon = 1e-9);
+    assert_relative_eq!(hedge, 0.0, epsilon = 1e-9);
+    assert_relative_eq!(other, -10.0, max_relative = 1e-9);
     CLOCK.set_fixed(None);
 }
 

@@ -383,10 +383,8 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 let qty = f(x, "qty")?;
                 let mut fee = f(x, "commission")?;
                 let asset = s(x, "commissionAsset")?;
-                if !matches!(asset, "USDT" | "USDC")
-                    && let Some(m) = &market
-                {
-                    fee *= m.borrow_mut().asset_price(asset).unwrap_or(0.0);
+                if let Some(m) = &market {
+                    fee = m.borrow_mut().settled(asset, fee);
                 }
                 let tid = to_i(get(x, "id")?)?;
                 let side = if s(x, "side")? == "BUY" { Side::Buy } else { Side::Sell };
@@ -804,7 +802,7 @@ mod tests {
             a.order_update(Venue::SPOT, "XUSDT", "2", Side::Sell, 12.0, 1.0, true, None);
             a.order_update(Venue::SPOT, "YUSDT", "3", Side::Buy, 5.0, 2.0, true, None);
             a.order_update(Venue::SPOT, "YUSDT", "3", Side::Buy, 5.0, 0.0, false, None);
-            assert_eq!(a.resting(), (30.0, 12.0));
+            assert_eq!(a.resting(&Market::new(Info::new(), 120.0, 100.0)), (30.0, 12.0));
         }
         for _ in 0..3 {
             commissions(&p, &r).await.unwrap();

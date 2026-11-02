@@ -67,14 +67,17 @@ pub struct Market {
     /// The asset its prices and its accounts' cash are in.
     #[serde(skip)]
     pub quote: &'static str,
+    /// The asset a perp account's wallet on it is counted in. A perp's own P&L settles in what it is quoted in.
+    #[serde(skip)]
+    pub settle: &'static str,
 }
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
 pub static MARKETS: [Market; 4] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, order_windows: true, keyless: false, quote: "USDT" },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, order_windows: true, keyless: false, quote: "USDT" },
-    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC" },
-    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC" },
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, order_windows: true, keyless: false, quote: "USDT", settle: "USDT" },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, order_windows: true, keyless: false, quote: "USDT", settle: "USDT" },
+    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC", settle: "USDC" },
+    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC", settle: "USDC" },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.

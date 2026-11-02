@@ -9,7 +9,7 @@ use crate::accounts::{Account, AccountRef, FutLeg};
 use crate::beta::Betas;
 use crate::config::Config;
 use crate::fills::{FillRec, HK, MarkAt, TK, TOX_HORIZONS};
-use crate::market::{Market, STABLES};
+use crate::market::Market;
 use crate::pnl::OMap;
 use crate::protocol::{self as P, InstRole, Roles, Side, Venue};
 use crate::sessions::pause;
@@ -252,7 +252,7 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
         let acct = acct.borrow();
         for (a, &(f, l)) in &acct.balances {
             *holdings.entry(a.clone()).or_insert(0.0) += f + l;
-            if !STABLES.contains(&a.as_str())
+            if !m.is_cash(a)
                 && f + l > 0.0
                 && let Some(i) = m.asset_inst(a)
                 && let Some(mid) = m.insts[i].mid()
@@ -381,7 +381,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
     let valued = acct.valued(m);
     let eo = acct.equity_open.unwrap_or(eq);
     acct.trim_orders(now);
-    let (bids, asks) = acct.resting();
+    let (bids, asks) = acct.resting(m);
     P::Account {
         id: acct.id.clone(),
         label: acct.label.clone(),
@@ -395,9 +395,9 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
         quote_locked: ql,
         inventory_value: inv,
         hedge_value: acct.hedge_value(m),
-        fut_wallet: acct.fut_wallet,
+        fut_wallet: acct.fut_wallet * acct.wallet_rate(m),
         fut_upnl: acct.fut_upnl(m),
-        fut_available: acct.fut_available,
+        fut_available: acct.fut_available * acct.wallet_rate(m),
         positions: pos
             .into_iter()
             .map(|p| {
@@ -563,14 +563,14 @@ pub fn beta_weighted_spot(cfg: &Config, m: &mut Market, accounts: &[AccountRef],
             }
             continue;
         }
-        let base = m.get(&k).map_or_else(|| mc.symbol.strip_suffix("USDT").unwrap_or(&mc.symbol).to_string(), |i| i.base.clone());
+        let base = m.get(&k).map_or_else(|| mc.symbol.strip_suffix(mc.venue.market().quote).unwrap_or(&mc.symbol).to_string(), |i| i.base.clone());
         betas.insert(base, est.map_or(mc.beta, |e| e.beta(&k)));
     }
     let mut total = 0.0;
     for acct in accounts {
         let acct = acct.borrow();
         for (a, &(f, l)) in &acct.balances {
-            if STABLES.contains(&a.as_str()) || (cfg.markets_only && !betas.contains_key(a)) || cfg.roles.asset(a) == InstRole::Hedge {
+            if m.is_cash(a) || (cfg.markets_only && !betas.contains_key(a)) || cfg.roles.asset(a) == InstRole::Hedge {
                 continue;
             }
             if let Some(p) = truthy(m.asset_price(a)) {
@@ -594,7 +594,7 @@ pub fn inventory_assets(m: &mut Market, accounts: &[AccountRef]) -> i64 {
     for acct in accounts {
         let acct = acct.borrow();
         for (a, &(f, l)) in &acct.balances {
-            if !STABLES.contains(&a.as_str()) && acct.roles.asset(a) != InstRole::Hedge {
+            if !m.is_cash(a) && acct.roles.asset(a) != InstRole::Hedge {
                 *held.entry(a.clone()).or_insert(0.0) += f + l;
             }
         }

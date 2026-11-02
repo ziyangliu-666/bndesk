@@ -471,8 +471,14 @@ impl Desk {
         }
         // the stablecoins' USDT pairs (USDCUSDT, ...) from the start: equity and transfers value a stablecoin
         // other than USDT at its pair's price, which must be there before one arrives
-        for a in crate::market::STABLES.iter().filter(|a| **a != crate::market::QUOTE) {
+        for a in crate::market::STABLES {
             m.asset_inst(a);
+        }
+        // and what a perp account's wallet is counted in: asked for from then on with no way to make one
+        if !m.numeraire.par {
+            for a in &self.accounts {
+                m.asset_inst(a.borrow().perp.market().settle);
+            }
         }
         self.fixed_betas = Rc::new(self.cfg.markets.iter().map(|mc| (format!("{}:{}", mc.venue, mc.symbol), mc.beta)).collect());
         if let Some((venue, sym)) = self.cfg.beta_vs.as_deref().and_then(|v| v.split_once(':'))
@@ -1301,7 +1307,9 @@ async fn bootstrap(exchanges: &Exchanges, feeds: &[FeedRef], cfg: &Config) -> (M
         }
         missing = still;
         if missing.is_empty() || (missing.len() < all.len() && started.elapsed() >= BOOT_WAIT) {
-            return (Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps), missing);
+            let mut m = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
+            m.numeraire = cfg.numeraire.clone();
+            return (m, missing);
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
