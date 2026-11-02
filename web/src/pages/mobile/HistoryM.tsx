@@ -26,7 +26,7 @@ import {
 } from "./rest/ui";
 import "./history.css";
 import { MASK } from "../../mask";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 // ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
 // kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
@@ -76,6 +76,7 @@ function DeskHistory() {
   ]);
   const hide = useStore((s) => s.hideAmounts);
   const money = useAmt();
+  const desk = useDesk();
   // the range's days, as the desktop History has them (the snapshot's kept days and the day bars of
   // /api/history), summed the same way
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? null);
@@ -172,13 +173,12 @@ function DeskHistory() {
             data: chart.pts.map((p) => ({ time: p.time, value: p.v.pnl })),
           },
       line("pi", "Trading", P.trading),
-      line("mm", "MM", P.mm, { lineStyle: S.mm }),
-      line("inv", "Inv", P.inv, { lineStyle: S.inv }),
-      line("hedge", "Hedge", P.hedge, { lineStyle: S.hedge }),
-      line("reb", "Rebates", P.reb, { lineStyle: S.reb }),
+      ...(desk.mm ? [line("mm", "MM", P.mm, { lineStyle: S.mm }), line("inv", "Inv", P.inv, { lineStyle: S.inv })] : []),
+      ...(desk.hedge ? [line("hedge", "Hedge", P.hedge, { lineStyle: S.hedge })] : []),
+      ...(desk.rebates ? [line("reb", "Rebates", P.reb, { lineStyle: S.reb })] : []),
       line("other", "Other", P.other, { lineStyle: S.other }),
     ];
-  }, [chart, hide, view, inRange]);
+  }, [chart, hide, view, inRange, desk.mm, desk.hedge, desk.rebates]);
   const boxRows = (t: number): ExBoxRow[] => {
     const p = chart.by.get(t);
     if (!p) return [];
@@ -195,10 +195,9 @@ function DeskHistory() {
       ["Day", p.d.day],
       r(view === "cum" ? "Cumulative" : "Day PnL", p.v.pnl),
       r("Trading", p.v.pi, P.trading),
-      r("MM", p.v.mm, P.mm),
-      r("Inv", p.v.inv, P.inv),
-      r("Hedge", p.v.hedge, P.hedge),
-      r("Rebates", p.v.reb, P.reb),
+      ...(desk.mm ? [r("MM", p.v.mm, P.mm), r("Inv", p.v.inv, P.inv)] : []),
+      ...(desk.hedge ? [r("Hedge", p.v.hedge, P.hedge)] : []),
+      ...(desk.rebates ? [r("Rebates", p.v.reb, P.reb)] : []),
       r("Other", p.v.other, P.other),
       ["Fills", int(p.d.fills)],
     ];
@@ -268,10 +267,14 @@ function DeskHistory() {
           ]}
           chips={[
             { key: "pi", label: "Trading", color: P.trading, stroke: S.trading },
-            { key: "mm", label: "MM", color: P.mm, stroke: S.mm },
-            { key: "inv", label: "Inv", color: P.inv, stroke: S.inv },
-            { key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge },
-            { key: "reb", label: "Rebates", color: P.reb, stroke: S.reb },
+            ...(desk.mm
+              ? [
+                  { key: "mm", label: "MM", color: P.mm, stroke: S.mm },
+                  { key: "inv", label: "Inv", color: P.inv, stroke: S.inv },
+                ]
+              : []),
+            ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge }] : []),
+            ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: P.reb, stroke: S.reb }] : []),
             { key: "other", label: "Other", color: P.other, stroke: S.other },
           ]}
           boxRows={boxRows}
@@ -297,6 +300,7 @@ function DeskHistory() {
 
 function DayItem({ d, today }: { d: DayRow; today: boolean }) {
   const money = useAmt();
+  const desk = useDesk();
   return (
     <Row
       title={
@@ -311,7 +315,8 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
           <>
             {int(d.fills)} fills · Vol {money(d.volume, "k")}
             <br />
-            Trading {money(d.pi)} · Hedge {money(d.hedge)}
+            Trading {money(d.pi)}
+            {desk.hedge && <> · Hedge {money(d.hedge)}</>}
           </>
         ) : (
           `${int(d.fills)} fills · Vol ${money(d.volume, "k")}`
@@ -319,7 +324,7 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
       }
       sub2={d.split}
       value={<Amt v={d.pnl} />}
-      valueSub={d.split ? `Rebates ${money(d.reb)}` : d.pnl != null ? "No split kept" : `Trading ${money(d.pi)} · no Day PnL`}
+      valueSub={d.split ? (desk.rebates ? `Rebates ${money(d.reb)}` : undefined) : d.pnl != null ? "No split kept" : `Trading ${money(d.pi)} · no Day PnL`}
       to={{ page: "history", detail: { kind: "day", date: d.day } }}
     />
   );

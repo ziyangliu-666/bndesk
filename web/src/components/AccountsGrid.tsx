@@ -9,7 +9,7 @@ import { flexCols } from "../grid";
 import { int, num, pct } from "../format";
 import { Meter, StateTag } from "./ui";
 import { amount, hideNow, money } from "../mask";
-import { cur, quoteAsset } from "../desk";
+import { cur, quoteAsset, useDesk } from "../desk";
 
 type Row = Account & { _total?: boolean };
 
@@ -136,6 +136,7 @@ const rowIdRow = (p: GetRowIdParams<Row>) => p.data.id;
 export function AccountsGrid({ full = false, wide = true, totals = !full }: { full?: boolean; wide?: boolean; totals?: boolean }) {
   const rows = useStore((s) => s.snap?.accounts);
   const hide = useStore((s) => s.hideAmounts);
+  const d = useDesk();
   const cols = useMemo<ColDef<Row>[]>(() => {
     const n = (c: ColDef<Row>): ColDef<Row> => ({ type: "rightAligned", cellClass: moneyCls(hide), ...c });
     const futOnly = (p: ValueFormatterParams<Row>) => (p.data?.fut_wallet || p.data?._total ? fMoney(p) : "--");
@@ -150,16 +151,16 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
         equity,
         day,
         n({ field: "transfers_day", headerName: "Transfers", headerTooltip: `Net transfers in since the day start, ${cur()}`, width: 86, valueFormatter: fSigned }),
-        n({ field: "rebates", headerName: "Rebates", headerTooltip: `Market-maker rebates credited since the day start, part of Day PnL, ${cur()}`, width: 76, valueFormatter: fSigned }),
+        ...(d.rebates ? [n({ field: "rebates", headerName: "Rebates", headerTooltip: `Market-maker rebates credited since the day start, part of Day PnL, ${cur()}`, width: 76, valueFormatter: fSigned }),] : []),
         n({ field: "equity_open", headerName: "Equity open", headerTooltip: `Equity at the day start, ${cur()}`, width: 92, valueFormatter: fMoney, hide: !wide }),
         n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 86, valueFormatter: fMoney }),
         n({ field: "quote_locked", headerName: "In orders", headerTooltip: `Spot quote balance locked in open bids, ${cur()}`, width: 80, valueFormatter: fMoney }),
         n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 86, valueFormatter: fMoney }),
-        n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 100, valueFormatter: futOnly }),
-        n({ field: "fut_upnl", headerName: "Futures uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 96, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
+        ...(d.hedge ? [n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 100, valueFormatter: futOnly }),] : []),
+        ...(d.hedge ? [n({ field: "fut_upnl", headerName: "Futures uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 96, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),] : []),
         open,
         { colId: "fee_spot", headerName: "Spot fee (bps)", width: 96, cellRenderer: FeeSpot, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "Spot commission, maker / taker, bps of notional" },
-        { colId: "fee_usdm", headerName: "USD-M fee (bps)", width: 104, cellRenderer: FeeUsdm, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "USD-M futures commission, maker / taker, bps of notional" },
+        ...(d.hedge ? [{ colId: "fee_usdm", headerName: "USD-M fee (bps)", width: 104, cellRenderer: FeeUsdm, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "USD-M futures commission, maker / taker, bps of notional" },] : []),
         { ...stream, width: 72 },
         n({ field: "updated", headerName: "Updated", headerTooltip: "Time since the account was last updated", width: 70, cellClass: "num", valueFormatter: (p) => (p.data?._total ? "" : fAge(p)), hide: !wide }),
       ];
@@ -173,14 +174,14 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
       n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 80, valueFormatter: fMoney }),
       n({ field: "quote_locked", headerName: "Locked", headerTooltip: `Spot quote balance locked in open orders, ${cur()}`, width: 70, valueFormatter: fMoney }),
       n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 80, valueFormatter: fMoney }),
-      n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 78, valueFormatter: futOnly }),
-      n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
+      ...(d.hedge ? [n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 78, valueFormatter: futOnly }),] : []),
+      ...(d.hedge ? [n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),] : []),
       { colId: "o10", headerName: "Orders 10 s", headerTooltip: "Orders placed in the last 10 s / Binance limit", width: 104, cellRenderer: M10, valueGetter: (p) => (p.data ? p.data.orders_10s / (p.data.orders_10s_limit || 1) : 0) },
       { colId: "o1d", headerName: "Orders today", headerTooltip: "Orders placed today as a share of the Binance daily limit, %", width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) },
       { colId: "util", headerName: "Bid use", width: 90, cellRenderer: UtilCell, valueGetter: (p) => p.data?.utilization ?? 0, headerTooltip: "Resting bid notional / (free quote + resting bid notional), %" },
       open,
     ];
-  }, [full, wide, hide]);
+  }, [full, wide, hide, d.hedge, d.rebates]);
   const fitted = useMemo(() => flexCols(cols), [cols]);
   const pinned = useMemo(() => (totals && rows && rows.length > 1 ? [total(rows)] : []), [rows, totals]);
 

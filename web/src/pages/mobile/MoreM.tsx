@@ -45,8 +45,8 @@ export function MoreM() {
         <Row title="Orders" sub="Open orders, quote map, rate limits" value={<span className="r-fig">{int(nOrders)}</span>} valueSub="open" to={{ page: "orders" }} />
         <Row
           title="System"
-          sub="Engines and feeds"
-          value={engines ? <span className={"r-fig" + (warn ? " warn-text" : "")}>{`${running} / ${engines.length}`}</span> : undefined}
+          sub={engines?.length ? "Engines and feeds" : "Feeds"}
+          value={engines?.length ? <span className={"r-fig" + (warn ? " warn-text" : "")}>{`${running} / ${engines.length}`}</span> : undefined}
           valueSub={fs ? <span className={fs.worst !== "ok" ? "warn-text" : ""}>feeds {fs.text}</span> : undefined}
           to={{ page: "system" }}
         />

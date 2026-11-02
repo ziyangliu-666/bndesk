@@ -9,7 +9,7 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
-import { cur, baseOf } from "../desk";
+import { cur, baseOf, useDesk } from "../desk";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -59,7 +59,9 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const p = sm?.pnl;
   const hedge = exposure?.hedge_day?.hedge_pnl ?? null;
   const dayStart = sm ? `${hm(sm.day_start, tz)} ${tz === "utc" ? "UTC" : "local time"}` : "the day start";
+  const d = useDesk();
   const parts: Fact[] = [
+    ...(d.mm ? [] : [{ label: "Trading", value: m(pnl(p?.trading)), title: "Trading PnL: what the fills and the held inventory made, fees included." }]),
     {
       label: "Market making",
       value: m(pnl(p?.mm)),
@@ -68,8 +70,8 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     { label: "Inventory", value: m(pnl(p?.inventory)), title: "Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill." },
     { label: "Hedge", value: m(pnl(hedge)), title: "The futures legs since the day start: price at mark, minus fees, plus funding." },
     { label: "Rebates", value: m(pnl(sm?.rebates)), title: "Market-maker rebates Binance credited since the day start, hourly per account." },
-    { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus trading PnL, the hedge and the rebates: what the split does not explain." },
-  ];
+    { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus what the parts add up to: what the split does not explain." },
+  ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
   const facts: Fact[][] = [
     [
       ...(exposure ? [exposureFact(exposure, m, hide)] : []),
@@ -79,7 +81,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       {
         label: "Spot volume",
         value: m(compact(sm?.volume_day)),
-        title: `Spot notional filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} (the perps' hedge fills are on their own rows). ${cur()}.`,
+        title: `Spot notional filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} ${d.hedge ? " (the perps' hedge fills are on their own rows)" : ""}. ${cur()}.`,
       },
       {
         label: "Markout 10 s",
@@ -95,7 +97,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       <FigureHead
         className="dk-tk"
         label="Day PnL"
-        title={`Equity change since ${dayStart}, net of transfers, ${cur()}. Day PnL = Market making + Inventory PnL + Hedge + Rebates + Other.`}
+        title={`Equity change since ${dayStart}, net of transfers, ${cur()}. Day PnL = ${[...(d.mm ? ["Market making", "Inventory PnL"] : ["Trading PnL"]), ...(d.hedge ? ["Hedge"] : []), ...(d.rebates ? ["Rebates"] : []), "Other"].join(" + ")}.`}
         value={m(pnl(sm?.pnl_day))}
         tone={tone(sm?.pnl_day)}
         aside={[{ label: "1h", value: m(pnl(sm?.pnl_1h)), title: `The change of Day PnL over the last hour, ${cur()}` }]}

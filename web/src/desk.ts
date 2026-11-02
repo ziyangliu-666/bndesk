@@ -7,7 +7,7 @@ import type { Desk } from "./protocol";
 const DEFAULT: Desk = { currency: "USDT", quote: "USDT", hedge: true, rebates: true, mm: true };
 
 export const useDesk = () => useStore((s) => s.snap?.desk ?? DEFAULT);
-const deskNow = () => useStore.getState().snap?.desk ?? DEFAULT;
+export const deskNow = () => useStore.getState().snap?.desk ?? DEFAULT;
 
 /** The name on money figures, for text built while rendering. The first page renders after the first snapshot. */
 export const cur = () => deskNow().currency;
@@ -29,3 +29,10 @@ export const baseOf = (symbol: string) => {
   const q = deskNow().quote;
   return symbol.endsWith(q) ? symbol.slice(0, -q.length) : symbol;
 };
+
+/** Alert rules that cannot fire on this desk, left out of the lists of checks. */
+export function ruleApplies(rule: string): boolean {
+  if (rule === "engine" || rule === "engine_latency") return !!useStore.getState().snap?.engines.length;
+  if (rule === "futures_margin" || rule === "exposure_gap") return deskNow().hedge;
+  return true;
+}

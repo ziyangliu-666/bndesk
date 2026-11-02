@@ -6,7 +6,7 @@ import { compact, hm, int, num, price, qtyDecimals, se, signClass, type TzMode }
 import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
 import { dayOf, type DayRow, type Row } from "./data";
-import { cur } from "../../desk";
+import { cur, deskNow } from "../../desk";
 
 export interface Col<R> {
   key: string;
@@ -123,6 +123,7 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     // no sort by a hidden figure (the order would tell it)
     sort: hide ? undefined : (r) => r[k],
   });
+  const desk = deskNow();
   // Day PnL, then Trading PnL with its two parts after it, then the hedge, the rebates and the rest
   return [
     { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label, sort: (r) => r.key },
@@ -137,10 +138,9 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
       cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : ""),
       sort: hide ? undefined : (r) => r.pi,
     },
-    p("mm", "Market making", PART_META.mm.title),
-    p("inv", "Inventory PnL", PART_META.inv.title),
-    p("hedge", "Hedge", PART_META.hedge.title),
-    p("reb", "Rebates"),
+    ...(desk.mm ? [p("mm", "Market making", PART_META.mm.title), p("inv", "Inventory PnL", PART_META.inv.title)] : []),
+    ...(desk.hedge ? [p("hedge", "Hedge", PART_META.hedge.title)] : []),
+    ...(desk.rebates ? [p("reb", "Rebates")] : []),
     p("other", "Other", PART_META.other.title),
     { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills },
     { key: "v", label: "Volume", title: `Filled notional, ${cur()}`, cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : ""), sort: hide ? undefined : (r) => r.volume },

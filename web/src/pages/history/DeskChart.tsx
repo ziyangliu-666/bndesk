@@ -8,7 +8,7 @@ import { REF_LINE } from "../../components/ex/palette";
 import { C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { compact, num, int } from "../../format";
 import { PARTS, type HInterval, type Mode, type Part, type Row } from "./data";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
   pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
@@ -92,6 +92,10 @@ export function DeskChart({
   const val = (v: number | null | undefined) => (v == null ? "--" : hide ? MASK : val2(v));
   const amt = maskFormat(hide, (v: number) => num(v, 0));
   const vol = maskFormat(hide, (v: number) => compact(v));
+  const d = useDesk();
+  const shows = (k: Part) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : true);
+  const parts = PARTS.filter(shows);
+  const stackAll = (d.mm ? STACK : (["pi", ...STACK] as Part[])).filter(shows);
   const stack = !hidden.includes("stack") && mode === "daily";
   const word = periodWord(interval);
   const pnlLabel = word === "Bar" ? "PnL" : `${word} PnL`;
@@ -99,7 +103,7 @@ export function DeskChart({
   const at = (t: number) => byT.get(t);
 
   // the stacked parts depend on which are shown
-  const stackKey = STACK.filter((k) => !hidden.includes(k)).join(",");
+  const stackKey = stackAll.filter((k) => !hidden.includes(k)).join(",");
   const shownStack = useMemo(() => (stackKey ? (stackKey.split(",") as Part[]) : []), [stackKey]);
 
   const series = useMemo<ExSeries[]>(() => {
@@ -170,7 +174,7 @@ export function DeskChart({
         out.push({ key: "pnl", kind: "histogram", label: pnlLabel, toggle: false, signColor: true, format: sgn, data: points(hide ? "d.pnl.h" : "d.pnl", rows, (r) => ({ time: r.t, value: r.pnl, color: hide ? rgba(C.ink2, 0.5) : rgba(r.pnl >= 0 ? UP : DOWN, 0.85) })) });
     } else if (mode === "cum") {
       out.push({ key: "cum", kind: "baseline", label: "Cumulative PnL", toggle: false, format: sgn, data: points("c.cum", rows, (r) => ({ time: r.t, value: r.cum })) });
-      for (const k of PARTS) {
+      for (const k of parts) {
         const m = PART_META[k];
         out.push({
           key: k,
@@ -206,9 +210,9 @@ export function DeskChart({
       data: points("vol", rows, (r) => ({ time: r.t, value: r.volume })),
     });
     out.push({ key: "held", kind: "line", label: "Inventory", pane: 2, color: HELD, format: amt, lastValue: true, data: points("held", rows, (r) => ({ time: r.t, value: r.inventory })) });
-    out.push({ key: "fut", kind: "line", label: "Futures", pane: 2, color: FUT_COLOR, format: amt, lastValue: true, data: points("fut", rows, (r) => ({ time: r.t, value: r.futures })) });
+    if (d.hedge) out.push({ key: "fut", kind: "line", label: "Futures", pane: 2, color: FUT_COLOR, format: amt, lastValue: true, data: points("fut", rows, (r) => ({ time: r.t, value: r.futures })) });
     return out;
-  }, [rows, mode, stack, shownStack, pnlLabel, hide, chosen]);
+  }, [rows, mode, stack, shownStack, pnlLabel, hide, chosen, d.hedge, d.rebates, d.mm]);
   // the chosen bar also gets a mark under it (whatever the chart type)
   const markers = useMemo(
     () => (chosen != null && rows.some((r) => r.t === chosen) && series[0] ? [{ series: series[0].key, time: chosen, color: C.accent, shape: "arrowUp" as const, position: "belowBar" as const, size: 1 }] : []),
@@ -222,8 +226,8 @@ export function DeskChart({
     if (mode === "cum")
       out.push({ label: word, line: 1, title: `What this ${word.toLowerCase()} made`, value: (t) => { const r = at(t); return r ? [sgn(r.pnl), signColor(r.pnl)] : "--"; } });
     if (mode === "daily")
-      for (const k of PARTS) {
-        if (stack && k === "pi") continue;
+      for (const k of parts) {
+        if (stack && k === "pi" && d.mm) continue;
         const m = PART_META[k];
         out.push({
           key: stack ? k : undefined,
@@ -235,7 +239,7 @@ export function DeskChart({
         });
       }
     out.push({ label: "Fills", pane: 1, line: 1, value: (t) => [int(at(t)?.fills), C.ink] });
-    out.push({
+    if (d.hedge) out.push({
       label: "Net",
       pane: 2,
       line: 1,
@@ -247,18 +251,19 @@ export function DeskChart({
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [byT, mode, stack, pnlLabel, word, hide]);
+  }, [byT, mode, stack, pnlLabel, word, hide, d.hedge, d.rebates, d.mm]);
 
   const chips = useMemo<(Chip | "|")[]>(() => {
     const out: (Chip | "|")[] = [];
     if (mode === "daily") out.push({ key: "stack", label: "Stack split", title: "Draw each bar as its parts, stacked" });
-    const parts = mode === "cum" ? PARTS : stack ? STACK : [];
-    if (parts.length && out.length) out.push("|");
-    for (const k of parts) out.push({ key: k, label: PART_META[k].label, color: PART_META[k].color, stroke: mode === "cum" ? PART_META[k].style : undefined, bar: mode !== "cum", title: PART_META[k].title });
+    const list = mode === "cum" ? parts : stack ? stackAll : [];
+    if (list.length && out.length) out.push("|");
+    for (const k of list) out.push({ key: k, label: PART_META[k].label, color: PART_META[k].color, stroke: mode === "cum" ? PART_META[k].style : undefined, bar: mode !== "cum", title: PART_META[k].title });
     if (out.length) out.push("|");
-    out.push({ key: "vol", label: "Vol" }, { key: "held", label: "Inventory", color: HELD }, { key: "fut", label: "Futures", color: FUT_COLOR });
+    out.push({ key: "vol", label: "Vol" }, { key: "held", label: "Inventory", color: HELD });
+    if (d.hedge) out.push({ key: "fut", label: "Futures", color: FUT_COLOR });
     return out;
-  }, [mode, stack]);
+  }, [mode, stack, d.hedge, d.rebates, d.mm]);
 
   const zeroOn = mode === "cum" ? "cum" : mode === "candles" ? "k" : (series[0]?.key ?? "pnl");
   const zeroLine = useMemo(() => [{ series: zeroOn, price: 0, color: REF_LINE, style: "solid" as const, axisLabel: false }], [zeroOn]);

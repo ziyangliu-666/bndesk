@@ -9,6 +9,7 @@ import type { Alert } from "../../protocol";
 import { RULES, alertText, byUrgency } from "./rules";
 import { Empty, PageTabs, Row, Sec } from "./rest/ui";
 import "./rest/ops.css";
+import { ruleApplies } from "../../desk";
 
 type Tab = "active" | "cleared" | "hidden";
 const CONN = { connecting: "Connecting", live: "Live", lag: "Lagging", stale: "Stale", reconnecting: "Reconnecting" } as const;
@@ -66,7 +67,7 @@ function Watched({ alerts }: { alerts: Alert[] }) {
   for (const a of alerts) if (a.active && (!by.has(a.rule) || rank[a.level] > rank[by.get(a.rule)!])) by.set(a.rule, a.level);
   return (
     <Sec title="Checks" right="now">
-      {Object.entries(RULES).map(([k, r]) => {
+      {Object.entries(RULES).filter(([k]) => ruleApplies(k)).map(([k, r]) => {
         const lv = by.get(k);
         return (
           <Row

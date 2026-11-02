@@ -7,7 +7,7 @@ import { EngineFacts, EngineState, feedState, feedSummary, FeedRow, KillBar, Lat
 import "./ops.css";
 import "./rest/ops.css";
 import { useExPref } from "../../components/ex";
-import { Empty, PageTabs } from "./rest/ui";
+import { PageTabs } from "./rest/ui";
 
 const OK = ["up", "running", "live", "ok", "connected"];
 const ORDER: Record<FeedState, number> = { down: 0, flapping: 1, silent: 2, up: 3 };
@@ -115,7 +115,8 @@ export function EngineM() {
   const feeds = useStore((s) => s.snap?.feeds) ?? [];
   const alerts = useStore((s) => s.snap?.alerts);
   const now = useNow(1000) + useStore.getState().skew;
-  const [tab, setTab] = useExPref<"engines" | "feeds">("m-system", "tab", "engines", ["engines", "feeds"]);
+  const [saved, setTab] = useExPref<"engines" | "feeds">("m-system", "tab", "engines", ["engines", "feeds"]);
+  const tab = engines?.length ? saved : "feeds";
 
   const states = new Map(feeds.map((f) => [f, feedState(f, now, alerts)]));
   // down first, then flapping, then silent
@@ -123,29 +124,30 @@ export function EngineM() {
   const good = feeds.filter((f) => states.get(f) === "up");
   const sum = feedSummary(feeds, now, alerts);
   const running = (engines ?? []).filter((e) => e.up && !e.kill && e.state === "running").length;
+  const hasEngines = !!engines?.length;
   const tone = (w: string) => (w === "crit" ? "crit-text" : w === "warn" ? "warn-text" : "");
 
   return (
     <div className="o-page">
       <PageTabs
         items={[
-          {
-            value: "engines",
-            label: <span className={engines && running < engines.length ? "warn-text" : ""}>Engines</span>,
-            // a count only when it asks for something: engines not running, feeds to check
-            count: engines && running < engines.length ? `${engines.length - running} down` : null,
-          },
-          { value: "feeds", label: <span className={tone(sum.worst)}>Feeds</span>, count: bad.length ? `${bad.length} to check` : null },
+          ...(hasEngines
+            ? [
+                {
+                  value: "engines" as const,
+                  label: <span className={engines && running < engines.length ? "warn-text" : ""}>Engines</span>,
+                  // a count only when it asks for something: engines not running, feeds to check
+                  count: engines && running < engines.length ? `${engines.length - running} down` : null,
+                },
+              ]
+            : []),
+          { value: "feeds" as const, label: <span className={tone(sum.worst)}>Feeds</span>, count: bad.length ? `${bad.length} to check` : null },
         ]}
         value={tab}
         onChange={setTab}
       />
       {tab === "engines" ? (
-        engines?.length ? (
-          engines.map((e) => <EngineSection key={e.name} e={e} feeds={feeds} now={now} alerts={alerts} />)
-        ) : (
-          <Empty>No engine configured.</Empty>
-        )
+        (engines ?? []).map((e) => <EngineSection key={e.name} e={e} feeds={feeds} now={now} alerts={alerts} />)
       ) : (
         <>
           {bad.length > 0 && (

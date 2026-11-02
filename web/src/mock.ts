@@ -256,9 +256,30 @@ let d0 = minuteOf(dayStart); // first minute of the day
 let curMin = minuteOf(now);
 const activityNow = () => minuteActivity(minuteOf(now));
 
-// ---- how the desk is set up: `?currency=USD` names the figures otherwise ----
+// ---- how the desk is set up: `?currency=USD` names the figures otherwise; `?hedge=0&rebates=0&mm=0&engines=0` is a
+// desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures) ----
 const params = new URLSearchParams(location.search);
-const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", hedge: true, rebates: true, mm: true };
+const on = (k: string) => params.get(k) !== "0";
+const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", hedge: on("hedge"), rebates: on("rebates"), mm: on("mm") };
+
+/** What a message says on a desk without the parts `DESK` leaves out. */
+function shaped<T extends Partial<Snapshot>>(m: T): T {
+  if (!DESK.hedge) {
+    if (m.symbols) m.symbols = m.symbols.filter((s) => s.venue === "spot");
+    if (m.orders) m.orders = m.orders.filter((o) => o.venue === "spot");
+    if (m.fills) m.fills = m.fills.filter((f) => f.venue === "spot");
+    if (m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, positions: [], fut_wallet: 0, fut_upnl: 0, fut_available: 0, fees: a.fees.filter((x) => x.venue === "spot") }));
+    if (m.exposure) m.exposure = { ...m.exposure, futures_notional: 0, net: m.exposure.spot_value, target: null, band: null, gap: null, funding: [], hedge_notional: 0, ratio: null, hedge_day: null, by_account: m.exposure.by_account.map((a) => ({ ...a, futures_notional: 0, net: a.spot_value })) };
+  }
+  if (!DESK.hedge) {
+    if (m.feeds) m.feeds = m.feeds.filter((f) => !f.name.includes("usdm"));
+    if (m.alerts) m.alerts = m.alerts.filter((a) => !a.text.includes("usdm"));
+  }
+  if (!DESK.rebates && m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, rebates: 0 }));
+  if (!on("engines") && m.engines) m.engines = [];
+  if (!on("engines") && m.feeds) m.feeds = m.feeds.filter((f) => f.kind !== "engine");
+  return m;
+}
 
 // ---- desk state ----
 let base: DeskMinute; // the desk's cumulative values at the day start
@@ -1559,7 +1580,7 @@ export function startMock(emit: Emit): () => void {
   buildHistory();
   buildDays();
   minOpen = minHi = minLo = pnlParts().pnlDay;
-  emit({ type: "snapshot", data: snapshot() });
+  emit({ type: "snapshot", data: shaped(snapshot()) });
   let tick = 0;
   let lastSlot = series.length ? series[series.length - 1]!.t : dayStart - SLOT;
   let nextScrape = now + 1000;
@@ -1635,7 +1656,8 @@ export function startMock(emit: Emit): () => void {
     if (newFills.length) fills = newFills.reverse().concat(fills).slice(0, 2000);
     const updated = mature();
     const out = newFills.concat(updated);
-    if (out.length) emit({ type: "fills", data: out });
+    const tape = DESK.hedge ? out : out.filter((f) => f.venue === "spot");
+    if (tape.length) emit({ type: "fills", data: tape });
 
     // a stream flap on sub-a now and then
     if (tick % 4800 === 1200) acctStream["sub-a"] = "down";
@@ -1704,7 +1726,7 @@ export function startMock(emit: Emit): () => void {
       patch.markouts = markouts();
     }
     if (newSlot) patch.days = days(sum);
-    emit({ type: "patch", data: patch });
+    emit({ type: "patch", data: shaped(patch) });
   }, TICK);
   return () => clearInterval(iv);
 }

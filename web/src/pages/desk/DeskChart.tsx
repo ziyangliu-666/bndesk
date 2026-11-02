@@ -12,7 +12,7 @@ import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, typ
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 type Tab = "pnl" | "equity" | "exposure";
 const TABS: { value: Tab; label: string; title: string }[] = [
@@ -84,6 +84,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? 0);
   const exposure = useStore((s) => (tab === "exposure" ? s.snap?.exposure : undefined));
   const step = STEP[iv] ?? MIN;
+  const desk = useDesk();
   const stable = useRef(new Stable()).current;
   const joined = useRef(new Joined(stable)).current;
   // today's rebates and fill counts by minute (the snapshot's minute bars do not carry them)
@@ -158,15 +159,17 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
             data: joined.get<ExOhlc>("dayc" + iv, head, tail, (r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c }), sameOhlc),
           }
         : { key: "day", kind: "baseline", label: dayLabel, toggle: false, format: fPnl, signColor: true, data: pts("day", (r) => r.c) };
-    const has = (k: "mm" | "hedge") => tail.some((r) => r[k] != null) || head.some((r) => r[k] != null);
+    const has = (k: "mm" | "hedge") => (k === "mm" ? desk.mm : desk.hedge) && (tail.some((r) => r[k] != null) || head.some((r) => r[k] != null));
     // rebates at a row: the last minute's figure inside it; Other is what the parts leave of Day PnL
     const rebAt = (r: Row) => {
+      if (!desk.rebates) return 0;
       if (r.reb !== undefined) return r.reb;
       if (r.t < dayStart) return null;
       const v = rebatesAt(mins, r.t, step);
       return v == null ? null : v + (offAt ? offAt(r.t).reb : 0);
     };
-    const anyReb = mins.reb.t.length > 0 || past.rows.some((r) => r.reb != null);
+    // Other reads against the rebates, so it needs their history; a desk with none has nothing to wait for
+    const anyReb = !desk.rebates || mins.reb.t.length > 0 || past.rows.some((r) => r.reb != null);
     const P = PNL_COLORS;
     const S = PNL_STROKES;
     parts = [
@@ -178,9 +181,9 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
           ]
         : []),
       ...(has("hedge") ? [{ key: "hedge", kind: "line", pane: 1, label: "Hedge", color: P.hedge, width: 1.5, lineStyle: S.hedge, format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
+      ...(desk.rebates && anyReb ? [{ key: "reb", kind: "line", pane: 1, label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries] : []),
       ...(anyReb
         ? [
-            { key: "reb", kind: "line", pane: 1, label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries,
             {
               key: "other",
               kind: "line",
@@ -239,8 +242,12 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   } else {
     list = [
       { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fSigned, data: pts("net", (r) => r.inv + r.fut) },
-      { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
-      { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fSigned, data: pts("fut", (r) => r.fut), lastValue: false },
+      ...(desk.hedge
+        ? ([
+            { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
+            { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fSigned, data: pts("fut", (r) => r.fut), lastValue: false },
+          ] as ExSeries[])
+        : []),
     ];
     const x = exposure;
     if (x?.gap != null)

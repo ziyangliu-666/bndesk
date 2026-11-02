@@ -10,7 +10,7 @@ import { daySummary, sumDays, summaryNote, type DayRow, type Part } from "./data
 import { maskText, qtyText } from "../../mask";
 import { SeriesKey } from "../../components/ex";
 import { hedgePnl, useLegPnl } from "../../selectors";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
@@ -57,12 +57,13 @@ export function DeskSide({
   // the same summary as the phone's: today counts in the total only; days without a Day PnL in none
   const sm = useMemo(() => daySummary(rows, todayDay), [rows, todayDay]);
   // finished days only (today is still moving), the two best and the two worst, each list named
+  const d = useDesk();
   const ranked = rows.filter((r) => r.pnl != null && r.day !== todayDay).sort((a, b) => b.pnl! - a.pnl!);
   const nb = Math.min(2, Math.ceil(ranked.length / 2));
   const bestDays = ranked.slice(0, nb);
   const worstDays = ranked.slice(nb).slice(-2).reverse();
   // Trading PnL is the subtotal of market making and inventory PnL (indented under it), then the rest
-  const parts: Part[] = ["pi", "mm", "inv", "hedge", "reb", "other"];
+  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : true));
   const max = Math.max(1e-9, ...parts.filter((k) => k !== "pi").map((k) => Math.abs(tot[k] ?? 0)));
   const m = (s: string) => maskText(hide, s);
   const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));

@@ -10,7 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
-import { cur, quoteAsset, baseOf } from "../../desk";
+import { cur, quoteAsset, baseOf, useDesk } from "../../desk";
 
 type Tab = "accounts" | "spot" | "futures" | "exposure";
 const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
@@ -22,7 +22,10 @@ const betaNote = (x: Exposure) =>
 export function AccountsM() {
   const sm = useStore((s) => s.snap?.summary);
   const accounts = useLive((s) => s.snap?.accounts, 250);
-  const [tab, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
+  const [saved, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
+  const desk = useDesk();
+  // no futures on this desk: a tab remembered from elsewhere falls back
+  const tab = !desk.hedge && (saved === "futures" || saved === "exposure") ? "accounts" : saved;
   const money = useAmt();
   const hide = useHide();
   const open = sm ? sm.equity - sm.pnl_day : null;
@@ -50,8 +53,12 @@ export function AccountsM() {
         items={[
           { value: "accounts", label: "Accounts" },
           { value: "spot", label: "Spot" },
-          { value: "futures", label: "Futures" },
-          { value: "exposure", label: "Exposure" },
+          ...(desk.hedge
+            ? [
+                { value: "futures" as const, label: "Futures" },
+                { value: "exposure" as const, label: "Exposure" },
+              ]
+            : []),
         ]}
         value={tab}
         onChange={setTab}

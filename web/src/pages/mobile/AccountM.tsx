@@ -9,7 +9,7 @@ import { FillRow, TIP, useFillSheet } from "./shared";
 import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
-import { cur, quoteAsset } from "../../desk";
+import { cur, deskNow, quoteAsset } from "../../desk";
 
 const FILLS = 30;
 type Tab = "balance" | "instruments" | "orders" | "fills";
@@ -95,7 +95,7 @@ function Balance({ id }: { id: string }) {
             { label: `${quoteAsset()} free`, value: money(a.quote_free, "full") },
             { label: `${quoteAsset()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(a.quote_locked, "full") },
             { label: "Inventory", info: `Non-quote spot assets, free + locked, at mid, ${cur()}.`, value: money(a.inventory_value, "full") },
-            { label: "Rebates", info: `Market-maker rebates credited since the day start: already part of Day PnL, ${cur()}.`, value: <Amt v={a.rebates} /> },
+            ...(deskNow().rebates ? [{ label: "Rebates", info: `Market-maker rebates credited since the day start: already part of Day PnL, ${cur()}.`, value: <Amt v={a.rebates} /> },] : []),
           ]}
         />
       </Sec>

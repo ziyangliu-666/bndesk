@@ -10,7 +10,7 @@ import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
 import { MASK } from "../../mask";
 import "./rest/assets.css";
 import "./history.css";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 const DEF_SE =
   "± is the likely error of the figure: its standard error, from how much the day's hourly results varied (Newey–West, lag 3).";
@@ -27,6 +27,7 @@ const tradingInfo = () => `Market making plus inventory PnL, fees included; not 
 
 /** One PnL day: its result, its path through the day on a chart, the split, the hedged views and the activity. */
 export function DayM({ date }: { date: string }) {
+  const desk = useDesk();
   const days = useStore((s) => s.snap?.days);
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? 0);
   const today = days?.[days.length - 1]?.day;
@@ -64,7 +65,7 @@ export function DayM({ date }: { date: string }) {
 
       {d && kept && (
         <Sec title="Split" right={cur()}>
-          {PARTS.map((p) => (
+          {PARTS.filter((p) => (p.key === "hedge" ? desk.hedge : p.key === "rebates" ? desk.rebates : p.key === "mm" || p.key === "inventory" ? desk.mm : true)).map((p) => (
             <Row
               key={p.key}
               dense
@@ -86,7 +87,7 @@ export function DayM({ date }: { date: string }) {
         </Sec>
       )}
 
-      {d && <><Sec title="Trading PnL if hedged" info={`Trading PnL minus what the inventory would have made on its references (hedged on refs), or on the beta instrument (hedged on beta). ${DEF_SE}`} right="± likely error">
+      {d && desk.hedge && <><Sec title="Trading PnL if hedged" info={`Trading PnL minus what the inventory would have made on its references (hedged on refs), or on the beta instrument (hedged on beta). ${DEF_SE}`} right="± likely error">
         <Stats
           cols={3}
           items={[
@@ -168,6 +169,7 @@ function useDayPath(start: number, live: boolean): DayPathLoad {
 /** The day's PnL through the day, 5 min bars, with its parts as lines (chips). */
 function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
   const hide = useStore((s) => s.hideAmounts);
+  const desk = useDesk();
   const money = useAmt();
   const pts = path.pts;
   const by = useMemo(() => new Map(pts.map((p) => [p.time, p])), [pts]);
@@ -191,20 +193,22 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
     return [
       { key: "pnl", kind: "baseline", label: "Day PnL", signColor: true, format: fmt, toggle: false, data: pts.map((p) => ({ time: p.time, value: p.pnl })) },
       ...(has("trading") ? [line("trading", "Trading", P.trading, S.trading)] : []),
-      ...(has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : []),
-      ...(has("hedge") ? [line("hedge", "Hedge", P.hedge, S.hedge)] : []),
-      ...(has("reb") ? [line("reb", "Rebates", P.reb, S.reb), line("other", "Other", P.other, S.other)] : []),
+      ...(desk.mm && has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : []),
+      ...(desk.hedge && has("hedge") ? [line("hedge", "Hedge", P.hedge, S.hedge)] : []),
+      ...(desk.rebates && has("reb") ? [line("reb", "Rebates", P.reb, S.reb)] : []),
+      ...(has("reb") ? [line("other", "Other", P.other, S.other)] : []),
     ];
-  }, [pts, hide]);
+  }, [pts, hide, desk.mm, desk.hedge, desk.rebates]);
   const boxRows = (t: number): ExBoxRow[] => {
     const p = by.get(t);
     if (!p) return [];
     const r = (label: string, v: number | null, color: string): ExBoxRow => [label, money(v), color];
     const rows: ExBoxRow[] = [r("Day PnL", p.pnl, hide ? C.muted : p.pnl > 0 ? C.up : p.pnl < 0 ? C.down : C.ink)];
     if (p.trading != null) rows.push(r("Trading", p.trading, P.trading));
-    if (p.mm != null) rows.push(r("MM", p.mm, P.mm), r("Inv", p.inv, P.inv));
-    if (p.hedge != null) rows.push(r("Hedge", p.hedge, P.hedge));
-    if (p.reb != null) rows.push(r("Rebates", p.reb, P.reb), r("Other", p.other, P.other));
+    if (desk.mm && p.mm != null) rows.push(r("MM", p.mm, P.mm), r("Inv", p.inv, P.inv));
+    if (desk.hedge && p.hedge != null) rows.push(r("Hedge", p.hedge, P.hedge));
+    if (desk.rebates && p.reb != null) rows.push(r("Rebates", p.reb, P.reb));
+    if (p.reb != null) rows.push(r("Other", p.other, P.other));
     return rows;
   };
   return (

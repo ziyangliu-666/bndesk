@@ -5,13 +5,13 @@ import { useEffect, useMemo, useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { CellClassParams, ColDef, GetRowIdParams, GridApi, ICellRendererParams, RowClickedEvent, ValueFormatterParams, ValueGetterParams } from "ag-grid-community";
 import { selectInstrument, useStore, type Instrument } from "../store";
-import type { SymbolRow } from "../protocol";
+import type { Desk, SymbolRow } from "../protocol";
 import { gridTheme } from "../gridTheme";
 import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, fVol, signCls, DEFAULT_COL } from "../grid";
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import { refLabel } from "./ui";
 import { hedgePnl, tradingPnl, useLegPnl } from "../selectors";
-import { cur } from "../desk";
+import { cur, useDesk } from "../desk";
 
 /** A row, with its hedge leg's P&L today (perps) put in the row: AG Grid refreshes a row whose data changed. */
 type Row = SymbolRow & { _total?: boolean; _hedge?: number | null };
@@ -125,7 +125,7 @@ const blankTotal = (f: VF): VF => (p) => (p.data?._total ? "" : f(p));
 
 /** The columns; `hide` (Hide amounts): a sort by a masked figure would give the hidden order away, so those
  *  columns do not sort and the rows go by symbol. */
-function columns(hide: boolean): ColDef<Row>[] {
+function columns(hide: boolean, d: Desk): ColDef<Row>[] {
   // money and sizes (their cells take the mask's class): no sort while hidden
   const n = (c: ColDef<Row>): ColDef<Row> => ({ type: "rightAligned", cellClass: "num", ...c, ...(hide && typeof c.cellClass === "function" ? { sortable: false } : null) });
   return [
@@ -152,8 +152,12 @@ function columns(hide: boolean): ColDef<Row>[] {
       headerTooltip: `Today, ${cur()}: market making + inventory PnL, fees included. Spot markets only: a perp is the hedge (its P&L is under Hedge)`,
       ...flashOn(fPnl),
     }),
+    ...(d.mm ? [
     n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Each fill against the mid 60 s later, minus fees, ${cur()}` }),
     n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Trading PnL minus market making, ${cur()}` }),
+    ] : []),
+    ...(d.hedge
+      ? [
     n({
       colId: "hedge",
       headerName: "Hedge",
@@ -163,7 +167,9 @@ function columns(hide: boolean): ColDef<Row>[] {
       cellClass: moneyCls,
       headerTooltip: `A perp's hedge leg today: price P&L at mark − fees + funding, ${cur()}. The total is the head's Hedge`,
       ...flashOn(fPnl),
-    }),
+    })
+        ]
+      : []),
     n({ field: "fills_day", headerName: "Fills", width: 64, valueFormatter: fInt, headerTooltip: "Fills today", ...flashOn(fInt) }),
     n({ field: "volume_day", headerName: "Volume", width: 74, valueFormatter: money(blankTotal(fVol as VF)), cellClass: plainCls, headerTooltip: `Filled notional today, ${cur()}. The total is the spot markets' (the ticker's Spot volume)` }),
     n({ field: "edge_bps", headerName: "Edge", width: 56, valueFormatter: fBps, headerTooltip: "Edge at fill: side × (fair − price) / fair, volume-weighted, bps" }),
@@ -204,7 +210,8 @@ export function SymbolsGrid({ selected, hideDust = false }: { selected?: Instrum
   );
   // new column definitions when Hide amounts flips: the cell classes (muted, no sign colour) follow
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cols = useMemo(() => flexCols(columns(hide)), [hide]);
+  const d = useDesk();
+  const cols = useMemo(() => flexCols(columns(hide, d)), [hide, d]);
   const pinned = useMemo(() => (rows.length ? [totals(rows)] : []), [rows]);
   const selKey = selected ? `${selected.venue}:${selected.symbol}` : "";
   const rules = useMemo(

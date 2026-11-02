@@ -17,7 +17,7 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
@@ -65,6 +65,7 @@ export function DeskM() {
   );
   if (!sm || !exposure) return null;
   const p = sm.pnl;
+  const desk = useDesk();
   const hedge = exposure.hedge_day?.hedge_pnl ?? null;
   const zone = tz === "utc" ? " UTC" : "";
   const equity = (accounts ?? []).reduce((s, a) => s + a.equity, 0);
@@ -83,10 +84,14 @@ export function DeskM() {
       <Section title="Day PnL split" right={cur()}>
         <PartRows
           rows={[
+            ...(desk.mm
+              ? [
             { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, sub: p.mm_unmarked_fills ? `${int(p.mm_unmarked_fills)} without a 60 s price` : undefined, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} ${cur()}.${unpriced(p, hide)}` },
             { key: "inv", label: "Inventory PnL", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
-            { key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge },
-            { key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates },
+                ]
+              : [{ key: "trading", label: "Trading PnL", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
+            ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),
+            ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates }] : []),
             {
               key: "other",
               label: "Other",
@@ -94,7 +99,7 @@ export function DeskM() {
               stroke: PNL_STROKES.other,
               v: sm.other,
               tone: reconcile ? "warn" : undefined,
-              info: "Day PnL minus trading PnL, the hedge and the rebates." + (reconcile ? "\n\nA reconcile alert is active: a fill, transfer or asset the desk does not see." : ""),
+              info: "Day PnL minus what the parts above add up to." + (reconcile ? "\n\nA reconcile alert is active: a fill, transfer or asset the desk does not see." : ""),
             },
           ]}
         />

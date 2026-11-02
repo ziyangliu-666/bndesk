@@ -436,6 +436,10 @@
   /* the engines take what they need (up to 60 % of the height, then scroll), the feeds and alerts the rest */
   grid-template-rows: minmax(0, auto) minmax(220px, 1fr);
 }
+/* no engines configured: the feeds and alerts have the page */
+.ops-system:not(:has(.ops-sys-engines)) {
+  grid-template-rows: minmax(220px, 1fr);
+}
 .ops-sys-engines {
   max-height: 60vh;
 }

@@ -18,7 +18,7 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
-import { cur, quoteAsset, baseOf } from "../desk";
+import { cur, quoteAsset, baseOf, useDesk } from "../desk";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
 
@@ -59,6 +59,7 @@ function Hero() {
       transfers: sum((a) => a.transfers_day),
     };
   }, [accounts]);
+  const desk = useDesk();
   const pnlDay = summary?.pnl_day ?? t?.pnl;
   const pctDay = t && t.open > 0 && pnlDay != null ? pnlDay / t.open : null;
   const tone = hide ? undefined : pnlDay == null ? undefined : pnlDay > 0 ? "up" : pnlDay < 0 ? "down" : undefined;
@@ -92,11 +93,11 @@ function Hero() {
         ]}
         parts={[
           { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: `Spot: ${quoteAsset()} free and in orders plus the other assets at mid` },
-          { label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },
+          ...(desk.hedge ? [{ label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },] : []),
         ]}
         facts={[
           [
-            { label: "Rebates today", value: summary ? <Money v={summary.rebates} sign color={false} /> : "--", title: "Market-maker rebates credited today, part of today's PnL" },
+            ...(desk.rebates ? [{ label: "Rebates today", value: summary ? <Money v={summary.rebates} sign color={false} /> : "--", title: "Market-maker rebates credited today, part of today's PnL" },] : []),
             { label: "Transfers today", value: t ? <Money v={t.transfers} sign color={false} /> : "--", title: "Net transfers in since the day start (not PnL)" },
           ],
         ]}
@@ -801,7 +802,10 @@ function Exposure() {
 // ================================ page ================================
 
 export function Accounts() {
-  const [tab, setTab] = useExPref<AssetTab>("assets", "tab", "overview", ["overview", "spot", "futures", "exposure"]);
+  const [saved, setTab] = useExPref<AssetTab>("assets", "tab", "overview", ["overview", "spot", "futures", "exposure"]);
+  const { hedge } = useDesk();
+  // no futures on this desk: a tab remembered from elsewhere falls back
+  const tab = !hedge && (saved === "futures" || saved === "exposure") ? "overview" : saved;
   return (
     <div className="page ops-assets">
       <Hero />
@@ -812,8 +816,12 @@ export function Accounts() {
           items={[
             { value: "overview", label: "Overview" },
             { value: "spot", label: "Spot" },
-            { value: "futures", label: "Futures" },
-            { value: "exposure", label: "Exposure & hedge" },
+            ...(hedge
+              ? [
+                  { value: "futures" as const, label: "Futures" },
+                  { value: "exposure" as const, label: "Exposure & hedge" },
+                ]
+              : []),
           ]}
         />
       </div>

@@ -11,7 +11,7 @@ import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
-import { cur, quoteOf, baseOf } from "../../desk";
+import { cur, quoteOf, baseOf, useDesk } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type Key = "fills" | "name" | "chg" | "pnl" | "inv";
@@ -57,6 +57,7 @@ function MarketList() {
   const legs = useLive((s) => s.snap?.exposure.hedge_day?.legs, 1000, hold_);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const d = useDesk();
   const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
   // a spot market's Trading PnL; a perp is the hedge: its leg's P&L today, shown as such (and sorted after)
   const hedgeOf = useMemo(() => {
@@ -147,7 +148,7 @@ function MarketList() {
               { value: "all", label: "All" },
               { value: "held", label: "Held" },
               { value: "quoted", label: "Quoted" },
-              { value: "perp", label: "Perp" },
+              ...(d.hedge ? [{ value: "perp" as const, label: "Perp" }] : []),
             ]}
           />
         </div>

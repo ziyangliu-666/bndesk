@@ -16,7 +16,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { Money } from "../mask";
 import { RULES } from "./mobile/rules";
 import "./ops/ops.css";
-import { cur } from "../desk";
+import { cur, ruleApplies } from "../desk";
 
 /** A latency in one unit down the page: µs (a decimal under 100 µs). */
 function us(v: number | null): string {
@@ -232,7 +232,7 @@ function Checks() {
   return (
     <div className="ops-checks">
       <div className="ops-checks-h">Checks now</div>
-      {Object.entries(RULES).map(([k, r]) => {
+      {Object.entries(RULES).filter(([k]) => ruleApplies(k)).map(([k, r]) => {
         const lv = by.get(k);
         return (
           <div key={k} className="ops-check" title={r.means}>
@@ -281,21 +281,22 @@ export function Engine() {
   const engDown = engines?.filter((e) => !e.up || e.kill).length ?? 0;
   return (
     <div className="page ops-system">
-      <section className="ops-panel ops-sys-engines">
-        <header className="ops-head">
-          <span className="ops-title">
-            Engines {engDown > 0 && <span className="ops-count fig warn-text">{engDown} down</span>}
-          </span>
-          <span className="ops-head-right muted">Money in {cur()}</span>
-        </header>
-        <div className="ops-sys-scroll">
-          {engines?.length ? (
-            engines.map((e) => <EngineSection key={e.name} e={e} />)
-          ) : (
-            <div className="ops-empty">{engines ? "No engine configured. Add an [[engines]] url to scrape Prometheus metrics." : "--"}</div>
-          )}
-        </div>
-      </section>
+      {/* no [[engines]] configured: the feeds and alerts have the page */}
+      {engines?.length ? (
+        <>
+        <section className="ops-panel ops-sys-engines">
+          <header className="ops-head">
+            <span className="ops-title">
+              Engines {engDown > 0 && <span className="ops-count fig warn-text">{engDown} down</span>}
+            </span>
+            <span className="ops-head-right muted">Money in {cur()}</span>
+          </header>
+          <div className="ops-sys-scroll">
+            {engines?.map((e) => <EngineSection key={e.name} e={e} />)}
+          </div>
+        </section>
+        </>
+      ) : null}
       <div className="ops-sys-lower">
         <section className="ops-panel">
           <header className="ops-head">

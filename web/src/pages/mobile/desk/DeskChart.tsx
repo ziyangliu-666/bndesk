@@ -13,7 +13,7 @@ import { maskFormat } from "../../../mask";
 import { useTodayMinutes } from "../../desk/pnlData";
 import { PAST_BARS_PHONE, dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
 import { PNL_STEP, histBars, joinChart, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
-import { cur } from "../../../desk";
+import { cur, useDesk } from "../../../desk";
 
 const IVS: { value: PnlIv; label: string }[] = [
   { value: "line", label: "Line" },
@@ -30,6 +30,7 @@ const VOL = rgba(C.ink2, 0.38);
 export function DeskChart({ ms }: { ms: number }) {
   const [iv, setIv] = useExPref<PnlIv>("m-desk", "interval", "line", IVS.map((i) => i.value));
   const hide = useStore((s) => s.hideAmounts);
+  const desk = useDesk();
   const dayStart = useLive((s) => s.snap?.summary.day_start, ms);
   const bars = useLive((s) => s.snap?.bars, ms);
   const series = useLive((s) => s.snap?.series, ms);
@@ -94,10 +95,10 @@ export function DeskChart({ ms }: { ms: number }) {
       ? { key: "day", kind: "baseline", label, data: data.main, format: money, signColor: true, toggle: false }
       : { key: "day", kind: "candles", label, data: data.main, format: money, toggle: false },
     line("trading", "Trading", data.trading),
-    line("mm", "MM", data.mm),
-    line("inv", "Inv", data.inv),
-    line("hedge", "Hedge", data.hedge),
-    ...(data.rebates.length ? [line("reb", "Rebates", data.rebates), line("other", "Other", data.other)] : []),
+    ...(desk.mm ? [line("mm", "MM", data.mm), line("inv", "Inv", data.inv)] : []),
+    ...(desk.hedge ? [line("hedge", "Hedge", data.hedge)] : []),
+    ...(desk.rebates && data.rebates.length ? [line("reb", "Rebates", data.rebates)] : []),
+    ...(data.rebates.length ? [line("other", "Other", data.other)] : []),
     { key: "vol", kind: "histogram", label: `Vol(${cur()})`, pane: 2, color: VOL, data: data.vol, format: vol, lastValue: false },
   ];
   // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)

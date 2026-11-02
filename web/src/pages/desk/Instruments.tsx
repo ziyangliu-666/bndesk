@@ -8,7 +8,7 @@ import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
 import { maskNode, useHide } from "../../mask";
 import { tradingPnl, useHedgePnl } from "../../selectors";
-import { cur } from "../../desk";
+import { cur, useDesk } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -22,6 +22,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
   const hedgeOf = useHedgePnl();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const d = useDesk();
   const [sort, setSort] = useState<{ k: SortKey; desc: boolean }>({ k: "value", desc: true });
 
   const list = useMemo(() => {
@@ -89,7 +90,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
           { value: "all", label: "All" },
           { value: "held", label: "Held", title: `Inventory worth 1 ${cur()} or more` },
           { value: "quoted", label: "Quoted", title: "With resting orders of ours" },
-          { value: "perp", label: "Perp", title: "USD-M perpetuals" },
+          ...(d.hedge ? [{ value: "perp" as const, label: "Perp", title: "USD-M perpetuals" }] : []),
         ]}
         value={filter}
         onChange={setFilter}
