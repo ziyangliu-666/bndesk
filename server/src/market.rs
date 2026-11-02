@@ -166,6 +166,7 @@ pub struct Inst {
     pub ring: MidRing,
     pub fine: Option<FineRing>,   // kept for instruments that are another's reference
     pub mark: Option<f64>,
+    pub mark_ring: Option<MidRing>,   // the mark as of each second, from the first one seen
     pub funding: Option<f64>,
     pub next_funding: Option<i64>,
 }
@@ -192,6 +193,7 @@ impl Inst {
             ring: MidRing::new(),
             fine: None,
             mark: None,
+            mark_ring: None,
             funding: None,
             next_funding: None,
         }
@@ -372,6 +374,22 @@ impl Market {
         inst.good.filter(|g| *g != 0.0).or(mid)
     }
 
+    /// What a position in the instrument is worth a unit of, as equity has it: a perp at its mark, as the exchange
+    /// counts unrealized P&L, spot at `px`. Π uses this, so it moves as equity does.
+    pub fn value(&self, id: InstId) -> Option<f64> {
+        let inst = &self.insts[id];
+        if inst.venue.is_spot() {
+            return self.px(id);
+        }
+        inst.mark.filter(|x| *x != 0.0).or_else(|| self.px(id))
+    }
+
+    /// `value` as of t_ms, from the 1 s rings.
+    pub fn value_at(&self, id: InstId, t_ms: i64) -> Option<f64> {
+        let inst = &self.insts[id];
+        inst.mark_ring.as_ref().and_then(|r| r.at(t_ms)).filter(|x| *x != 0.0).or_else(|| inst.ring.at(t_ms))
+    }
+
     pub fn on_book(&mut self, venue: Venue, d: &Book) {
         let Some(id) = self.find(d.symbol, venue) else { return };
         let t = d.t.unwrap_or_else(|| CLOCK.now());
@@ -401,6 +419,7 @@ impl Market {
         if let Some(id) = self.find(d.symbol, venue) {
             let inst = &mut self.insts[id];
             inst.mark = Some(d.price);
+            inst.mark_ring.get_or_insert_with(MidRing::new).put(CLOCK.now(), d.price);
             inst.funding = d.funding;
             inst.next_funding = d.next_funding;
         }
