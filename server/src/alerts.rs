@@ -77,7 +77,7 @@ fn stale_quotes(insts: &[Inst], quoted: &HashSet<String>, now: i64, stale_ms: f6
     insts
         .iter()
         .filter(|i| quoted.contains(&i.key) && (now - i.recv.unwrap_or(i.created)) as f64 > stale_ms)
-        .map(|i| i.symbol.clone() + if i.venue == Venue::Spot { "" } else { " (usdm)" })
+        .map(|i| if i.venue.is_spot() { i.symbol.clone() } else { format!("{} ({})", i.symbol, i.venue) })
         .collect()
 }
 
@@ -341,7 +341,7 @@ impl Alerts {
         let mine: Vec<&P::SymbolRow> = v.symbols.iter().filter(|r| watched(r)).collect();
         let big: Vec<String> = mine
             .iter()
-            .filter(|r| r.venue == Venue::Spot && ac.asset_cap_usd.is_some_and(|cap| r.inv_value.abs() > cap))
+            .filter(|r| r.venue.is_spot() && ac.asset_cap_usd.is_some_and(|cap| r.inv_value.abs() > cap))
             .map(|r| format!("{} {}", r.symbol, fmt_num(r.inv_value, 0, false)))
             .collect();
         if !big.is_empty() {
@@ -451,11 +451,11 @@ mod tests {
     #[test]
     fn stale_quote_only_on_quoted_instruments() {
         let mut m = market::Market::new(HashMap::new(), 120.0, 50.0);
-        for (sym, venue) in [("AUSDT", Venue::Spot), ("BUSDT", Venue::Usdm), ("TSLAUSDT", Venue::Spot)] {
+        for (sym, venue) in [("AUSDT", Venue::SPOT), ("BUSDT", Venue::USDM), ("TSLAUSDT", Venue::SPOT)] {
             let id = m.ensure(sym, venue, None);
             m.insts[id].recv = Some(0);
         }
-        let id = m.ensure("DUSDT", Venue::Spot, None);
+        let id = m.ensure("DUSDT", Venue::SPOT, None);
         m.insts[id].recv = Some(90_000);
         // a configured market, one with resting orders, and a fresh one; TSLAUSDT is held, not quoted
         let quoted: HashSet<String> = ["spot:AUSDT", "usdm:BUSDT", "spot:DUSDT"].iter().map(|s| s.to_string()).collect();

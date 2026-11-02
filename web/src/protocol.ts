@@ -17,9 +17,18 @@ export type Diff = { [K in keyof Snapshot]?: Snapshot[K] extends unknown[] ? [nu
 export interface Desk {
   currency: string; // the name money figures carry: not a conversion
   quote: string; // the asset quote_free and quote_locked are balances of
+  markets: Market[]; // what every venue field can say
   hedge: boolean; // futures are part of the desk
   rebates: boolean; // a rebate has been credited, today or on a kept day
   mm: boolean; // Trading PnL is split into market making and inventory
+}
+
+/** A market the desk reads. `id` is what `venue` fields say; ask `kind`, not the id, what kind of market it is. */
+export interface Market {
+  id: string;
+  exchange: string;
+  kind: "spot" | "perp";
+  name: string; // the interface's word for it
 }
 
 export interface Snapshot {
@@ -130,7 +139,7 @@ export interface OpenOrder {
   id: string;
   account: string;
   symbol: string;
-  venue: "spot" | "usdm";
+  venue: Venue;
   side: "buy" | "sell";
   price: number;
   qty: number;
@@ -162,10 +171,11 @@ export interface Summary {
   session: { name: string | null; open: boolean; next_event: string | null; next_event_at: number | null };
 }
 
-export type Venue = "spot" | "usdm";
+export type Venue = string; // a `Market.id`
 
 export interface Position {
   symbol: string;
+  venue: Venue;
   amt: number;
   entry: number;
   mark: number;
@@ -382,6 +392,7 @@ export interface HedgeDay {
 
 export interface HedgeLeg {
   symbol: string;
+  venue: Venue;
   qty0: number;
   qty: number;
   mark0: number | null;

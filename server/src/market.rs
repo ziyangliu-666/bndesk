@@ -382,7 +382,7 @@ pub struct Market {
     /// Every instrument in creation order, indexed by `InstId`.
     pub insts: Vec<Inst>,
     by_key: HashMap<String, InstId>,
-    by_sym: [FxHashMap<Box<str>, InstId>; 2],
+    by_sym: [FxHashMap<Box<str>, InstId>; Venue::COUNT],
     pub on_new: Box<dyn FnMut(&Inst)>,
 }
 
@@ -449,10 +449,10 @@ impl Market {
 
     pub fn asset_inst(&mut self, asset: &str) -> Option<InstId> {
         let sym = format!("{asset}{QUOTE}");
-        if let Some(id) = self.find(&sym, Venue::Spot) {
+        if let Some(id) = self.find(&sym, Venue::SPOT) {
             return Some(id);
         }
-        self.known(&sym, Venue::Spot).then(|| self.ensure(&sym, Venue::Spot, None))
+        self.known(&sym, Venue::SPOT).then(|| self.ensure(&sym, Venue::SPOT, None))
     }
 
     /// The asset's USD (USDT) price now: its USDT market's valuation price. USDT is 1; another stablecoin is
@@ -550,7 +550,7 @@ impl Market {
     }
 
     pub fn on_mark(&mut self, d: &MarkPrice) {
-        if let Some(id) = self.find(&d.s, Venue::Usdm) {
+        if let Some(id) = self.find(&d.s, Venue::USDM) {
             let inst = &mut self.insts[id];
             inst.mark = Some(d.p);
             inst.funding = d.r;
@@ -594,8 +594,8 @@ mod tests {
 
     fn info(spot: &[(&str, SymbolInfo)]) -> Info {
         let mut i = Info::new();
-        i.insert(Venue::Spot, spot.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect());
-        i.insert(Venue::Usdm, HashMap::new());
+        i.insert(Venue::SPOT, spot.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect());
+        i.insert(Venue::USDM, HashMap::new());
         i
     }
 
@@ -616,11 +616,11 @@ mod tests {
     #[test]
     fn fair_uses_reference_times_ratio() {
         let mut m = Market::new(info(&[("XUSDT", SymbolInfo::new("X", "USDT", 5.0))]), 120.0, 100.0);
-        let x = m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
-        book(&mut m, Venue::Usdm, r#"{"s": "XUSDT", "b": "99.9", "a": "100.1", "E": 1000}"#);
-        book(&mut m, Venue::Spot, r#"{"s": "XUSDT", "b": "100.9", "a": "101.1", "E": 1000}"#);
+        let x = m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
+        book(&mut m, Venue::USDM, r#"{"s": "XUSDT", "b": "99.9", "a": "100.1", "E": 1000}"#);
+        book(&mut m, Venue::SPOT, r#"{"s": "XUSDT", "b": "100.9", "a": "101.1", "E": 1000}"#);
         assert_relative_eq!(m.insts[x].ratio.unwrap(), 1.01, max_relative = 1e-12);
-        book(&mut m, Venue::Usdm, r#"{"s": "XUSDT", "b": "109.9", "a": "110.1", "E": 2000}"#);
+        book(&mut m, Venue::USDM, r#"{"s": "XUSDT", "b": "109.9", "a": "110.1", "E": 2000}"#);
         assert_relative_eq!(m.fair(x).unwrap(), 111.1, max_relative = 1e-12);
         assert_eq!(m.insts[x].base, "X");
     }
@@ -639,13 +639,13 @@ mod tests {
     #[test]
     fn gaping_book_is_valued_at_fair_not_mid() {
         let mut m = Market::new(info(&[]), 120.0, 100.0);
-        let tok = m.ensure("AUSDT", Venue::Spot, Some(("AUSDT", Venue::Usdm)));
-        m.ensure("AUSDT", Venue::Usdm, None);
-        book(&mut m, Venue::Usdm, r#"{"s": "AUSDT", "b": "99.99", "a": "100.01", "E": 1000}"#);
-        book(&mut m, Venue::Spot, r#"{"s": "AUSDT", "b": "100.98", "a": "101.02", "E": 1000}"#);   // tight: ratio 1.01
+        let tok = m.ensure("AUSDT", Venue::SPOT, Some(("AUSDT", Venue::USDM)));
+        m.ensure("AUSDT", Venue::USDM, None);
+        book(&mut m, Venue::USDM, r#"{"s": "AUSDT", "b": "99.99", "a": "100.01", "E": 1000}"#);
+        book(&mut m, Venue::SPOT, r#"{"s": "AUSDT", "b": "100.98", "a": "101.02", "E": 1000}"#);   // tight: ratio 1.01
         assert_relative_eq!(m.px(tok).unwrap(), 101.0, max_relative = 1e-12);
         let ratio = m.insts[tok].ratio;
-        book(&mut m, Venue::Spot, r#"{"s": "AUSDT", "b": "100.98", "a": "140.00", "E": 2000}"#);   // best ask gone: mid 120.49
+        book(&mut m, Venue::SPOT, r#"{"s": "AUSDT", "b": "100.98", "a": "140.00", "E": 2000}"#);   // best ask gone: mid 120.49
         assert_relative_eq!(m.px(tok).unwrap(), 101.0, max_relative = 1e-6);
         assert_eq!(m.insts[tok].ratio, ratio);
         assert_relative_eq!(m.insts[tok].ring.at(2_000).unwrap(), 101.0, max_relative = 1e-6);
@@ -654,14 +654,14 @@ mod tests {
     #[test]
     fn book_numbers_rest_shape_and_marks() {
         let mut m = Market::new(info(&[]), 120.0, 100.0);
-        let x = m.ensure("XUSDT", Venue::Usdm, None);
-        book(&mut m, Venue::Usdm, r#"{"s":"XUSDT","b":50,"a":50.5,"E":7}"#);
+        let x = m.ensure("XUSDT", Venue::USDM, None);
+        book(&mut m, Venue::USDM, r#"{"s":"XUSDT","b":50,"a":50.5,"E":7}"#);
         assert_eq!((m.insts[x].bid, m.insts[x].ask, m.insts[x].t), (50.0, 50.5, Some(7)));
         CLOCK.set_fixed(Some(99));
-        m.on_book(Venue::Usdm, &BookTicker::new("XUSDT", 1.0, 2.0, None));   // REST shape: no E
+        m.on_book(Venue::USDM, &BookTicker::new("XUSDT", 1.0, 2.0, None));   // REST shape: no E
         CLOCK.set_fixed(None);
         assert_eq!(m.insts[x].t, Some(99));
-        book(&mut m, Venue::Usdm, r#"{"s":"NOPE","b":"1","a":"2"}"#);
+        book(&mut m, Venue::USDM, r#"{"s":"NOPE","b":"1","a":"2"}"#);
         m.on_mark_raw(r#"{"e":"markPriceUpdate","E":1,"s":"XUSDT","p":"11.5","i":"11","P":"11","r":"0.0001","T":1700000000000}"#);
         assert_eq!((m.insts[x].mark, m.insts[x].funding, m.insts[x].next_funding), (Some(11.5), Some(0.0001), Some(1_700_000_000_000)));
         m.on_mark_raw(r#"{"s":"XUSDT","p":"12","r":"","T":0}"#);
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(m.asset_price("LDUSDT"), Some(1.0));
         assert_eq!(m.asset_price("BTC"), None);   // known, no book yet
         assert!(m.get("spot:BTCUSDT").is_some());
-        book(&mut m, Venue::Spot, r#"{"s":"BTCUSDT","b":"100","a":"100.02"}"#);
+        book(&mut m, Venue::SPOT, r#"{"s":"BTCUSDT","b":"100","a":"100.02"}"#);
         assert_relative_eq!(m.asset_price("LDBTC").unwrap(), 100.01, max_relative = 1e-12);
         assert_eq!(m.asset_price("ZZZ"), None);
         assert!(m.get("spot:ZZZUSDT").is_none());
@@ -688,11 +688,11 @@ mod tests {
         assert_eq!(m.asset_price("USDC"), Some(1.0));
         assert_eq!(m.asset_price_at("USDC", 5_000), Some(1.0));
         assert_eq!(m.asset_price("USDT"), Some(1.0));
-        book(&mut m, Venue::Spot, r#"{"s":"USDCUSDT","b":"1.0011","a":"1.0012","E":10500}"#);
+        book(&mut m, Venue::SPOT, r#"{"s":"USDCUSDT","b":"1.0011","a":"1.0012","E":10500}"#);
         assert_relative_eq!(m.asset_price("USDC").unwrap(), 1.00115, max_relative = 1e-12);
         assert_relative_eq!(m.asset_price("LDUSDC").unwrap(), 1.00115, max_relative = 1e-12);
         assert_relative_eq!(m.asset_price_at("USDC", 11_200).unwrap(), 1.00115, max_relative = 1e-12);
-        book(&mut m, Venue::Spot, r#"{"s":"USDCUSDT","b":"1.0001","a":"1.0003","E":12500}"#);
+        book(&mut m, Venue::SPOT, r#"{"s":"USDCUSDT","b":"1.0001","a":"1.0003","E":12500}"#);
         // at a time: the mid at the end of the last whole second before it
         assert_relative_eq!(m.asset_price_at("USDC", 12_700).unwrap(), 1.00115, max_relative = 1e-12);
         assert_relative_eq!(m.asset_price_at("USDC", 13_100).unwrap(), 1.0002, max_relative = 1e-12);

@@ -77,6 +77,7 @@ pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> 
     P::Desk {
         currency: cfg.currency.clone(),
         quote: crate::market::QUOTE.into(),
+        markets: P::MARKETS.iter().collect(),
         hedge: cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures)
             || cfg.target_ratio.is_some()
             || accounts.iter().any(|a| !a.positions.is_empty() || a.fut_wallet != 0.0)
@@ -216,7 +217,7 @@ impl Desk {
             Rc::new(move |f: FillRec| {
                 let key = f.key();
                 // a conversion between stablecoins is kept on the tape, out of the P&L scope and Π
-                let spot = (f.venue == Venue::Spot && !f.conversion()).then(|| f.clone());
+                let spot = (f.venue.is_spot() && !f.conversion()).then(|| f.clone());
                 let mut m = market.borrow_mut();
                 // a fill that arrives late (a REST sweep) is not marked against today's fair
                 let fresh = CLOCK.now() - f.ts < 5_000;
@@ -301,15 +302,15 @@ impl Desk {
         let market = this.borrow().market.clone();
         let (m1, m2, m3) = (market.clone(), market.clone(), market.clone());
         let spot_book = Rc::new(RefCell::new(StreamMux::new(SPOT_STREAM, "spot bookTicker",
-            move |_, d| m1.borrow_mut().on_book_raw(Venue::Spot, d), 200)));
+            move |_, d| m1.borrow_mut().on_book_raw(Venue::SPOT, d), 200)));
         let usdm_book = Rc::new(RefCell::new(StreamMux::new(USDM_PUBLIC, "usdm bookTicker",
-            move |_, d| m2.borrow_mut().on_book_raw(Venue::Usdm, d), 200)));
+            move |_, d| m2.borrow_mut().on_book_raw(Venue::USDM, d), 200)));
         let usdm_mark = Rc::new(RefCell::new(StreamMux::new(USDM_MARKET, "usdm markPrice",
             move |_, d| m3.borrow_mut().on_mark_raw(d), 200)));
         let (sb, ub, um) = (spot_book.clone(), usdm_book.clone(), usdm_mark.clone());
         market.borrow_mut().on_new = Box::new(move |inst: &Inst| {
             let s = inst.symbol.to_lowercase();
-            if inst.venue == Venue::Spot {
+            if inst.venue.is_spot() {
                 sb.borrow_mut().add([format!("{s}@bookTicker")]);
             } else {
                 ub.borrow_mut().add([format!("{s}@bookTicker")]);
@@ -363,7 +364,7 @@ impl Desk {
             }));
         });
         let spot_symbols: Vec<String> =
-            self.cfg.markets.iter().filter(|m| m.venue == Venue::Spot).map(|m| m.symbol.clone()).collect();
+            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| m.symbol.clone()).collect();
         for a in &accounts {
             let mut a = a.borrow_mut();
             a.market = Some(self.market.clone());
@@ -424,7 +425,7 @@ impl Desk {
             accts.iter().map(|a| a.borrow().balances.get(base).map_or(0.0, |(f, l)| f + l)).sum()
         };
         let spot_keys: Vec<String> =
-            self.cfg.markets.iter().filter(|m| m.venue == Venue::Spot).map(|m| format!("spot:{}", m.symbol)).collect();
+            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| format!("spot:{}", m.symbol)).collect();
         let sf = self.spot_filled.clone();
         let scope = move || -> Vec<String> { spot_keys.iter().cloned().chain(sf.borrow().iter().cloned()).collect() };
         let (betas, fixed) = (self.betas.clone(), self.fixed_betas.clone());
@@ -440,7 +441,7 @@ impl Desk {
                 .iter()
                 .map(|a| {
                     let a = a.borrow();
-                    a.fee(Venue::Spot, &inst.symbol).or_else(|| a.fee(Venue::Spot, "*")).unwrap_or((0.0, 0.0)).1
+                    a.fee(Venue::SPOT, &inst.symbol).or_else(|| a.fee(Venue::SPOT, "*")).unwrap_or((0.0, 0.0)).1
                 })
                 .fold(0.0, f64::max)
                 * 1e4
@@ -474,7 +475,7 @@ impl Desk {
             let mut sf = self.spot_filled.borrow_mut();
             for f in data.fills {
                 let key = f.key();
-                let spot = f.venue == Venue::Spot && !f.conversion();
+                let spot = f.venue.is_spot() && !f.conversion();
                 fills.add(&mut m, f, false);
                 tracked.insert(key.clone());
                 if spot && !sf.contains(&key) {
@@ -895,7 +896,7 @@ impl Desk {
                 }
                 for (s, (amt, _)) in &a.positions {
                     if *amt != 0.0 {
-                        tracked.insert(format!("usdm:{s}"));
+                        tracked.insert(crate::market::key(s, a.perp));
                     }
                 }
                 for o in a.open.values() {
@@ -1221,12 +1222,12 @@ async fn bootstrap(http: &reqwest::Client, govs: &Governors, feed: &FeedRef, cfg
             Ok((spot, usdm)) => {
                 feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", CLOCK.offset_ms())));
                 let mut info: Info = HashMap::new();
-                info.insert(Venue::Spot, parse_exchange_info(&spot));
+                info.insert(Venue::SPOT, parse_exchange_info(&spot));
                 if let (Some(s10), Some(day)) = crate::market::parse_order_limits(&spot) {
                     let _ = crate::market::ORDER_LIMITS.set((s10, day));
                     info!("spot order limits from exchangeInfo: {s10} per 10 s, {day} per day");
                 }
-                info.insert(Venue::Usdm, parse_exchange_info(&usdm));
+                info.insert(Venue::USDM, parse_exchange_info(&usdm));
                 return Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
             }
             Err(e) => {
@@ -1258,7 +1259,7 @@ async fn beta_loop(desk: DeskRef) {
     let (vs_venue, vs_sym, sample_s) = {
         let bb = b.borrow();
         let (v, s) = bb.cfg.vs.split_once(':').unwrap_or(("usdm", bb.cfg.vs.as_str()));
-        (v.parse::<Venue>().unwrap_or(Venue::Usdm), s.to_string(), bb.cfg.sample_s)
+        (v.parse::<Venue>().unwrap_or(Venue::USDM), s.to_string(), bb.cfg.sample_s)
     };
     let vs = {
         let mut m = market.borrow_mut();
@@ -1305,7 +1306,7 @@ async fn prune(desk: DeskRef) {
 /// bookTicker streams only send on change: price instruments that have not ticked yet from REST.
 async fn seed_books(market: MarketRef, rest: Rest) {
     loop {
-        for (venue, path, weight) in [(Venue::Spot, "/api/v3/ticker/bookTicker", 4), (Venue::Usdm, "/fapi/v1/ticker/bookTicker", 5)] {
+        for (venue, path, weight) in [(Venue::SPOT, "/api/v3/ticker/bookTicker", 4), (Venue::USDM, "/fapi/v1/ticker/bookTicker", 5)] {
             if !market.borrow().insts.iter().any(|i| i.t.is_none() && i.venue == venue) {
                 continue;
             }
@@ -1696,7 +1697,7 @@ mod tests {
         let mut cfg = Config::default();
         let mut acct = P::Account::default();
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
-        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), hedge: false, rebates: false, mm: true });
+        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS.iter().collect(), hedge: false, rebates: false, mm: true });
         // a day kept with zeros is not a hedge or a rebate
         let zero = P::DayPnl { hedge: Some(0.0), rebates: Some(0.0), ..Default::default() };
         assert!(!desk_shape(&cfg, &[], std::slice::from_ref(&zero)).hedge);
@@ -1720,7 +1721,7 @@ mod tests {
         let pt = |t: i64, pnl: f64, trading: Option<f64>| P::SeriesPoint { t, pnl_day: pnl, equity: 100.0 + pnl, trading, ..Default::default() };
         let series = [pt(60_000, 1.004, Some(0.5)), pt(65_000, 2.0, None), pt(125_000, 3.333, Some(1.0)), pt(185_000, 4.0, Some(2.0))];
         let x = [(Some(0.1), None), (None, Some(-1.0)), (Some(0.2), Some(-2.0)), (None, None)];
-        let fill = |ts: i64| FillRec::new("f", ts, "a", "S", Venue::Spot, Side::Buy, 2.0, 1.5);
+        let fill = |ts: i64| FillRec::new("f", ts, "a", "S", Venue::SPOT, Side::Buy, 2.0, 1.5);
         let fills = [fill(61_000), fill(70_000), fill(130_000), fill(10_000)];
         let b = day_bars(&series, &x, &fills, i64::MIN);
         assert_eq!(b.t, [60_000, 120_000, 180_000]);

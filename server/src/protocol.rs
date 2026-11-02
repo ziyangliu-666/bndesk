@@ -30,18 +30,85 @@ macro_rules! str_enum {
     };
 }
 
-str_enum!(Venue { Spot = "spot", Usdm = "usdm" });
 str_enum!(Side { Buy = "buy", Sell = "sell" });
 str_enum!(Role { Master = "master", Sub = "sub" });
 str_enum!(UserStream { Up = "up", Down = "down", NA = "n/a" });
 str_enum!(Level { Info = "info", Warn = "warn", Crit = "crit" });
 str_enum!(FeedKind { Public = "public", User = "user", Rest = "rest", Engine = "engine" });
 
+str_enum!(MarketKind { Spot = "spot", Perp = "perp" });
+
+/// A market the desk can read. `id` is what every fill, instrument key (`<id>:<symbol>`), kv key and URL calls it, so
+/// it stays as it was first stored and has no ':'. `aliases` are other names for it accepted on the way in (config,
+/// query strings), never written.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct Market {
+    pub id: &'static str,
+    pub exchange: &'static str,
+    pub kind: MarketKind,
+    pub name: &'static str,
+    #[serde(skip)]
+    pub aliases: &'static [&'static str],
+}
+
+/// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
+pub static MARKETS: [Market; 2] = [
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"] },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"] },
+];
+
+/// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Venue(u8);
+
 impl Venue {
-    pub const ALL: [Venue; 2] = [Venue::Spot, Venue::Usdm];
+    pub const SPOT: Venue = Venue(0);
+    pub const USDM: Venue = Venue(1);
+    pub const COUNT: usize = MARKETS.len();
+
+    pub fn all() -> impl Iterator<Item = Venue> {
+        (0..Self::COUNT as u8).map(Venue)
+    }
 
     pub fn index(self) -> usize {
-        self as usize
+        self.0 as usize
+    }
+
+    pub fn market(self) -> &'static Market {
+        &MARKETS[self.index()]
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.market().id
+    }
+
+    pub fn is_spot(self) -> bool {
+        self.market().kind == MarketKind::Spot
+    }
+}
+
+impl std::fmt::Display for Venue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for Venue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Venue {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Venue::all().find(|v| v.as_str() == s || v.market().aliases.contains(&s)).ok_or_else(|| format!("bad Venue: {s:?}"))
+    }
+}
+
+impl Serialize for Venue {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
     }
 }
 
@@ -141,6 +208,7 @@ pub struct Summary {
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Position {
     pub symbol: String,
+    pub venue: Venue,
     pub amt: f64,
     pub entry: f64,
     pub mark: f64,
@@ -303,6 +371,7 @@ pub struct Exposure {
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct HedgeLeg {
     pub symbol: String,
+    pub venue: Venue,
     pub qty0: f64,
     pub qty: f64,
     pub mark0: Option<f64>,
@@ -520,6 +589,7 @@ impl DayBars {
 pub struct Desk {
     pub currency: String,
     pub quote: String,
+    pub markets: Vec<&'static Market>,
     pub hedge: bool,
     pub rebates: bool,
     pub mm: bool,
@@ -823,6 +893,7 @@ mod tests {
             ("Snapshot", "days", struct_fields(&DayPnl::default())),
             ("Snapshot", "hours", struct_fields(&HourPnl::default())),
             ("History", "days", struct_fields(&HistoryDay::default())),
+            ("Desk", "markets", struct_fields(&MARKETS[0])),
         ];
         for (parent, field, got) in nested {
             assert_eq!(got, inline(typ(&ifaces[parent], field)), "{parent}.{field}");
@@ -836,7 +907,7 @@ mod tests {
             assert_eq!(inline(typ(&ifaces["Fill"], k)), ["1", "10", "60", "300"]);
         }
         let f = Fill {
-            id: "i".into(), ts: 1, account: "a".into(), symbol: "S".into(), venue: Venue::Spot, side: Side::Buy,
+            id: "i".into(), ts: 1, account: "a".into(), symbol: "S".into(), venue: Venue::SPOT, side: Side::Buy,
             price: 1.0, qty: 1.0, notional: 1.0, fee: 0.0, fee_asset: "USDT".into(), maker: true, fair: None,
             edge_bps: None, mk: Marks([Some(1.0), None, None, None]), mk_raw: Marks::default(),
             mk_fast: Marks::default(), conversion: false,
@@ -859,9 +930,32 @@ mod tests {
     }
 
     #[test]
+    fn markets_are_data() {
+        assert_eq!(MARKETS.len(), Venue::COUNT);
+        for v in Venue::all() {
+            let m = v.market();
+            // an instrument key is <id>:<symbol> and is split at its first ':'
+            assert!(!m.id.contains(':'), "{}", m.id);
+            assert_eq!(m.id.parse::<Venue>(), Ok(v));
+            for a in m.aliases {
+                assert_eq!(a.parse::<Venue>(), Ok(v), "{a}");
+            }
+        }
+        assert_eq!("binance:spot".parse::<Venue>(), Ok(Venue::SPOT));
+        assert_eq!("binance:usdm".parse::<Venue>(), Ok(Venue::USDM));
+        assert!("coinm".parse::<Venue>().is_err());
+        // stored rows and links keep these two names: they are not to change
+        assert_eq!((Venue::SPOT.as_str(), Venue::USDM.as_str()), ("spot", "usdm"));
+        assert!(Venue::SPOT.is_spot() && !Venue::USDM.is_spot());
+        assert_eq!(serde_json::to_value(&MARKETS[1]).unwrap(),
+                   serde_json::json!({"id": "usdm", "exchange": "Binance", "kind": "perp", "name": "USD-M"}));
+    }
+
+    #[test]
     fn enums_serialize_as_strings() {
         assert_eq!(serde_json::to_string(&UserStream::NA).unwrap(), r#""n/a""#);
-        assert_eq!("usdm".parse::<Venue>().unwrap(), Venue::Usdm);
+        assert_eq!("usdm".parse::<Venue>().unwrap(), Venue::USDM);
+        assert_eq!(serde_json::to_string(&Venue::USDM).unwrap(), r#""usdm""#);
         assert_eq!(serde_json::to_string(&f64::NAN).unwrap(), "null");
     }
 }

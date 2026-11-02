@@ -88,6 +88,7 @@ impl Dividend {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LivePosition {
     pub symbol: String,
+    pub venue: Venue,
     pub amt: f64,
     pub entry: f64,
     pub mark: f64,
@@ -233,7 +234,8 @@ pub struct Account {
     pub fut_available: f64,
     pub fut_usdt: f64,     // USDT wallet balance inside fut_wallet, kept fresh from the stream
     pub fut_usdt_u: i64,   // its update time
-    pub positions: HashMap<String, (f64, f64)>,   // symbol -> (amt, entry)
+    pub positions: HashMap<String, (f64, f64)>,   // symbol -> (amt, entry), on `perp`
+    pub perp: Venue,                              // the market the account's positions are on
     pub pos_u: HashMap<String, i64>,              // symbol -> update time of the position held
     pub orders_10s: i64,
     pub orders_10s_limit: i64,
@@ -243,7 +245,7 @@ pub struct Account {
     pub open_since: HashMap<String, i64>,  // venue:orderId -> creation time
     pub traded: HashSet<String>,           // venue:symbol filled or quoted
     pub fee_turn: usize,
-    pub fee_next: [i64; 2],   // ms, indexed by Venue::index(); each venue's next per-symbol commission lookup
+    pub fee_next: [i64; Venue::COUNT],   // ms, indexed by Venue::index(); each venue's next per-symbol commission lookup
     pub fees: Vec<((Venue, String), (f64, f64))>,   // insertion-ordered like the Python dict
     pub first_fees: HashMap<(Venue, String), (f64, f64)>,   // the baseline a rate is compared with
     pub fee_changed: HashMap<(Venue, String), i64>,       // since when a rate differs from its baseline
@@ -303,6 +305,7 @@ impl Account {
             fut_usdt: 0.0,
             fut_usdt_u: 0,
             positions: HashMap::new(),
+            perp: Venue::USDM,
             pos_u: HashMap::new(),
             orders_10s: 0,
             orders_10s_limit: 0,
@@ -312,7 +315,7 @@ impl Account {
             open_since: HashMap::new(),
             traded: HashSet::new(),
             fee_turn: 0,
-            fee_next: [0, 0],
+            fee_next: [0; Venue::COUNT],
             fees: vec![],
             first_fees: HashMap::new(),
             fee_changed: HashMap::new(),
@@ -468,11 +471,11 @@ impl Account {
                 continue;
             }
             let mark = m
-                .get(&format!("usdm:{s}"))
-                .and_then(|i| i.mark.filter(|x| *x != 0.0).or_else(|| i.mid()))
+                .find(s, self.perp)
+                .and_then(|i| m.insts[i].mark.filter(|x| *x != 0.0).or_else(|| m.insts[i].mid()))
                 .filter(|x| *x != 0.0)
                 .unwrap_or(entry);
-            out.push(LivePosition { symbol: s.clone(), amt, entry, mark, upnl: (mark - entry) * amt, notional: amt * mark });
+            out.push(LivePosition { symbol: s.clone(), venue: self.perp, amt, entry, mark, upnl: (mark - entry) * amt, notional: amt * mark });
         }
         out
     }
@@ -482,8 +485,8 @@ impl Account {
     pub fn fut_leg(&self, m: &Market, s: &str) -> FutLeg {
         let q = self.positions.get(s).map_or(0.0, |p| p.0);
         let mark = m
-            .get(&format!("usdm:{s}"))
-            .and_then(|i| i.mark.filter(|x| *x != 0.0).or_else(|| i.mid()))
+            .find(s, self.perp)
+            .and_then(|i| m.insts[i].mark.filter(|x| *x != 0.0).or_else(|| m.insts[i].mid()))
             .filter(|x| *x != 0.0);
         let Some(d) = self.fut_day.get(s).filter(|d| d.ds == self.day_start) else {
             return FutLeg { q0: q, q, m0: None, mark, fills: 0, price: None, fees: 0.0, funding: 0.0 };
@@ -615,7 +618,7 @@ impl Account {
         }
         self.positions.insert(symbol.to_string(), (amt, entry));
         if amt != 0.0 {
-            self.touch_symbol(symbol, Venue::Usdm);
+            self.touch_symbol(symbol, self.perp);
         }
     }
 
@@ -691,7 +694,7 @@ impl Account {
 
     pub fn fee_rows(&self) -> Vec<P::FeeRate> {
         let mut out = vec![];
-        for venue in Venue::ALL {
+        for venue in Venue::all() {
             let ks: Vec<_> = self.fees.iter().filter(|((v, _), _)| *v == venue).collect();
             if ks.is_empty() {
                 continue;
@@ -723,12 +726,12 @@ impl Account {
                 }
                 let sym = s(e, "s")?;
                 let created = first(e, &["O"]).map(to_i).transpose()?;
-                self.order_update(Venue::Spot, sym, &id_str(get(e, "i")?), s(e, "S")?, f(e, "p")?, f(e, "q")? - f(e, "z")?,
+                self.order_update(Venue::SPOT, sym, &id_str(get(e, "i")?), s(e, "S")?, f(e, "p")?, f(e, "q")? - f(e, "z")?,
                                   s(e, "X")?, created);
                 if x == "TRADE" {
-                    self.traded.insert(venue_key(Venue::Spot, sym));
+                    self.traded.insert(venue_key(Venue::SPOT, sym));
                     let mut fr = FillRec::new(format!("{}:spot:{sym}:{}", self.id, id_str(get(e, "t")?)), to_i(get(e, "T")?)?,
-                                              self.id.clone(), sym, Venue::Spot, side_of(s(e, "S")?), f(e, "L")?, f(e, "l")?);
+                                              self.id.clone(), sym, Venue::SPOT, side_of(s(e, "S")?), f(e, "L")?, f(e, "l")?);
                     fr.fee = f_or0(e, "n")?;
                     fr.fee_asset = first(e, &["N"]).and_then(Value::as_str).unwrap_or("").to_string();
                     fr.maker = truthy(get(e, "m")?);
@@ -768,12 +771,12 @@ impl Account {
                 let o = get(e, "o")?;
                 let sym = s(o, "s")?;
                 let created = first(e, &["T"]).map(to_i).transpose()?;
-                self.order_update(Venue::Usdm, sym, &id_str(get(o, "i")?), s(o, "S")?, f(o, "p")?, f(o, "q")? - f(o, "z")?,
+                self.order_update(Venue::USDM, sym, &id_str(get(o, "i")?), s(o, "S")?, f(o, "p")?, f(o, "q")? - f(o, "z")?,
                                   s(o, "X")?, created);
                 if s(o, "x")? == "TRADE" {
-                    self.traded.insert(venue_key(Venue::Usdm, sym));
+                    self.traded.insert(venue_key(Venue::USDM, sym));
                     let mut fr = FillRec::new(format!("{}:usdm:{sym}:{}", self.id, id_str(get(o, "t")?)), to_i(get(o, "T")?)?,
-                                              self.id.clone(), sym, Venue::Usdm, side_of(s(o, "S")?), f(o, "L")?, f(o, "l")?);
+                                              self.id.clone(), sym, Venue::USDM, side_of(s(o, "S")?), f(o, "L")?, f(o, "l")?);
                     fr.fee = f_or0(o, "n")?;
                     fr.fee_asset = first(o, &["N"]).and_then(Value::as_str).unwrap_or("").to_string();
                     fr.maker = o.get("m").is_some_and(truthy);
@@ -1030,7 +1033,7 @@ pub async fn spot_trades(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 }
                 let side = if truthy(get(x, "isBuyer")?) { Side::Buy } else { Side::Sell };
                 let mut fr = FillRec::new(format!("{id}:spot:{sym}:{}", id_str(get(x, "id")?)), ts, id.clone(), &sym,
-                                          Venue::Spot, side, f(x, "price")?, f(x, "qty")?);
+                                          Venue::SPOT, side, f(x, "price")?, f(x, "qty")?);
                 fr.fee = f_or0(x, "commission")?;
                 fr.fee_asset = first(x, &["commissionAsset"]).and_then(Value::as_str).unwrap_or("").to_string();
                 fr.maker = truthy(get(x, "isMaker")?);
@@ -1168,7 +1171,7 @@ pub async fn spot_account(acct: &AccountRef, rest: &impl RestGet) -> Result<()> 
     let mut a = acct.borrow_mut();
     a.apply_spot_snapshot(&r)?;
     if let Some(c) = first(&r, &["commissionRates"]) {
-        a.set_fee(Venue::Spot, "*", f(c, "maker")?, f(c, "taker")?, CLOCK.now());
+        a.set_fee(Venue::SPOT, "*", f(c, "maker")?, f(c, "taker")?, CLOCK.now());
     }
     a.spot_loaded = true;
     Ok(())
@@ -1248,7 +1251,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 let side = if s(x, "side")? == "BUY" { Side::Buy } else { Side::Sell };
                 trades.insert(tid, (ts, if side == Side::Buy { qty } else { -qty }, f(x, "price")?, fee));
                 // the fill itself, as the stream would have given it (same id: one the stream gave is not added again)
-                let mut fr = FillRec::new(format!("{aid}:usdm:{sym}:{tid}"), ts, aid.clone(), &sym, Venue::Usdm, side,
+                let mut fr = FillRec::new(format!("{aid}:usdm:{sym}:{tid}"), ts, aid.clone(), &sym, Venue::USDM, side,
                                           f(x, "price")?, qty);
                 fr.fee = f(x, "commission")?;
                 fr.fee_asset = asset.to_string();
@@ -1333,7 +1336,7 @@ pub async fn open_orders(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let mut a = acct.borrow_mut();
     a.open.retain(|k, _| !k.starts_with("spot:"));
     for (sym, oid, side, price, left, status, created) in rows {
-        a.order_update(Venue::Spot, &sym, &oid, &side, price, left, &status, created);
+        a.order_update(Venue::SPOT, &sym, &oid, &side, price, left, &status, created);
     }
     let Account { open, open_since, .. } = &mut *a;
     open_since.retain(|k, _| open.contains_key(k));
@@ -1347,7 +1350,7 @@ pub async fn commissions(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
     let now = CLOCK.now();
     let (spot, usdm, turn) = {
         let mut a = acct.borrow_mut();
-        let (si, ui) = (Venue::Spot.index(), Venue::Usdm.index());
+        let (si, ui) = (Venue::SPOT.index(), Venue::USDM.index());
         let mut spot: Vec<String> = if now >= a.fee_next[si] {
             a.traded.iter().filter_map(|k| k.strip_prefix("spot:")).map(String::from).collect()
         } else {
@@ -1384,14 +1387,14 @@ pub async fn commissions(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             parts.iter().map(|p| p.get(k).map_or(Ok(0.0), to_f)).sum()
         };
         let (maker, taker) = (sum("maker")?, sum("taker")?);
-        acct.borrow_mut().set_fee(Venue::Spot, sym, maker, taker, now);
+        acct.borrow_mut().set_fee(Venue::SPOT, sym, maker, taker, now);
     }
     if !usdm.is_empty() {
-        acct.borrow_mut().fee_next[Venue::Usdm.index()] = now + 3_600_000;
+        acct.borrow_mut().fee_next[Venue::USDM.index()] = now + 3_600_000;
         let sym = &usdm[turn % usdm.len()];
         let r = rest.get_json("/fapi/v1/commissionRate", &params!["symbol" => sym], 20, true).await?;
         let (maker, taker) = (f(&r, "makerCommissionRate")?, f(&r, "takerCommissionRate")?);
-        acct.borrow_mut().set_fee(Venue::Usdm, sym, maker, taker, now);
+        acct.borrow_mut().set_fee(Venue::USDM, sym, maker, taker, now);
     }
     Ok(())
 }
@@ -1808,8 +1811,8 @@ mod tests {
 
     fn info(spot: &[(&str, SymbolInfo)]) -> Info {
         let mut i = Info::new();
-        i.insert(Venue::Spot, spot.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect());
-        i.insert(Venue::Usdm, HashMap::new());
+        i.insert(Venue::SPOT, spot.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect());
+        i.insert(Venue::USDM, HashMap::new());
         i
     }
 
@@ -1821,8 +1824,8 @@ mod tests {
 
     fn acct() -> (Account, MarketRef) {
         let mut m = Market::new(info(&[("XUSDT", SymbolInfo::new("X", "USDT", 5.0))]), 120.0, 100.0);
-        m.ensure("XUSDT", Venue::Spot, None);
-        m.on_book(Venue::Spot, &BookTicker::new("XUSDT", 100.0, 100.0, Some(1)));
+        m.ensure("XUSDT", Venue::SPOT, None);
+        m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", 100.0, 100.0, Some(1)));
         let m = Rc::new(RefCell::new(m));
         let mut c = cfg("a", "");
         c.futures = true;
@@ -1929,7 +1932,7 @@ mod tests {
     fn usdc_in_then_converted_leaves_day_pnl_unchanged() {
         let mut m = Market::new(info(&[("USDCUSDT", SymbolInfo::new("USDC", "USDT", 5.0))]), 120.0, 100.0);
         m.asset_inst("USDC");
-        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
+        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
         let mut c = cfg("usdc", "u@x.io");
         c.futures = false;
         let a = Account::new(c, None, "").shared();
@@ -1976,12 +1979,12 @@ mod tests {
 
     fn bnb_market() -> Market {
         let mut m = Market::new(info(&[("BNBUSDT", SymbolInfo::new("BNB", "USDT", 5.0))]), 120.0, 100.0);
-        m.ensure("BNBUSDT", Venue::Spot, None);
+        m.ensure("BNBUSDT", Venue::SPOT, None);
         m
     }
 
     fn bnb(m: &mut Market, t: i64, px: f64) {
-        m.on_book(Venue::Spot, &BookTicker::new("BNBUSDT", px, px, Some(t)));
+        m.on_book(Venue::SPOT, &BookTicker::new("BNBUSDT", px, px, Some(t)));
     }
 
     #[test]
@@ -2152,26 +2155,26 @@ mod tests {
         let a = Account::new(cfg("a", ""), None, "").shared();
         let r = FakeRest { calls: RefCell::new(vec![]) };
         commissions(&a, &r).await.unwrap();   // no symbol seen yet: waits, the default rate stands
-        assert!(a.borrow().fee_next[Venue::Spot.index()] == 0 && r.calls.borrow().is_empty());
+        assert!(a.borrow().fee_next[Venue::SPOT.index()] == 0 && r.calls.borrow().is_empty());
         {
             let mut a = a.borrow_mut();
-            a.order_update(Venue::Spot, "XUSDT", "1", "BUY", 10.0, 3.0, "NEW", None);
-            a.order_update(Venue::Spot, "XUSDT", "2", "SELL", 12.0, 1.0, "PARTIALLY_FILLED", None);
-            a.order_update(Venue::Spot, "YUSDT", "3", "BUY", 5.0, 2.0, "NEW", None);
-            a.order_update(Venue::Spot, "YUSDT", "3", "BUY", 5.0, 0.0, "FILLED", None);
+            a.order_update(Venue::SPOT, "XUSDT", "1", "BUY", 10.0, 3.0, "NEW", None);
+            a.order_update(Venue::SPOT, "XUSDT", "2", "SELL", 12.0, 1.0, "PARTIALLY_FILLED", None);
+            a.order_update(Venue::SPOT, "YUSDT", "3", "BUY", 5.0, 2.0, "NEW", None);
+            a.order_update(Venue::SPOT, "YUSDT", "3", "BUY", 5.0, 0.0, "FILLED", None);
             assert_eq!(a.resting(), (30.0, 12.0));
         }
         for _ in 0..3 {
             commissions(&a, &r).await.unwrap();
             commissions(&a, &r).await.unwrap();   // within the hour: no lookup
-            a.borrow_mut().fee_next[Venue::Spot.index()] = 0;
+            a.borrow_mut().fee_next[Venue::SPOT.index()] = 0;
         }
         let syms: Vec<String> = r.calls.borrow().iter().map(|c| c.1.clone()).collect();
         assert_eq!(syms, ["XUSDT", "YUSDT", "XUSDT"]);   // one symbol per poll, rotating
         assert!(r.calls.borrow().iter().all(|c| c.0 == "/api/v3/account/commission" && c.2 == 20));
         let rows = a.borrow().fee_rows();
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].venue == Venue::Spot && !rows[0].changed);
+        assert!(rows[0].venue.is_spot() && !rows[0].changed);
         assert_relative_eq!(rows[0].maker_bps, 1.0);
         assert_relative_eq!(rows[0].taker_bps, 2.0);
     }
@@ -2189,21 +2192,21 @@ mod tests {
         };
         let h = 3_600_000;
         let mut a = hooked(&log);
-        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.0001, 0);   // the first rate seen is the baseline
-        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.0001, h);
+        a.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.0001, 0);   // the first rate seen is the baseline
+        a.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.0001, h);
         assert!(!a.fee_rows()[0].changed && a.fee_changed.is_empty());
-        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 2 * h);   // changed: active from now
-        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 3 * h);   // the same change: keeps its time
+        a.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.001, 2 * h);   // changed: active from now
+        a.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.001, 3 * h);   // the same change: keeps its time
         assert!(a.fee_rows()[0].changed);
-        assert_eq!(a.fee_changed[&(Venue::Spot, "XUSDT".into())], 2 * h);
+        assert_eq!(a.fee_changed[&(Venue::SPOT, "XUSDT".into())], 2 * h);
         a.expire_fees(2 * h + FEE_CHANGE_HOLD_MS - 1);
         assert!(a.fee_rows()[0].changed);
-        a.set_fee(Venue::Spot, "XUSDT", 0.0, 0.002, 4 * h);   // changed again: the day restarts
+        a.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.002, 4 * h);   // changed again: the day restarts
         a.expire_fees(2 * h + FEE_CHANGE_HOLD_MS);
-        assert_eq!(a.fee_changed[&(Venue::Spot, "XUSDT".into())], 4 * h);
+        assert_eq!(a.fee_changed[&(Venue::SPOT, "XUSDT".into())], 4 * h);
         a.expire_fees(4 * h + FEE_CHANGE_HOLD_MS);   // held a day: the new baseline
         assert!(!a.fee_rows()[0].changed && a.fee_changed.is_empty());
-        assert_eq!(a.first_fees[&(Venue::Spot, "XUSDT".into())], (0.0, 0.002));
+        assert_eq!(a.first_fees[&(Venue::SPOT, "XUSDT".into())], (0.0, 0.002));
         assert_eq!(*log.borrow(), [
             "fee:spot:XUSDT=0,0.0001",
             &format!("feechg:spot:XUSDT=Some({})", 2 * h),
@@ -2215,23 +2218,23 @@ mod tests {
         // a restart inside the day: the baseline and the change's time come back from kv and the clock runs on
         log.borrow_mut().clear();
         let mut b = hooked(&log);
-        b.first_fees.insert((Venue::Spot, "XUSDT".into()), (0.0, 0.0001));
-        b.fee_changed.insert((Venue::Spot, "XUSDT".into()), 2 * h);
-        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 10 * h);
+        b.first_fees.insert((Venue::SPOT, "XUSDT".into()), (0.0, 0.0001));
+        b.fee_changed.insert((Venue::SPOT, "XUSDT".into()), 2 * h);
+        b.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.001, 10 * h);
         assert!(b.fee_rows()[0].changed && log.borrow().is_empty());
-        assert_eq!(b.fee_changed[&(Venue::Spot, "XUSDT".into())], 2 * h);
+        assert_eq!(b.fee_changed[&(Venue::SPOT, "XUSDT".into())], 2 * h);
         b.expire_fees(2 * h + FEE_CHANGE_HOLD_MS);
-        assert_eq!(b.first_fees[&(Venue::Spot, "XUSDT".into())], (0.0, 0.001));
+        assert_eq!(b.first_fees[&(Venue::SPOT, "XUSDT".into())], (0.0, 0.001));
         // back to the baseline inside the day: the change ends
-        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.002, 30 * h);
-        b.set_fee(Venue::Spot, "XUSDT", 0.0, 0.001, 31 * h);
+        b.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.002, 30 * h);
+        b.set_fee(Venue::SPOT, "XUSDT", 0.0, 0.001, 31 * h);
         assert!(!b.fee_rows()[0].changed && b.fee_changed.is_empty());
 
         // a rate already differing at startup with no time kept counts from the first read
         let mut c = hooked(&log);
-        c.first_fees.insert((Venue::Usdm, "*".into()), (0.0002, 0.0005));
-        c.set_fee(Venue::Usdm, "*", 0.0, 0.0004, 50 * h);
-        assert_eq!(c.fee_changed[&(Venue::Usdm, "*".into())], 50 * h);
+        c.first_fees.insert((Venue::USDM, "*".into()), (0.0002, 0.0005));
+        c.set_fee(Venue::USDM, "*", 0.0, 0.0004, 50 * h);
+        assert_eq!(c.fee_changed[&(Venue::USDM, "*".into())], 50 * h);
         c.expire_fees(50 * h + FEE_CHANGE_HOLD_MS);
         assert!(!c.fee_rows()[0].changed);
     }
@@ -2317,7 +2320,7 @@ mod tests {
         // Short 2 at the start (opening mark 100); sell 1 at 99 (fee 0.04) and buy 0.5 at 97 (fee 0.02);
         // mark now 96; funding received 0.3. Price P&L = -2 (96-100) - 1 (96-99) + 0.5 (96-97) = 10.5.
         let mut m = Market::new(info(&[]), 120.0, 100.0);
-        let id = m.ensure("XUSDT", Venue::Usdm, None);
+        let id = m.ensure("XUSDT", Venue::USDM, None);
         m.insts[id].mark = Some(96.0);
         (m.insts[id].bid, m.insts[id].ask) = (96.05, 96.15);   // mid 96.1
         let mut a = Account::new(cfg("a", ""), None, "");
@@ -2339,7 +2342,7 @@ mod tests {
     #[test]
     fn stream_funding_counts_until_rest_has_it() {
         let mut m = Market::new(info(&[]), 120.0, 100.0);
-        let id = m.ensure("XUSDT", Venue::Usdm, None);
+        let id = m.ensure("XUSDT", Venue::USDM, None);
         m.insts[id].mark = Some(100.0);
         let mut a = Account::new(cfg("a", ""), None, "");
         a.day_start = 1_000;
@@ -2367,7 +2370,7 @@ mod tests {
         // Flat at the start (opening mark 100); the stream sells 2 at 90 and the position follows. Before any
         // REST pass the fill is today's, not a position held since the start: price P&L = -2 (88-90) = 4.
         let mut m = Market::new(info(&[]), 120.0, 100.0);
-        let id = m.ensure("XUSDT", Venue::Usdm, None);
+        let id = m.ensure("XUSDT", Venue::USDM, None);
         m.insts[id].mark = Some(88.0);
         let mut a = Account::new(cfg("a", ""), None, "");
         a.day_start = 1_000;

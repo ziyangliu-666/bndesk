@@ -479,10 +479,10 @@ impl PnlBook {
     /// (base asset, the asset's own instrument, the fill's instrument) of a spot fill; None for a conversion
     /// between two stablecoins (`market::is_conversion`), which Π leaves out.
     fn base_of(m: &mut Market, f: &PFill) -> Option<(String, InstId, InstId)> {
-        if f.venue != Venue::Spot || crate::market::is_conversion(&f.symbol) {
+        if !f.venue.is_spot() || crate::market::is_conversion(&f.symbol) {
             return None;
         }
-        let inst = m.ensure(&f.symbol, Venue::Spot, None);
+        let inst = m.ensure(&f.symbol, Venue::SPOT, None);
         let base = m.insts[inst].base.clone();
         let own = m.asset_inst(&base).unwrap_or(inst);
         Some((base, own, inst))
@@ -614,7 +614,7 @@ impl PnlBook {
         let f = Rc::new(PFill {
             ts,
             symbol: m.insts[inst].symbol.clone(),
-            venue: Venue::Spot,
+            venue: Venue::SPOT,
             side: if qty > 0.0 { Side::Buy } else { Side::Sell },
             price: px,
             qty: qty.abs(),
@@ -819,7 +819,7 @@ impl PnlBook {
                 continue;
             }
             let Some(inst) = m.id(&k) else { continue };
-            if m.insts[inst].venue != Venue::Spot || crate::market::is_conversion(&m.insts[inst].symbol) {
+            if !m.insts[inst].venue.is_spot() || crate::market::is_conversion(&m.insts[inst].symbol) {
                 continue;
             }
             let base = m.insts[inst].base.clone();
@@ -1152,7 +1152,7 @@ impl PnlBook {
                 while s.i < s.fl.len() && s.fl[s.i].0 <= t {
                     let (_, sq, f) = s.fl[s.i].clone();
                     if full {
-                        let fi = m.ensure(&f.symbol, Venue::Spot, None);
+                        let fi = m.ensure(&f.symbol, Venue::SPOT, None);
                         let (fpx, fee) = Self::usd(m, &f, fi);
                         d_pi += sq * (nz(mm).unwrap_or(fpx) - fpx) - fee;
                         if f.flow.is_none() {
@@ -1590,18 +1590,18 @@ mod tests {
 
     fn market() -> Market {
         let mut info = Info::new();
-        info.insert(Venue::Spot, HashMap::from([("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0))]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::SPOT, HashMap::from([("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0))]));
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 100.0);
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
-        m.ensure("BUSDT", Venue::Usdm, None);
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
+        m.ensure("BUSDT", Venue::USDM, None);
         m
     }
 
     fn tick(m: &mut Market, t: i64, x: f64, r: f64, b: f64) {
-        m.on_book(Venue::Spot, &BookTicker::new("XUSDT", x, x, Some(t)));
-        m.on_book(Venue::Usdm, &BookTicker::new("XUSDT", r, r, Some(t)));
-        m.on_book(Venue::Usdm, &BookTicker::new("BUSDT", b, b, Some(t)));
+        m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", x, x, Some(t)));
+        m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
+        m.on_book(Venue::USDM, &BookTicker::new("BUSDT", b, b, Some(t)));
     }
 
     fn book(balance: f64) -> PnlBook {
@@ -1610,7 +1610,7 @@ mod tests {
     }
 
     fn fill(id: &str, ts: i64, side: Side, price: f64, qty: f64) -> FillRec {
-        FillRec::new(id, ts, "a", "XUSDT", Venue::Spot, side, price, qty)
+        FillRec::new(id, ts, "a", "XUSDT", Venue::SPOT, side, price, qty)
     }
 
     fn fee(mut f: FillRec, fee: f64) -> FillRec {
@@ -1693,17 +1693,17 @@ mod tests {
     #[test]
     fn usdc_flow_and_conversion_stay_out_of_pi() {
         let mut info = Info::new();
-        info.insert(Venue::Spot, HashMap::from([
+        info.insert(Venue::SPOT, HashMap::from([
             ("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0)),
             ("USDCUSDT".to_string(), SymbolInfo::new("USDC", "USDT", 5.0)),
         ]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 100.0);
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
-        m.ensure("BUSDT", Venue::Usdm, None);
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
+        m.ensure("BUSDT", Venue::USDM, None);
         m.asset_inst("USDC");
         tick(&mut m, 200, 100.0, 50.0, 200.0);
-        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(200)));
+        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(200)));
         let mut pb = book(1.0);
         pb.begin(&mut m, 4000);
         pb.m0.insert("X", 97.0);
@@ -1711,7 +1711,7 @@ mod tests {
         approx!(before, 3.0);
         let flow = Flow { key: "t:1".into(), ts: 4_100, asset: "USDC".into(), qty: 12_888.888_888_88, px: 1.0012 };
         pb.set_flows(&mut m, &[flow], 4_200);
-        let mut conv = FillRec::new("c", 4_300, "usdc", "USDCUSDT", Venue::Spot, Side::Sell, 1.00112, 12_889.0);
+        let mut conv = FillRec::new("c", 4_300, "usdc", "USDCUSDT", Venue::SPOT, Side::Sell, 1.00112, 12_889.0);
         conv.fee = 1.29;
         conv.fee_asset = "USDT".into();
         pb.on_fill(&mut m, &conv);
@@ -1808,15 +1808,15 @@ mod tests {
     fn markout_net_from_tau_and_toxicity_sign() {
         // Buy at 10 s; the reference drops 10 bps within 200 ms, then another ~10 bps by 1 s.
         let mut info = Info::new();
-        info.insert(Venue::Spot, HashMap::new());
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::SPOT, HashMap::new());
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 100.0);
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         for (t, r) in [(4_000, 50.0), (10_100, 49.95), (10_900, 49.90), (11_500, 49.95)] {
-            m.on_book(Venue::Usdm, &BookTicker::new("XUSDT", r, r, Some(t)));
+            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
         }
         for t in [9_000, 11_000, 20_000] {
-            m.on_book(Venue::Spot, &BookTicker::new("XUSDT", 100.0, 100.0, Some(t)));
+            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", 100.0, 100.0, Some(t)));
         }
         let mut fb = FillBook::new();
         fb.add(&mut m, fill("a", 10_000, Side::Buy, 100.0, 1.0), true);
@@ -2055,18 +2055,18 @@ mod tests {
     /// Spot X (reference usdm X) and Y (none), the beta instrument usdm B.
     fn two_markets() -> Market {
         let mut info = Info::new();
-        info.insert(Venue::Spot, HashMap::from([("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0)),
+        info.insert(Venue::SPOT, HashMap::from([("XUSDT".to_string(), SymbolInfo::new("X", "USDT", 5.0)),
                                                 ("YUSDT".to_string(), SymbolInfo::new("Y", "USDT", 5.0))]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 100.0);
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
-        m.ensure("YUSDT", Venue::Spot, None);
-        m.ensure("BUSDT", Venue::Usdm, None);
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
+        m.ensure("YUSDT", Venue::SPOT, None);
+        m.ensure("BUSDT", Venue::USDM, None);
         m
     }
 
     fn y_tick(m: &mut Market, t: i64, y: f64) {
-        m.on_book(Venue::Spot, &BookTicker::new("YUSDT", y, y, Some(t)));
+        m.on_book(Venue::SPOT, &BookTicker::new("YUSDT", y, y, Some(t)));
     }
 
     /// What the desk does with its accounts, the transfer history and the P&L book: balances move with fills and
@@ -2176,7 +2176,7 @@ mod tests {
         let mut d = Desk::new(m, &[("X", 0.6), ("USDT", 1000.0)]);
         d.begin(3000, 100.0);
         // mm1 buys 4.4 X at 100.1, a taker fee of 0.044; X goes to 102
-        let buy = fee(FillRec::new("b", 5_000, "mm1", "XUSDT", Venue::Spot, Side::Buy, 100.1, 4.4), 0.044);
+        let buy = fee(FillRec::new("b", 5_000, "mm1", "XUSDT", Venue::SPOT, Side::Buy, 100.1, 4.4), 0.044);
         d.fill(&buy);
         d.pb.step(&mut d.m, 8_000);
         tick(&mut d.m, 8_000, 102.0, 51.0, 200.0);

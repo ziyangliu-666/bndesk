@@ -683,7 +683,7 @@ mod tests {
         let h2 = health.clone();
         let th = std::thread::spawn(move || run(c, rx, &h2));
         for k in 0..2000 {
-            let f = FillRec::new(format!("f{k}"), k, "a", "XUSDT", Venue::Spot, Side::Buy, 1.0, 1.0);
+            let f = FillRec::new(format!("f{k}"), k, "a", "XUSDT", Venue::SPOT, Side::Buy, 1.0, 1.0);
             tx.send(Item::Row(Row::Fill(Box::new(f)))).unwrap();
         }
         let t0 = std::time::Instant::now();
@@ -722,7 +722,7 @@ mod tests {
     fn fill_round_trip_and_rows() {
         let d = tempfile::tempdir().unwrap();
         let s = Store::new(d.path().join("f.db"));
-        let mut f = FillRec::new("x1", 1000, "acc", "BTCUSDT", Venue::Usdm, Side::Sell, 100.5, 0.25);
+        let mut f = FillRec::new("x1", 1000, "acc", "BTCUSDT", Venue::USDM, Side::Sell, 100.5, 0.25);
         f.fee = 0.01;
         f.fee_asset = "USDT".into();
         f.maker = false;

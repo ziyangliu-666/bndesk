@@ -38,8 +38,8 @@ fn mark(m: &Rc<RefCell<Market>>, raw: &str) {
 
 fn info(spot: &Value, usdm: &Value) -> Info {
     let mut i: Info = HashMap::new();
-    i.insert(Venue::Spot, parse_exchange_info(spot));
-    i.insert(Venue::Usdm, parse_exchange_info(usdm));
+    i.insert(Venue::SPOT, parse_exchange_info(spot));
+    i.insert(Venue::USDM, parse_exchange_info(usdm));
     i
 }
 
@@ -133,10 +133,12 @@ fn acct(id: &str, role: Role, futures: bool) -> Account {
     Account::new(c, None, "")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn exec(tm: i64, sym: &str, side: &str, x: &str, status: &str, oid: i64, p: &str, q: &str, z: &str) -> Value {
     json!({"e": "executionReport", "E": tm, "s": sym, "S": side, "x": x, "X": status, "i": oid, "p": p, "q": q, "z": z, "O": tm - 5})
 }
 
+#[allow(clippy::too_many_arguments)]
 fn trade(tm: i64, sym: &str, side: &str, status: &str, oid: i64, tid: i64, p: &str, q: &str, z: &str, l: &str, n: &str, asset: &str, maker: bool) -> Value {
     json!({"e": "executionReport", "E": tm + 1, "s": sym, "S": side, "x": "TRADE", "X": status, "i": oid, "p": p, "q": q, "z": z,
            "O": tm - 100, "t": tid, "T": tm, "L": p, "l": l, "n": n, "N": asset, "m": maker})
@@ -249,7 +251,17 @@ impl Session {
 /// on, are left out.
 fn canon(v: &mut Value) {
     match v {
-        Value::Object(o) => o.values_mut().for_each(canon),
+        Value::Object(o) => {
+            for k in ["positions", "legs"] {
+                // their `venue` came after the file: what they say is checked by the session's symbols and marks
+                if let Some(Value::Array(rows)) = o.get_mut(k) {
+                    rows.iter_mut().filter_map(Value::as_object_mut).for_each(|r| {
+                        r.remove("venue");
+                    });
+                }
+            }
+            o.values_mut().for_each(canon)
+        }
         Value::Array(a) => {
             a.iter_mut().for_each(canon);
             if a.iter().all(|x| x.get("symbol").is_some()) {
@@ -307,7 +319,7 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
         let (fills, m, pnl, kept) = (fills.clone(), m.clone(), pnl.clone(), kept.clone());
         Rc::new(move |f: FillRec| {
             kept.borrow_mut().push(json!(["fill", f.id, f.ts, f.fee, f.fee_asset, f.maker]));
-            let spot = (f.venue == Venue::Spot && !f.conversion()).then(|| f.clone());
+            let spot = (f.venue.is_spot() && !f.conversion()).then(|| f.clone());
             let mut mk = m.borrow_mut();
             if fills.borrow_mut().add(&mut mk, f, true)
                 && let Some(f) = spot
@@ -338,19 +350,21 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
         tr.on_record = Rc::new(move |id: &str, r: &Transfer| k.borrow_mut().push(json!(["transfer", id, r.ts, r.frm, r.to, r.asset, r.amount, r.usd])));
         Rc::new(RefCell::new(tr))
     };
-    let mut cfg = Config::default();
-    cfg.target_ratio = Some(1.0);
-    cfg.band_usd = Some(100.0);
-    cfg.hedge_symbols = vec!["HHHUSDT".into()];
-    cfg.markets = vec![MarketCfg { reference: Some(Ref { symbol: "AAAUSDT".into(), venue: Venue::Usdm }), ..MarketCfg::new("AAAUSDT", Venue::Spot) },
-                       MarketCfg::new("BBBUSDT", Venue::Spot)];
+    let cfg = Config {
+        target_ratio: Some(1.0),
+        band_usd: Some(100.0),
+        hedge_symbols: vec!["HHHUSDT".into()],
+        markets: vec![MarketCfg { reference: Some(Ref { symbol: "AAAUSDT".into(), venue: Venue::USDM }), ..MarketCfg::new("AAAUSDT", Venue::SPOT) },
+                      MarketCfg::new("BBBUSDT", Venue::SPOT)],
+        ..Default::default()
+    };
     {
         let mut mk = m.borrow_mut();
         for mc in &cfg.markets {
             let id = mk.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));
             mk.keep_fine(id);
         }
-        mk.ensure("HHHUSDT", Venue::Usdm, None);
+        mk.ensure("HHHUSDT", Venue::USDM, None);
         mk.asset_inst("USDC");
     }
     let s = Session { m: m.clone(), accounts: accounts.clone(), transfers: transfers.clone(), fills, pnl, kept: kept.clone(), cfg };
@@ -358,12 +372,12 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
     let mut out: Vec<Value> = vec![json!({"limits": limits})];
     let mut errors: Vec<String> = vec![];
     let tick = |t: i64, b: f64, a: f64| {
-        book(&m, Venue::Spot, &format!(r#"{{"s":"AAAUSDT","b":"{b}","a":"{a}","E":{t}}}"#));
-        book(&m, Venue::Usdm, &format!(r#"{{"s":"AAAUSDT","b":"{}","a":"{}","E":{t}}}"#, b * 1.001, a * 1.001));
-        book(&m, Venue::Spot, &format!(r#"{{"s":"BBBUSDT","b":{},"a":{},"E":{t}}}"#, b / 10.0, a / 10.0));
-        book(&m, Venue::Spot, &format!(r#"{{"s":"BNBUSDT","b":"500","a":"500.2","E":{t}}}"#));
-        book(&m, Venue::Spot, &format!(r#"{{"s":"USDCUSDT","b":"1.0001","a":"1.0003","E":{t}}}"#));
-        book(&m, Venue::Usdm, &format!(r#"{{"s":"HHHUSDT","b":"{}","a":"{}","E":{t}}}"#, b * 2.0, a * 2.0));
+        book(&m, Venue::SPOT, &format!(r#"{{"s":"AAAUSDT","b":"{b}","a":"{a}","E":{t}}}"#));
+        book(&m, Venue::USDM, &format!(r#"{{"s":"AAAUSDT","b":"{}","a":"{}","E":{t}}}"#, b * 1.001, a * 1.001));
+        book(&m, Venue::SPOT, &format!(r#"{{"s":"BBBUSDT","b":{},"a":{},"E":{t}}}"#, b / 10.0, a / 10.0));
+        book(&m, Venue::SPOT, &format!(r#"{{"s":"BNBUSDT","b":"500","a":"500.2","E":{t}}}"#));
+        book(&m, Venue::SPOT, &format!(r#"{{"s":"USDCUSDT","b":"1.0001","a":"1.0003","E":{t}}}"#));
+        book(&m, Venue::USDM, &format!(r#"{{"s":"HHHUSDT","b":"{}","a":"{}","E":{t}}}"#, b * 2.0, a * 2.0));
         mark(&m, &format!(r#"{{"e":"markPriceUpdate","E":{t},"s":"HHHUSDT","p":"{}","r":"0.0001","T":{}}}"#, b * 2.0, t + 3_600_000));
         mark(&m, &format!(r#"{{"s":"AAAUSDT","p":"{b}","r":"","T":0}}"#));
     };

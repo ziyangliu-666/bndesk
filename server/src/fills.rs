@@ -481,21 +481,21 @@ mod tests {
 
     fn market() -> Market {
         let mut info = Info::new();
-        info.insert(Venue::Spot, Default::default());
-        info.insert(Venue::Usdm, Default::default());
+        info.insert(Venue::SPOT, Default::default());
+        info.insert(Venue::USDM, Default::default());
         Market::new(info, 120.0, 100.0)
     }
 
     #[test]
     fn fillbook_matures_on_exchange_time() {
         let mut m = market();
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         for (t, s, r) in [(0, 100.0, 50.0), (1_000, 100.1, 50.025), (10_000, 100.2, 50.0)] {
-            m.on_book(Venue::Usdm, &BookTicker::new("XUSDT", r, r, Some(t)));
-            m.on_book(Venue::Spot, &BookTicker::new("XUSDT", s, s, Some(t)));
+            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
+            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", s, s, Some(t)));
         }
         let mut fb = FillBook::new();
-        fb.add(&mut m, FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0), true);
+        fb.add(&mut m, FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0), true);
         fb.mature(&m, 1_500);
         assert_eq!(fb.get("a").unwrap().mk.0[0], None);
         fb.mature(&m, 2_000);
@@ -514,7 +514,7 @@ mod tests {
     fn add_sorts_dedups_and_rolls() {
         let mut m = market();
         let mut fb = FillBook::new();
-        let f = |id: &str, ts| FillRec::new(id, ts, "a", "XUSDT", Venue::Spot, Side::Sell, 1.0, 1.0);
+        let f = |id: &str, ts| FillRec::new(id, ts, "a", "XUSDT", Venue::SPOT, Side::Sell, 1.0, 1.0);
         assert!(fb.add(&mut m, f("b", 20), true));
         assert!(fb.add(&mut m, f("a", 10), true));
         assert!(!fb.add(&mut m, f("a", 10), true));
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn mark_at_young_unmarked_backfilled() {
-        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0);
         let due = 60_000 + MARK_GRACE_MS;
         assert_eq!(f.mark_at(2, 30_000), MarkAt::Young);
         assert_eq!(f.mark_at(2, due - 1), MarkAt::Young);    // the live path still has the grace to take it
@@ -544,12 +544,12 @@ mod tests {
     fn backfill_books_marks_and_their_flags() {
         let mut m = market();
         let mut fb = FillBook::new();
-        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0);
         f.mk_raw.0[0] = Some(1.0);   // 1 s taken live, the desk down from then
         f.mk.0[0] = Some(1.0);
         f.mk_fast.0[0] = Some(1.0);
         fb.add(&mut m, f, false);
-        fb.add(&mut m, FillRec::new("young", 320_000, "acct", "XUSDT", Venue::Spot, Side::Sell, 100.0, 1.0), false);
+        fb.add(&mut m, FillRec::new("young", 320_000, "acct", "XUSDT", Venue::SPOT, Side::Sell, 100.0, 1.0), false);
         fb.take_dirty();
         let now = 400_000;
         // 10, 60, 300 s are due for "a"; "young" only 1 and 10 s
@@ -574,13 +574,13 @@ mod tests {
     #[test]
     fn backfill_net_waits_for_the_reference() {
         let mut m = market();
-        m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         let mut fb = FillBook::new();
-        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0);
         f.has_ref = true;
         f.refs = [Some(50.0), Some(50.0), Some(50.0), Some(50.0)];
         fb.add(&mut m, f, false);
-        fb.add(&mut m, FillRec::new("b", 0, "acct", "XUSDT", Venue::Spot, Side::Sell, 100.0, 1.0), false);
+        fb.add(&mut m, FillRec::new("b", 0, "acct", "XUSDT", Venue::SPOT, Side::Sell, 100.0, 1.0), false);
         fb.backfill_raw("a", 2, Some(100.2));
         fb.backfill_raw("b", 2, Some(100.2));
         let a = fb.get("a").unwrap();

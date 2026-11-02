@@ -101,7 +101,7 @@ pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
         a.volume += n;
         // the desk's day figures are its spot market making (the ticker's Spot volume); the perps' hedge fills
         // are counted on their own rows
-        let spot = f.venue == Venue::Spot;
+        let spot = f.venue.is_spot();
         if spot {
             g.fills_day += 1;
             g.volume_day += n;
@@ -212,8 +212,8 @@ pub struct MmSplit {
 pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, tracked: impl Fn(&str) -> bool) -> MmSplit {
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let mut out = MmSplit::default();
-    for f in fills.iter().filter(|f| f.venue == Venue::Spot && !f.conversion()) {
-        let Some((base, quote, mid)) = m.get(&crate::market::key(&f.symbol, Venue::Spot)).map(|i| (i.base.clone(), i.quote.clone(), i.mid()))
+    for f in fills.iter().filter(|f| f.venue.is_spot() && !f.conversion()) {
+        let Some((base, quote, mid)) = m.get(&crate::market::key(&f.symbol, Venue::SPOT)).map(|i| (i.base.clone(), i.quote.clone(), i.mid()))
         else {
             continue;
         };
@@ -293,13 +293,13 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
             let i = &m.insts[id];
             (i.key.clone(), i.venue, i.base.clone())
         };
-        let own = venue == Venue::Spot && m.asset_inst(&base) == Some(id);
+        let own = venue.is_spot() && m.asset_inst(&base) == Some(id);
         let inst = &m.insts[id];
         let a = agg.by_inst.get(&key).unwrap_or(&empty);
         let mid = inst.mid();
         let rf = inst.ref_.map(|r| &m.insts[r]);
         let fair = m.fair(id);
-        let (qty, dust) = if venue == Venue::Spot {
+        let (qty, dust) = if venue.is_spot() {
             (if own { holdings.get(&base).copied().unwrap_or(0.0) } else { 0.0 }, own && dust_assets.contains(&base))
         } else {
             (positions.get(&inst.symbol).copied().unwrap_or(0.0), false)
@@ -307,7 +307,7 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
         let q = quotes.get(&key).copied().unwrap_or_default();
         let cost = (a.pos != 0.0).then_some(a.cost);
         let (tp, hp, rp, fp) =
-            if venue == Venue::Spot && own { by_base.get(&base).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)) } else { (0.0, 0.0, 0.0, 0.0) };
+            if venue.is_spot() && own { by_base.get(&base).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)) } else { (0.0, 0.0, 0.0, 0.0) };
         let px = truthy(m.px(id));
         let fair_t = truthy(fair);
         rows.push(P::SymbolRow {
@@ -337,8 +337,8 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
             hedged_pnl: hp,
             realized_pnl: rp,
             float_pnl: fp,
-            mm_pnl: if venue == Venue::Spot && own { mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
-            inv_pnl: if venue == Venue::Spot && own { tp - mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
+            mm_pnl: if venue.is_spot() && own { mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
+            inv_pnl: if venue.is_spot() && own { tp - mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
             open_bids: q.bids,
             open_asks: q.asks,
             bid_dist_bps: match (truthy(q.bid), fair_t) {
@@ -399,7 +399,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
             .into_iter()
             .map(|p| {
                 let pnl_day = leg_pnl(&acct.fut_leg(m, &p.symbol));
-                P::Position { symbol: p.symbol, amt: p.amt, entry: p.entry, mark: p.mark, upnl: p.upnl, notional: p.notional, pnl_day }
+                P::Position { symbol: p.symbol, venue: p.venue, amt: p.amt, entry: p.entry, mark: p.mark, upnl: p.upnl, notional: p.notional, pnl_day }
             })
             .collect(),
         orders_10s: acct.orders_10s,
@@ -445,16 +445,16 @@ pub fn exposure(cfg: &Config, m: &Market, accounts: &[P::Account], beta_value: f
         band = Some(cfg.band_usd.unwrap_or(0.0).max(cfg.band_frac * t.abs()));
         gap = Some(t - hedge);   // futures notional to trade to reach the target
     }
-    let mut pos: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut pos: BTreeMap<(&str, Venue), f64> = BTreeMap::new();
     for a in accounts {
         for p in &a.positions {
-            *pos.entry(p.symbol.as_str()).or_insert(0.0) += p.amt;
+            *pos.entry((p.symbol.as_str(), p.venue)).or_insert(0.0) += p.amt;
         }
     }
     let funding = pos
         .into_iter()
-        .map(|(s, amt)| {
-            let inst = m.get(&format!("usdm:{s}"));
+        .map(|((s, venue), amt)| {
+            let inst = m.find(s, venue).map(|i| &m.insts[i]);
             P::Funding { symbol: s.to_string(), rate: inst.and_then(|i| i.funding), next: inst.and_then(|i| i.next_funding), position: amt }
         })
         .collect();
@@ -494,6 +494,7 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
             let l = a.fut_leg(m, s);
             let b = by.entry(s.to_string()).or_insert_with(|| P::HedgeLeg {
                 symbol: s.to_string(),
+                venue: a.perp,
                 mark0: l.m0,
                 mark: l.mark,
                 price_pnl: Some(0.0),
@@ -544,7 +545,7 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
 pub fn beta_weighted_spot(cfg: &Config, m: &mut Market, accounts: &[AccountRef], est: Option<&Betas>) -> f64 {
     let mut betas: HashMap<String, f64> = HashMap::new();
     for mc in &cfg.markets {
-        if mc.venue != Venue::Spot {
+        if !mc.venue.is_spot() {
             continue;
         }
         let k = format!("{}:{}", mc.venue, mc.symbol);
@@ -641,20 +642,20 @@ mod tests {
     #[test]
     fn test_beta_weighted_spot_and_hedge_symbols() {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, HashMap::from([
+        info.insert(Venue::SPOT, HashMap::from([
             ("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0)),
             ("BBBUSDT".to_string(), SymbolInfo::new("BBB", "USDT", 0.0)),
         ]));
         let mut m = Market::new(info, 120.0, 50.0);
-        m.ensure("AAAUSDT", Venue::Spot, None);
-        m.ensure("BBBUSDT", Venue::Spot, None);
-        m.on_book(Venue::Spot, &BookTicker::new("AAAUSDT", 10.0, 10.0, Some(1)));
-        m.on_book(Venue::Spot, &BookTicker::new("BBBUSDT", 2.0, 2.0, Some(1)));
+        m.ensure("AAAUSDT", Venue::SPOT, None);
+        m.ensure("BBBUSDT", Venue::SPOT, None);
+        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 10.0, 10.0, Some(1)));
+        m.on_book(Venue::SPOT, &BookTicker::new("BBBUSDT", 2.0, 2.0, Some(1)));
         let mut a = Account::new(AccountCfg::new("a", "a", "a@x.io", Role::Sub), None, "");
         a.set_balances([("USDT", 500.0, 0.0), ("AAA", 3.0, 1.0), ("BBB", 10.0, 0.0)], true);
         let accounts = vec![a.shared()];
         let mut cfg = Config::default();
-        let mut mc = MarketCfg::new("AAAUSDT", Venue::Spot);
+        let mut mc = MarketCfg::new("AAAUSDT", Venue::SPOT);
         mc.beta = 1.5;
         cfg.markets = vec![mc];
         cfg.markets_only = false;
@@ -713,11 +714,11 @@ mod tests {
     #[test]
     fn mm_split_values_young_fills_now_and_leaves_unmarked_ones_out() {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
+        info.insert(Venue::SPOT, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
         let mut m = Market::new(info, 120.0, 50.0);
-        m.ensure("AAAUSDT", Venue::Spot, None);
-        m.on_book(Venue::Spot, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));   // mid now 12, hours later
-        let fill = |id: &str, ts: i64| FillRec::new(id, ts, "a", "AAAUSDT", Venue::Spot, Side::Buy, 10.0, 1.0);
+        m.ensure("AAAUSDT", Venue::SPOT, None);
+        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));   // mid now 12, hours later
+        let fill = |id: &str, ts: i64| FillRec::new(id, ts, "a", "AAAUSDT", Venue::SPOT, Side::Buy, 10.0, 1.0);
         let now = 10 * 3_600_000;
         let young = fill("young", now - 20_000);                 // 20 s old: the mid now, +2
         let mut marked = fill("marked", 0);
@@ -741,21 +742,21 @@ mod tests {
     #[test]
     fn stable_pair_fills_are_left_out_of_mm_and_the_aggregates() {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, HashMap::from([
+        info.insert(Venue::SPOT, HashMap::from([
             ("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0)),
             ("USDCUSDT".to_string(), SymbolInfo::new("USDC", "USDT", 5.0)),
         ]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 50.0);
-        m.ensure("AAAUSDT", Venue::Spot, None);
+        m.ensure("AAAUSDT", Venue::SPOT, None);
         m.asset_inst("USDC");
-        m.on_book(Venue::Spot, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));
-        m.on_book(Venue::Spot, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1)));
+        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));
+        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1)));
         let now = 10 * 3_600_000;
-        let mut aaa = FillRec::new("a", now - 600_000, "mm", "AAAUSDT", Venue::Spot, Side::Buy, 10.0, 1.0);
+        let mut aaa = FillRec::new("a", now - 600_000, "mm", "AAAUSDT", Venue::SPOT, Side::Buy, 10.0, 1.0);
         aaa.mk_raw.0[2] = Some(50.0);
         aaa.mk.0 = [Some(10.0), Some(20.0), Some(50.0), Some(40.0)];
-        let mut conv = FillRec::new("c", now - 590_000, "usdc", "USDCUSDT", Venue::Spot, Side::Sell, 1.00112, 12_889.0);
+        let mut conv = FillRec::new("c", now - 590_000, "usdc", "USDCUSDT", Venue::SPOT, Side::Sell, 1.00112, 12_889.0);
         conv.maker = false;
         conv.mk_raw.0[2] = Some(-3.0);
         conv.mk.0 = [Some(-1.0), Some(-2.0), Some(-3.0), Some(-4.0)];
@@ -769,7 +770,7 @@ mod tests {
         let only = aggregate(&[aaa.clone()], now);
         assert_eq!((g.fills_day, g.volume_day), (1, 10.0));
         // a perp hedge fill has its own row, out of the day's spot count and volume
-        let hedge = FillRec::new("h", now - 500_000, "mm", "AAAUSDT", Venue::Usdm, Side::Sell, 10.0, 3.0);
+        let hedge = FillRec::new("h", now - 500_000, "mm", "AAAUSDT", Venue::USDM, Side::Sell, 10.0, 3.0);
         let gh = aggregate(&[aaa.clone(), hedge], now);
         assert_eq!((gh.fills_day, gh.volume_day, gh.fills_1h), (1, 10.0, 1));
         assert_eq!(gh.by_inst["usdm:AAAUSDT"].volume, 30.0);

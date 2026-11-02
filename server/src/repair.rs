@@ -470,8 +470,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let spot: Value = public.get("/api/v3/exchangeInfo", &[], 20, false).await?;
     let usdm: Value = public.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
     let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::Spot, crate::market::parse_exchange_info(&spot));
-    info.insert(Venue::Usdm, crate::market::parse_exchange_info(&usdm));
+    info.insert(Venue::SPOT, crate::market::parse_exchange_info(&spot));
+    info.insert(Venue::USDM, crate::market::parse_exchange_info(&usdm));
     let mut m = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
     for mc in &cfg.markets {
         m.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));
@@ -481,7 +481,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
     // Q at the day's end: the balance now less the spot fills since (a fee taken in the base asset came out of it)
     let mut q_end = bal.clone();
-    for f in after.iter().filter(|f| f.venue == Venue::Spot && !f.conversion()) {
+    for f in after.iter().filter(|f| f.venue.is_spot() && !f.conversion()) {
         if let Some(i) = m.get(&f.key()) {
             let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
             let fee = if f.fee_asset == i.base { f.fee } else { 0.0 };
@@ -510,8 +510,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
 
     // klines: each instrument in scope, its reference, the beta instrument, the fee and rebate assets
-    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| mc.venue == Venue::Spot).map(|mc| format!("spot:{}", mc.symbol)).collect();
-    keys.extend(fills.iter().filter(|f| f.venue == Venue::Spot && !f.conversion()).map(|f| f.key()));
+    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| mc.venue.is_spot()).map(|mc| format!("spot:{}", mc.symbol)).collect();
+    keys.extend(fills.iter().filter(|f| f.venue.is_spot() && !f.conversion()).map(|f| f.key()));
     keys.sort();
     keys.dedup();
     let scope = keys.clone();
@@ -742,10 +742,10 @@ mod tests {
 
     fn market() -> Market {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::SPOT, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
+        info.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(info, 120.0, 50.0);
-        m.ensure("AAAUSDT", Venue::Spot, None);
+        m.ensure("AAAUSDT", Venue::SPOT, None);
         m
     }
 
@@ -764,7 +764,7 @@ mod tests {
             (t, px(t), px(t + MIN))
         }).collect();
         let t_f = DS + 6 * HOUR;
-        let mut f = FillRec::new("f", t_f, "a", "AAAUSDT", Venue::Spot, Side::Buy, 10.5, 1.0);
+        let mut f = FillRec::new("f", t_f, "a", "AAAUSDT", Venue::SPOT, Side::Buy, 10.5, 1.0);
         f.mk_raw.0 = [Some(1.0), Some(5.0), Some(10.0), Some(10.0)];
         f.mk.0 = f.mk_raw.0;
         let leg = Leg { q0: -1.0, m0: 10.0, trades: vec![], funding: vec![(DS + 8 * HOUR, 0.25)], marks: bars.clone() };

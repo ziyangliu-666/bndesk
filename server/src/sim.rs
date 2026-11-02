@@ -39,8 +39,8 @@ pub fn markets() -> Vec<MarketCfg> {
     SYMBOLS
         .iter()
         .map(|s| {
-            let mut m = MarketCfg::new(*s, Venue::Spot);
-            m.reference = Some(Ref { symbol: s.to_string(), venue: Venue::Usdm });
+            let mut m = MarketCfg::new(*s, Venue::SPOT);
+            m.reference = Some(Ref { symbol: s.to_string(), venue: Venue::USDM });
             m
         })
         .collect()
@@ -118,12 +118,12 @@ impl Sim {
             a.set_balances([("USDT", s, 0.0)], true);
             (a.spot_loaded, a.fut_loaded) = (true, true);
             (a.orders_10s_limit, a.orders_1d_limit) = (100, 200_000);
-            a.set_fee(Venue::Spot, "*", SPOT_MAKER, SPOT_TAKER, CLOCK.now());
+            a.set_fee(Venue::SPOT, "*", SPOT_MAKER, SPOT_TAKER, CLOCK.now());
         }
         {
             let mut f = self.fut.borrow_mut();
             (f.fut_wallet, f.fut_available) = (FUT_WALLET, FUT_WALLET);
-            f.set_fee(Venue::Usdm, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
+            f.set_fee(Venue::USDM, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
         }
         self.by_id["sub-2"].borrow_mut().set_balances([("DOT", 0.5, 0.0)], false);   // a dust lot, discovered from the balance
         let fills: Vec<FillRec> = desk.fills.borrow().fills.iter().filter(|f| f.id.starts_with("sim")).cloned().collect();
@@ -151,10 +151,10 @@ impl Sim {
 
     fn book(&self, a: &AccountRef, f: &FillRec) {
         let sgn = if f.side == Side::Buy { 1.0 } else { -1.0 };
-        if f.venue == Venue::Spot {
+        if f.venue.is_spot() {
             let base = {
                 let mut m = self.market.borrow_mut();
-                let i = m.ensure(&f.symbol, Venue::Spot, None);
+                let i = m.ensure(&f.symbol, Venue::SPOT, None);
                 m.insts[i].base.clone()
             };
             let mut a = a.borrow_mut();
@@ -182,11 +182,11 @@ impl Sim {
     #[allow(clippy::too_many_arguments)]
     fn fill(&mut self, a: &AccountRef, symbol: &str, venue: Venue, t: Option<i64>, side: Side, price: f64, q: f64, maker: bool) {
         self.seq += 1;
-        let fee_rate = match (venue, maker) {
-            (Venue::Spot, true) => SPOT_MAKER,
-            (Venue::Spot, false) => SPOT_TAKER,
-            (Venue::Usdm, true) => FUT_MAKER,
-            (Venue::Usdm, false) => FUT_TAKER,
+        let fee_rate = match (venue.is_spot(), maker) {
+            (true, true) => SPOT_MAKER,
+            (true, false) => SPOT_TAKER,
+            (false, true) => FUT_MAKER,
+            (false, false) => FUT_TAKER,
         };
         let id = a.borrow().id.clone();
         let mut f = FillRec::new(format!("sim:{id}:{venue}:{symbol}:{}:{}", CLOCK.now(), self.seq), t.unwrap_or_else(|| CLOCK.now()),
@@ -203,7 +203,7 @@ impl Sim {
         for s in SYMBOLS {
             let (fair, mid, ibid, iask, base, min_notional, t) = {
                 let m = self.market.borrow();
-                let Some(i) = m.find(s, Venue::Spot) else { continue };
+                let Some(i) = m.find(s, Venue::SPOT) else { continue };
                 let inst = &m.insts[i];
                 (m.fair(i), inst.mid(), inst.bid, inst.ask, inst.base.clone(), inst.min_notional, inst.t)
             };
@@ -238,10 +238,10 @@ impl Sim {
                     None
                 };
                 if side == Some(Side::Buy) && held * mid < cap && usdt > CLIP_USD * 2.0 {
-                    self.fill(&a, s, Venue::Spot, t, Side::Buy, bid, qty(bid), true);
+                    self.fill(&a, s, Venue::SPOT, t, Side::Buy, bid, qty(bid), true);
                 } else if side == Some(Side::Sell) && held * mid > min_notional {
                     let q = qty(ask);
-                    self.fill(&a, s, Venue::Spot, t, Side::Sell, ask, if (held - q) * mid < min_notional { held } else { q }, true);
+                    self.fill(&a, s, Venue::SPOT, t, Side::Sell, ask, if (held - q) * mid < min_notional { held } else { q }, true);
                 } else {
                     continue;
                 }
@@ -254,8 +254,8 @@ impl Sim {
     fn quotes(a: &AccountRef, symbol: &str, bid: f64, ask: f64) {
         let mut a = a.borrow_mut();
         let id = a.id.clone();
-        a.open.insert(format!("spot:{id}:{symbol}:b"), Open { symbol: symbol.into(), venue: Venue::Spot, side: Side::Buy, price: bid, left: qty(bid) });
-        a.open.insert(format!("spot:{id}:{symbol}:a"), Open { symbol: symbol.into(), venue: Venue::Spot, side: Side::Sell, price: ask, left: qty(ask) });
+        a.open.insert(format!("spot:{id}:{symbol}:b"), Open { symbol: symbol.into(), venue: Venue::SPOT, side: Side::Buy, price: bid, left: qty(bid) });
+        a.open.insert(format!("spot:{id}:{symbol}:a"), Open { symbol: symbol.into(), venue: Venue::SPOT, side: Side::Sell, price: ask, left: qty(ask) });
         a.traded.insert(format!("spot:{symbol}"));
     }
 
@@ -264,7 +264,7 @@ impl Sim {
         for s in SYMBOLS {
             let (base, fbid, fask, ft) = {
                 let m = self.market.borrow();
-                let (Some(sp), Some(fu)) = (m.find(s, Venue::Spot), m.find(s, Venue::Usdm)) else { continue };
+                let (Some(sp), Some(fu)) = (m.find(s, Venue::SPOT), m.find(s, Venue::USDM)) else { continue };
                 let fu = &m.insts[fu];
                 if fu.mid().is_none() {
                     continue;
@@ -277,7 +277,7 @@ impl Sim {
             if gap.abs() * (fbid + fask) / 2.0 > 40.0 {
                 let side = if gap > 0.0 { Side::Buy } else { Side::Sell };
                 let fut = self.fut.clone();
-                self.fill(&fut, s, Venue::Usdm, ft, side, if side == Side::Buy { fask } else { fbid }, g4(gap.abs()), false);
+                self.fill(&fut, s, Venue::USDM, ft, side, if side == Side::Buy { fask } else { fbid }, g4(gap.abs()), false);
             }
         }
         let m = self.market.borrow();

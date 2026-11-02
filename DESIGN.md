@@ -27,7 +27,8 @@ read-only connections.
 ### Instruments
 
 Tracked instruments are the union of:
-- config `[[markets]]`: `{symbol, venue = "spot" | "usdm", reference = {symbol, venue}?}`;
+- config `[[markets]]`: `{symbol, venue = "spot" | "usdm", reference = {symbol, venue}?}` (a venue is the id of one of
+  `Snapshot.desk.markets`; an alias, `binance:spot` or `binance:usdm`, is read as its market and never written);
 - auto-discovered: every symbol an account holds a balance or position in, or trades
   (subscriptions are added at run time).
 
@@ -255,16 +256,16 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   and per-minute fill sums are kept in memory (read once at start, then only what was written since,
   thinned like the store), so a request does not read the db: on a small machine it does not stay in
   the page cache, and a month of rows took 30 s from disk.
-- `GET /api/fills?symbol&venue&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` and `venue` (`spot` | `usdm`) optional.
+- `GET /api/fills?symbol&venue&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` and `venue` (a market's id or alias) optional.
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
   (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 40 000 (the latest).
-  `venue` spot (default) or usdm; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
+  `venue` a market's id or alias, spot by default; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
   Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
   400, a 429 / 418 a 503 until its Retry-After.
 
 Markouts, answered on the desk's thread from today's fills in memory:
 - `GET /api/markouts?account&venue&side&ref&weight&h` -> `MarkoutReport`. Optional filters `account`, `venue`
-  (spot | usdm), `side` (buy | sell); `ref` net (τ = 1 s, default) | fast (τ = 0.2 s) | raw; `weight` notional
+  (a market's id or alias), `side` (buy | sell); `ref` net (τ = 1 s, default) | fast (τ = 0.2 s) | raw; `weight` notional
   (default) | fill; `h` the distribution's horizon in seconds (default 10, the nearest path horizon). Each fill
   keeps its instrument's mid and the reference's at the path horizons −10, −5, −2, −1, −0.5, 0, 0.2, 0.5, 1, 2,
   5, 10, 20, 30, 60, 120, 300 s (the 1 s ring's at 1, 10, 60, 300 s, as the markouts; the ms ring's
@@ -315,6 +316,7 @@ interface Snapshot {
 interface Desk {
   currency: string;   // [desk] currency: the name money figures carry, USD or a USD stablecoin; not a conversion
   quote: string;      // the asset accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
+  markets: { id: string; exchange: string; kind: "spot" | "perp"; name: string }[];   // what every venue field can say: id is the venue, name the interface's word for it
   hedge: boolean;     // futures are part of the desk: an account with futures = true, [exposure] target_ratio, a position or futures wallet now, or a kept day's hedge P&L
   rebates: boolean;   // a rebate has been credited: today, or on a kept day (so it can turn true during a run)
   mm: boolean;        // [desk] market_making: split Trading PnL into market making and inventory on the pages
@@ -362,19 +364,19 @@ interface Account {
   equity: number; equity_open: number; pnl_day: number; transfers_day: number;
   quote_free: number; quote_locked: number; inventory_value: number;
   fut_wallet: number; fut_upnl: number; fut_available: number;
-  positions: { symbol: string; amt: number; entry: number; mark: number; upnl: number; notional: number;
+  positions: { symbol: string; venue: string; amt: number; entry: number; mark: number; upnl: number; notional: number;
                pnl_day: number | null }[];   // pnl_day: today's price P&L, fees and funding on the symbol
   orders_10s: number; orders_10s_limit: number; orders_1d: number; orders_1d_limit: number;
   orders_source: string;                    // "binance" (rateLimit/order) or "stream" (user stream, no rejects)
   open_orders: number; bids_notional: number; asks_notional: number;
   utilization: number;              // resting bids / (quote_free + resting bids)
-  fees: { venue: "spot" | "usdm"; maker_bps: number; taker_bps: number; changed: boolean }[];
+  fees: { venue: string; maker_bps: number; taker_bps: number; changed: boolean }[];
   user_stream: "up" | "down" | "n/a"; updated: number;
   rebates: number;                  // market-maker rebates credited today
 }
 
 interface SymbolRow {
-  symbol: string; venue: "spot" | "usdm"; reference: string | null;
+  symbol: string; venue: string; reference: string | null;
   mid: number | null; ref_mid: number | null; spread_bps: number | null; basis_bps: number | null;
   inv_qty: number; inv_value: number; avg_cost: number | null; upnl: number | null;
   fills_day: number; buys_day: number; sells_day: number; volume_day: number;
@@ -390,7 +392,7 @@ interface SymbolRow {
 }
 
 interface Fill {
-  id: string; ts: number; account: string; symbol: string; venue: "spot" | "usdm"; side: "buy" | "sell";
+  id: string; ts: number; account: string; symbol: string; venue: string; side: "buy" | "sell";
   price: number; qty: number; notional: number; fee: number; fee_asset: string; maker: boolean;
   fair: number | null; edge_bps: number | null;
   mk: { "1": number | null; "10": number | null; "60": number | null; "300": number | null };      // net τ = 1 s if available
@@ -417,7 +419,7 @@ interface HistoryBar {
   volume: number; fills: number;            // every fill in the bar
 }
 
-interface HistoryFill { t: number; side: "buy" | "sell"; price: number; qty: number; account: string; venue: "spot" | "usdm"; maker: boolean }
+interface HistoryFill { t: number; side: "buy" | "sell"; price: number; qty: number; account: string; venue: string; maker: boolean }
 
 interface MarkoutReport {
   now: number; day_start: number;
@@ -442,7 +444,7 @@ interface MarkoutDist { h: number; n: number; lo: number; width: number; bins: n
 
 interface MarkoutBucket { t: number; fills: number; notional: number; mk10: number | null; mk60: number | null }
 
-interface MarkoutInst { symbol: string; venue: "spot" | "usdm"; fills: number; notional: number; edge: number | null; mean: (number | null)[]; se10: number | null; adverse10: number | null; pnl: number }   // mean by path horizon
+interface MarkoutInst { symbol: string; venue: string; fills: number; notional: number; edge: number | null; mean: (number | null)[]; se10: number | null; adverse10: number | null; pnl: number }   // mean by path horizon
 
 interface SeriesPoint { t: number; equity: number; pnl_day: number; trading: number | null; hedged: number | null; inventory: number; futures_notional: number }   // trading, hedged: Π, S so far today; null before the P&L grid ran
 
@@ -473,7 +475,7 @@ interface HedgeDay {
 }
 
 interface HedgeLeg {
-  symbol: string; qty0: number; qty: number; mark0: number | null; mark: number | null; fills: number;
+  symbol: string; venue: string; qty0: number; qty: number; mark0: number | null; mark: number | null; fills: number;
   price_pnl: number | null; fees: number; funding: number; pnl: number | null;
 }
 
@@ -489,7 +491,7 @@ interface Alert { id: string; rule: string; level: "info" | "warn" | "crit"; tex
 interface Feed { name: string; kind: "public" | "user" | "rest" | "engine"; up: boolean; msgs_per_s: number; last: number | null; detail: string }
 
 interface OpenOrder {
-  id: string; account: string; symbol: string; venue: "spot" | "usdm"; side: "buy" | "sell";
+  id: string; account: string; symbol: string; venue: string; side: "buy" | "sell";
   price: number; qty: number; notional: number;
   fair: number | null; dist_bps: number | null;   // from fair, positive = passive
   since: number | null;                           // order creation time

@@ -389,16 +389,16 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn marks_backfilled_from_mocked_klines() {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, Default::default());
-        info.insert(Venue::Usdm, Default::default());
+        info.insert(Venue::SPOT, Default::default());
+        info.insert(Venue::USDM, Default::default());
         let mut market = Market::new(info, 120.0, 100.0);
-        market.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        market.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         let mut fb = FillBook::new();
-        let mut a = FillRec::new("a", 0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 1.0);   // with a reference
+        let mut a = FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0);   // with a reference
         a.has_ref = true;
         a.refs = [Some(50.0); 4];
         fb.add(&mut market, a, false);
-        fb.add(&mut market, FillRec::new("b", 0, "acct", "YUSDT", Venue::Spot, Side::Sell, 10.0, 1.0), false);   // 1 min klines only
+        fb.add(&mut market, FillRec::new("b", 0, "acct", "YUSDT", Venue::SPOT, Side::Sell, 10.0, 1.0), false);   // 1 min klines only
         let fills = (Rc::new(RefCell::new(fb)), Rc::new(RefCell::new(market)));
         let mut src = Mock::default();
         src.secs.insert("spot:XUSDT".into(), (0..400).map(|s| (s * 1000, 100.0, 100.0 + s as f64 / 100.0)).collect());

@@ -140,7 +140,7 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
     let unmarked: Vec<String> = book
         .fills
         .iter()
-        .filter(|f| f.venue == Venue::Spot && f.mk_raw.0[h].is_none() && !f.unpriceable(h) && f.ts + hms + MARK_GRACE_MS < end)
+        .filter(|f| f.venue.is_spot() && f.mk_raw.0[h].is_none() && !f.unpriceable(h) && f.ts + hms + MARK_GRACE_MS < end)
         .map(|f| f.id.clone())
         .collect();
 
@@ -271,8 +271,8 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
     let spot: serde_json::Value = rest.get("/api/v3/exchangeInfo", &[], 20, false).await?;
     let usdm: serde_json::Value = rest.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
     let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::Spot, crate::market::parse_exchange_info(&spot));
-    info.insert(Venue::Usdm, crate::market::parse_exchange_info(&usdm));
+    info.insert(Venue::SPOT, crate::market::parse_exchange_info(&spot));
+    info.insert(Venue::USDM, crate::market::parse_exchange_info(&usdm));
     let market = Rc::new(RefCell::new(Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps)));
     {
         let mut m = market.borrow_mut();
@@ -352,16 +352,16 @@ mod tests {
 
     fn market() -> Rc<RefCell<Market>> {
         let mut info: Info = HashMap::new();
-        info.insert(Venue::Spot, HashMap::from([
+        info.insert(Venue::SPOT, HashMap::from([
             ("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0)),
             ("BBBUSDT".to_string(), SymbolInfo::new("BBB", "USDT", 0.0)),
         ]));
-        info.insert(Venue::Usdm, HashMap::new());
+        info.insert(Venue::USDM, HashMap::new());
         Rc::new(RefCell::new(Market::new(info, 120.0, 50.0)))
     }
 
     fn fill(id: &str, ts: i64, sym: &str, side: Side, price: f64, qty: f64, mk60: Option<f64>) -> FillRec {
-        let mut f = FillRec::new(id, ts, "acct", sym, Venue::Spot, side, price, qty);
+        let mut f = FillRec::new(id, ts, "acct", sym, Venue::SPOT, side, price, qty);
         f.mk_raw.0 = [Some(1.0), Some(1.0), mk60, Some(1.0)];
         f.mk.0 = f.mk_raw.0;
         f

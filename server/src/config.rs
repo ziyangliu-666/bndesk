@@ -382,7 +382,7 @@ fn beta(exp: &Table) -> Result<Option<BetaCfg>> {
     let Some(vs) = vs_symbol(exp)? else {
         bail!("[exposure] beta = \"estimate\" needs beta_vs or hedge_symbols");
     };
-    let venue = s(exp, "beta_vs_venue", "usdm")?;
+    let venue = beta_venue(exp)?;
     let sample_s = f(exp, "beta_sample_s", 10.0)?;
     Ok(Some(BetaCfg {
         vs: format!("{venue}:{vs}"),
@@ -396,8 +396,17 @@ fn beta(exp: &Table) -> Result<Option<BetaCfg>> {
     }))
 }
 
+/// beta_vs_venue as instrument keys name it: an alias reads as its market.
+fn beta_venue(exp: &Table) -> Result<&str> {
+    let v = s(exp, "beta_vs_venue", "usdm")?;
+    Ok(match v.parse::<Venue>() {
+        Ok(venue) => venue.as_str(),
+        Err(_) => v,
+    })
+}
+
 fn beta_vs(exp: &Table) -> Result<Option<String>> {
-    Ok(vs_symbol(exp)?.map(|vs| format!("{}:{vs}", s(exp, "beta_vs_venue", "usdm").unwrap_or("usdm"))))
+    Ok(vs_symbol(exp)?.map(|vs| format!("{}:{vs}", beta_venue(exp).unwrap_or("usdm"))))
 }
 
 fn typed<T: serde::de::DeserializeOwned>(v: &Value, what: &str) -> Result<T> {
@@ -591,6 +600,20 @@ mod tests {
     }
 
     #[test]
+    fn a_market_goes_by_its_alias_too() {
+        let d = tempfile::tempdir().unwrap();
+        let c = load(write(
+            &d,
+            "[exposure]\nbeta_vs = \"HUSDT\"\nbeta_vs_venue = \"binance:usdm\"\n\
+             [[markets]]\nsymbol = \"AUSDT\"\nvenue = \"binance:spot\"\nreference = { symbol = \"AUSDT\", venue = \"binance:usdm\" }\n",
+        ))
+        .unwrap();
+        assert_eq!((c.markets[0].venue, c.markets[0].reference.as_ref().unwrap().venue), (Venue::SPOT, Venue::USDM));
+        assert_eq!(c.beta_vs.as_deref(), Some("usdm:HUSDT"));
+        assert!(load(write(&d, "[[markets]]\nsymbol = \"AUSDT\"\nvenue = \"coinm\"\n")).is_err());
+    }
+
+    #[test]
     fn bad_keys_are_refused() {
         let d = tempfile::tempdir().unwrap();
         assert!(load(write(&d, "[alerts]\nnope = 1\n")).is_err());
@@ -605,8 +628,8 @@ mod tests {
         assert_eq!(c.listen, "127.0.0.1:8710");
         assert_eq!(c.markets[0], MarketCfg {
             symbol: "ETHUSDT".into(),
-            venue: Venue::Spot,
-            reference: Some(Ref { symbol: "ETHUSDT".into(), venue: Venue::Usdm }),
+            venue: Venue::SPOT,
+            reference: Some(Ref { symbol: "ETHUSDT".into(), venue: Venue::USDM }),
             beta: 1.0,
             beta_prior: None,
         });

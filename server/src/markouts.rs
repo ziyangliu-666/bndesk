@@ -334,7 +334,7 @@ mod tests {
         let d = q(&[]).unwrap();
         assert_eq!((d.reference, d.by_fill, PATH_S[d.h]), (Reference::Net, false, 10.0));
         let x = q(&[("ref", "raw"), ("weight", "fill"), ("h", "-0.4"), ("side", "sell"), ("venue", "spot"), ("account", "a")]).unwrap();
-        assert_eq!((x.reference, x.by_fill, PATH_S[x.h], x.side, x.venue), (Reference::Raw, true, -0.5, Some(Side::Sell), Some(Venue::Spot)));
+        assert_eq!((x.reference, x.by_fill, PATH_S[x.h], x.side, x.venue), (Reference::Raw, true, -0.5, Some(Side::Sell), Some(Venue::SPOT)));
         assert_eq!(x.account.as_deref(), Some("a"));
         assert!(q(&[("ref", "x")]).is_err());
         assert!(q(&[("side", "both")]).is_err());
@@ -358,8 +358,8 @@ mod tests {
 
     fn market() -> Market {
         let mut info = Info::new();
-        info.insert(Venue::Spot, Default::default());
-        info.insert(Venue::Usdm, Default::default());
+        info.insert(Venue::SPOT, Default::default());
+        info.insert(Venue::USDM, Default::default());
         Market::new(info, 120.0, 100.0)
     }
 
@@ -367,15 +367,15 @@ mod tests {
     /// flat at 50 until 2 s after the fill, then +2 bps.
     fn book() -> (Market, FillBook) {
         let mut m = market();
-        let x = m.ensure("XUSDT", Venue::Spot, Some(("XUSDT", Venue::Usdm)));
+        let x = m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         m.keep_fine(x); // a configured market: kept from the start
         let mut fb = FillBook::new();
         let t0 = 100_000;
         for (dt, s, r) in [(-20_000, 100.2, 50.0), (-300, 100.1, 50.0), (1_500, 100.0, 50.0), (2_500, 100.0, 50.01)] {
-            m.on_book(Venue::Usdm, &BookTicker::new("XUSDT", r, r, Some(t0 + dt)));
-            m.on_book(Venue::Spot, &BookTicker::new("XUSDT", s, s, Some(t0 + dt)));
+            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t0 + dt)));
+            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", s, s, Some(t0 + dt)));
         }
-        fb.add(&mut m, crate::fills::FillRec::new("a", t0, "acct", "XUSDT", Venue::Spot, Side::Buy, 100.0, 2.0), true);
+        fb.add(&mut m, crate::fills::FillRec::new("a", t0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 2.0), true);
         fb.mature(&m, t0 + 302_000);
         (m, fb)
     }
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn report_filters_weights_and_buckets() {
         let (_m, mut fb) = book();
-        let mut s = crate::fills::FillRec::new("b", 200_000, "other", "YUSDT", Venue::Spot, Side::Sell, 10.0, 1.0);
+        let mut s = crate::fills::FillRec::new("b", 200_000, "other", "YUSDT", Venue::SPOT, Side::Sell, 10.0, 1.0);
         s.pm = [Some(9.999); PATH_N]; // a sell at 10 that the mid stays 1 bp under: +1 bps everywhere
         s.edge_bps = Some(3.0);
         fb.fills.push(s);
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn a_fill_without_a_path_counts_at_its_own_horizons_but_not_in_the_curve() {
-        let mut old = crate::fills::FillRec::new("o", 100_000, "acct", "ZUSDT", Venue::Spot, Side::Buy, 10.0, 2.0);
+        let mut old = crate::fills::FillRec::new("o", 100_000, "acct", "ZUSDT", Venue::SPOT, Side::Buy, 10.0, 2.0);
         old.mk = P::Marks([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]);
         old.mk_raw = P::Marks([Some(5.0), Some(6.0), Some(7.0), Some(8.0)]);
         let fills = vec![old];

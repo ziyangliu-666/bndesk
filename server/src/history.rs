@@ -593,14 +593,13 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
     Ok(json(&h))
 }
 
+fn venue_of(v: &str) -> Result<P::Venue, ApiError> {
+    v.parse().map_err(|_| bad(format!("bad venue {v:?}")))
+}
+
 async fn fills_handler(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Response, ApiError> {
     let sym = symbol(&q)?;
-    let venue = match q.get("venue").map(String::as_str) {
-        None => None,
-        Some("spot") => Some("spot"),
-        Some("usdm") => Some("usdm"),
-        Some(v) => return Err(bad(format!("bad venue {v:?}"))),
-    };
+    let venue = q.get("venue").map(|v| venue_of(v).map(P::Venue::as_str)).transpose()?;
     let (from, to) = range(&q, DAY)?;
     let rows = blocking(&api, move |c| fills(c, sym, venue, from, to)).await?;
     Ok(json(&rows))
@@ -608,11 +607,7 @@ async fn fills_handler(State(api): State<Arc<Api>>, Query(q): Params) -> Result<
 
 async fn klines(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Response, ApiError> {
     let sym = symbol(&q)?.ok_or_else(|| bad("symbol required"))?;
-    let venue = match q.get("venue").map(String::as_str) {
-        None | Some("spot") => "spot",
-        Some("usdm") => "usdm",
-        Some(v) => return Err(bad(format!("bad venue {v:?}"))),
-    };
+    let venue = q.get("venue").map_or(Ok(P::Venue::SPOT), |v| venue_of(v))?.as_str();
     let name = q.get("interval").map_or("1m", String::as_str);
     let (name, iv) = *INTERVALS.iter().find(|i| i.0 == name).ok_or_else(|| bad(format!("bad interval {name:?}")))?;
     let (from, to) = range(&q, DAY)?;
@@ -783,10 +778,10 @@ mod tests {
             s.put(Row::Equity(EquityRow { t, account: acc.into(), pnl_day: pnl, trading: Some(pnl), inventory: 10.0,
                                           realized: (acc == "*").then_some(0.5), hedge: None, ..Default::default() }));
         }
-        let mut f = crate::fills::FillRec::new("f1", d0 + 1000, "a", "XUSDT", P::Venue::Spot, P::Side::Buy, 2.0, 3.0);
+        let mut f = crate::fills::FillRec::new("f1", d0 + 1000, "a", "XUSDT", P::Venue::SPOT, P::Side::Buy, 2.0, 3.0);
         f.maker = true;
         s.put(Row::Fill(Box::new(f)));
-        s.put(Row::Fill(Box::new(crate::fills::FillRec::new("f2", d0 + 2000, "b", "YUSDT", P::Venue::Usdm,
+        s.put(Row::Fill(Box::new(crate::fills::FillRec::new("f2", d0 + 2000, "b", "YUSDT", P::Venue::USDM,
                                                                P::Side::Sell, 10.0, 1.0))));
         s.start().unwrap();
         s.close();
@@ -846,7 +841,7 @@ mod tests {
             assert_eq!((v.len(), v[1][0]), (10, iv as f64), "{name}");
         }
         for (q, code) in [("symbol=NOPE&interval=1m", 400), ("symbol=XUSDT&interval=2m", 400),
-                          ("symbol=XUSDT&venue=coinm", 400), ("interval=1m", 400), ("symbol=A&interval=1m", 400)] {
+                          ("symbol=XUSDT&venue=coinm", 400), ("symbol=NOPE&venue=binance:usdm", 400), ("interval=1m", 400), ("symbol=A&interval=1m", 400)] {
             assert_eq!(get(format!("/api/klines?{q}")).await.unwrap().status(), code, "{q}");
         }
         srv.cleanup().await;
