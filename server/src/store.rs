@@ -96,7 +96,9 @@ impl Series {
 
     /// What the db says, and from `now` on a new span if the desk is valued in another asset than the last one was.
     pub fn open(c: &Connection, before: &str, asset: &str, now: i64) -> rusqlite::Result<Series> {
-        let mut series = Series::read(c, before)?;
+        // nothing stored yet is in nothing: the first start of a desk in any currency has one series
+        let nothing: bool = Series::kept(c)?.is_none() && !c.query_row("SELECT EXISTS (SELECT 1 FROM equity)", [], |r| r.get(0))?;
+        let mut series = if nothing { Series::one(asset) } else { Series::read(c, before)? };
         let last = series.spans.last().is_some_and(|s| s.asset == asset);
         if !last {
             series.spans.push(Span { from: now, asset: asset.into() });
@@ -966,6 +968,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path().join("d.db"));
         let c = store.connect().unwrap();
+        c.execute("INSERT INTO equity (t, account) VALUES (1, '*')", []).unwrap();
         // a db with no record is all in the first exchange's quote
         let s = store.series("USDT", "USDT", 100).unwrap();
         assert_eq!(s, Series::one("USDT"));
@@ -999,7 +1002,17 @@ mod tests {
     fn a_db_from_before_the_record_changing_currency_as_it_upgrades() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path().join("d.db"));
+        store.connect().unwrap().execute("INSERT INTO equity (t, account) VALUES (1, '*')", []).unwrap();
         let s = store.series("USDT", "USDC", 500).unwrap();
         assert!(!s.has(499) && s.has(500));
+    }
+
+    #[test]
+    fn a_new_desk_in_any_currency_has_one_series() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("d.db"));
+        let s = store.series("USDT", "EUR", 500).unwrap();
+        assert_eq!(s, Series::one("EUR"));
+        assert!(s.earlier().is_none());
     }
 }
