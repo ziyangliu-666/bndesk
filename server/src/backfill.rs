@@ -76,6 +76,16 @@ pub fn interp_at(bars: &[(i64, f64, f64)], t: i64) -> Option<f64> {
     Some(if t - ot < 60_000 { o + (c - o) * (t - ot) as f64 / 60_000.0 } else { c })
 }
 
+/// An asset's price at a past time along its way to the desk's currency (`Market::way`), from 1 min bars.
+pub fn past_price(way: &[(String, bool)], bars: &HashMap<String, Vec<(i64, f64, f64)>>, t: i64) -> Option<f64> {
+    let mut x = 1.0;
+    for (key, invert) in way {
+        let p = bars.get(key).and_then(|b| interp_at(b, t)).filter(|p| *p > 0.0)?;
+        x = if *invert { x / p } else { x * p };
+    }
+    Some(x)
+}
+
 /// A price backfilled at some time: from 1 s bars or a trade (`fine`), or from 1 min bars.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Px {

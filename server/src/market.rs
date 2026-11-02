@@ -40,6 +40,9 @@ pub struct Hop {
     pub invert: bool,
 }
 
+/// An asset's way to the desk's currency as bars can be asked for it: (instrument key, one over it).
+pub type PastWay = Vec<(String, bool)>;
+
 /// A pair as a step away from one of its assets, while the way is being looked for.
 #[derive(Debug, Clone)]
 struct Edge {
@@ -472,9 +475,18 @@ impl Market {
         self.path(asset)?.first().map(|h| h.inst)
     }
 
-    /// Every instrument on an asset's way to the desk's currency, by key: what its price at a past time needs bars of.
-    pub fn path_keys(&mut self, asset: &str) -> Vec<String> {
-        self.path(asset).unwrap_or_default().iter().map(|h| self.insts[h.inst].key.clone()).collect()
+    /// Every instrument on an asset's way to the desk's currency: (key, one over it), what its price at a past time is
+    /// made from. A desk at par asks for the asset's direct pair whether or not it is listed, and takes no for an answer.
+    pub fn way(&mut self, asset: &str) -> PastWay {
+        if self.numeraire.par && asset != self.numeraire.asset {
+            return vec![(key(&format!("{asset}{}", self.numeraire.asset), Venue::SPOT), false)];
+        }
+        self.path(asset).unwrap_or_default().iter().map(|h| (self.insts[h.inst].key.clone(), h.invert)).collect()
+    }
+
+    /// With no price, a stablecoin on a desk in dollars is 1, and anything else nothing.
+    pub fn no_price(&self, asset: &str) -> f64 {
+        self.fallback(asset).unwrap_or(0.0)
     }
 
     fn hops_px(&self, hops: &[Hop], price: impl Fn(&Inst, InstId) -> Option<f64>) -> Option<f64> {
@@ -826,6 +838,8 @@ mod tests {
         assert_relative_eq!(m.asset_price("ETH").unwrap(), 2400.0);
         m.on_book(Venue::SPOT, &Book::new("USDCUSDT", 1.0, 1.0, Some(1)));
         assert_relative_eq!(m.asset_price("USDC").unwrap(), 0.8);
+        assert_eq!(m.way("USDC"), [("spot:USDCUSDT".to_string(), false), ("spot:EURUSDT".to_string(), true)]);
+        assert_eq!(m.way("EUR"), []);
         // a stablecoin nothing connects: unknown, where a desk in dollars counts it 1
         assert_eq!(m.asset_price("DAI"), None);
         assert_eq!(m.unpriced(["USDT", "DAI", "FDUSD"]), ["DAI", "FDUSD"]);
@@ -860,7 +874,7 @@ mod tests {
     fn par_keeps_to_the_direct_pair_and_asks_for_nothing_new() {
         let mut m = Market::new(info(&[("XBTC", SymbolInfo::new("X", "BTC", 5.0)), ("BTCUSDT", SymbolInfo::new("BTC", "USDT", 5.0))]), 120.0, 100.0);
         assert_eq!(m.asset_price("X"), None);
-        assert_eq!(m.path_keys("X"), Vec::<String>::new());
+        assert_eq!(m.way("X"), [("spot:XUSDT".to_string(), false)]);
         assert!(m.get("spot:XBTC").is_none());
     }
 

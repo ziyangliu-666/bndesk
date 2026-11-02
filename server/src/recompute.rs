@@ -20,9 +20,9 @@ use std::rc::Rc;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::backfill::{Prices, backfill_marks_with, interp_at, none_on_400};
+use crate::backfill::{Prices, backfill_marks_with, interp_at, none_on_400, past_price};
 use crate::fills::{FillBook, FillRec, HK, MARK_GRACE_MS};
-use crate::market::{Market, STABLES};
+use crate::market::{Market, PastWay, STABLES};
 use crate::protocol::{Roles, Side};
 use crate::store::{FILL_COLS, SQL_FILL, fill_params, known_fills, row_fill};
 
@@ -67,23 +67,27 @@ struct Adj {
     bps: Option<f64>,
 }
 
-/// 1 min bars by key, for the mids the old rows used and the USD prices of quotes and fee assets.
-struct Mids(HashMap<String, Vec<(i64, f64, f64)>>);
+/// 1 min bars by key, for the mids the old rows used and the prices of quotes and fee assets in the desk's currency;
+/// each of those assets' way there.
+struct Mids {
+    bars: HashMap<String, Vec<(i64, f64, f64)>>,
+    ways: HashMap<String, PastWay>,
+}
 
 impl Mids {
     fn at(&self, key: &str, t: i64) -> Option<f64> {
-        self.0.get(key).and_then(|b| interp_at(b, t)).filter(|x| *x > 0.0)
+        self.bars.get(key).and_then(|b| interp_at(b, t)).filter(|x| *x > 0.0)
     }
 
-    /// An asset's USD price at t: 1 for a stable, else its USDT spot market's.
+    /// An asset's price at t: along its way, and a stable with none asked for is 1 (a desk at par asks for none).
     fn usd(&self, asset: &str, t: i64) -> Option<f64> {
         if asset.is_empty() {
             return None;
         }
-        if STABLES.contains(&asset) {
-            return Some(1.0);
+        match self.ways.get(asset) {
+            Some(way) => past_price(way, &self.bars, t),
+            None => STABLES.contains(&asset).then_some(1.0),
         }
-        self.at(&format!("spot:{asset}USDT"), t)
     }
 }
 
@@ -180,14 +184,18 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
         });
     }
 
-    // the mids the old rows used, and the USD prices of the quotes and fee assets, from 1 min klines
+    // the mids the old rows used, and the prices of the quotes and fee assets, from 1 min klines
     let mut want: BTreeMap<String, i64> = BTreeMap::new();
+    let mut ways: HashMap<String, PastWay> = HashMap::new();
+    let par = market.borrow().numeraire.par;
     for a in &adjs {
         let mut need = vec![a.key.clone()];
         let fee_asset = if a.fee != 0.0 { a.fee_asset.as_str() } else { "" };
         for asset in [a.quote.as_str(), fee_asset] {
-            if !asset.is_empty() && !STABLES.contains(&asset) {
-                need.push(format!("spot:{asset}USDT"));
+            if !asset.is_empty() && !(par && STABLES.contains(&asset)) {
+                let way = market.borrow_mut().way(asset);
+                need.extend(way.iter().map(|w| w.0.clone()));
+                ways.insert(asset.to_string(), way);
             }
         }
         for k in need {
@@ -200,7 +208,7 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
         let a = (from - 60_000).div_euclid(60_000) * 60_000;
         mids.insert(key.clone(), none_on_400(src.bars(&key, "1m", a, end - 1).await)?);
     }
-    let mids = Mids(mids);
+    let mids = Mids { bars: mids, ways };
 
     // the desk rows of the day, corrected
     let rows: Vec<(i64, f64)> = {
@@ -460,5 +468,23 @@ mod tests {
         assert_eq!(day_start_of("1970-01-02", 0).unwrap(), DAY);
         assert_eq!(day_start_of("1970-01-02", 60).unwrap(), DAY + 3_600_000);
         assert!(day_start_of("1970-13-02", 0).is_err());
+    }
+
+    #[test]
+    fn a_past_price_goes_along_the_way_not_to_a_usdt_market() {
+        let m = crate::market::Numeraire { asset: "USDC".into(), par: false };
+        let info = Info::from([(Venue::HL_SPOT, HashMap::from([("HYPEUSDC".to_string(), SymbolInfo::new("HYPE", "USDC", 10.0))]))]);
+        let mut market = Market::new(info, 120.0, 50.0);
+        market.numeraire = m;
+        let way = market.way("HYPE");
+        assert_eq!(way, [("hlspot:HYPEUSDC".to_string(), false)]);
+        let mids = Mids {
+            bars: HashMap::from([("hlspot:HYPEUSDC".to_string(), vec![(0, 20.0, 20.0)])]),
+            ways: HashMap::from([("HYPE".to_string(), way), ("USDC".to_string(), vec![])]),
+        };
+        assert_eq!(mids.usd("HYPE", 30_000), Some(20.0));
+        assert_eq!(mids.usd("USDC", 30_000), Some(1.0));
+        assert_eq!(mids.usd("", 30_000), None);
+        assert_eq!(mids.usd("ZZZ", 30_000), None);
     }
 }

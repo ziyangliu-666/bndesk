@@ -30,13 +30,13 @@ use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
-use crate::backfill::{Prices, interp_at};
+use crate::backfill::{Prices, interp_at, past_price};
 use crate::beta::Betas;
 use crate::clock::CLOCK;
 use crate::connector::{Exchanges, PerpTrade};
 use crate::config::Config;
 use crate::fills::FillRec;
-use crate::market::{Book, Market, STABLES};
+use crate::market::{Book, Market, PastWay, STABLES};
 use crate::pnl::{Gap, PnlBook, PnlState};
 use crate::protocol::{Side, Venue};
 use crate::recompute::{DAY, day_start_of};
@@ -88,7 +88,8 @@ pub struct At {
     pub futures: f64,
 }
 
-/// One futures leg's day: quantity at the day start, mark there, trades (t, s q, price, fee in USD) and funding.
+/// One futures leg's day: quantity at the day start, mark there, trades (t, s q, price, fee in the desk's currency), funding,
+/// and what it settles in.
 #[derive(Debug, Clone, Default)]
 pub struct Leg {
     pub q0: f64,
@@ -96,20 +97,23 @@ pub struct Leg {
     pub trades: Vec<(i64, f64, f64, f64)>,
     pub funding: Vec<(i64, f64)>,
     pub marks: Vec<(i64, f64, f64)>,
+    pub settle: String,
 }
 
 impl Leg {
-    /// (P&L, quantity) at t, as `FutLeg` has it then: q0 (mark − m0) + Σ s q (mark − p) − fees + funding.
-    pub fn at(&self, t: i64) -> (f64, f64) {
+    /// (P&L, notional) at t in the desk's currency, as `FutLeg` has it then: (q0 (mark − m0) + Σ s q (mark − p) + funding)
+    /// × `unit`, what it settles in is worth, − fees.
+    pub fn at(&self, t: i64, unit: f64) -> (f64, f64) {
         let Some(mk) = interp_at(&self.marks, t) else { return (0.0, self.q0) };
         let mut pnl = self.q0 * (mk - self.m0);
-        let mut q = self.q0;
+        let (mut q, mut fees) = (self.q0, 0.0);
         for &(_, sq, px, fee) in self.trades.iter().take_while(|x| x.0 <= t) {
-            pnl += sq * (mk - px) - fee;
+            pnl += sq * (mk - px);
+            fees += fee;
             q += sq;
         }
         pnl += self.funding.iter().filter(|x| x.0 <= t).map(|x| x.1).sum::<f64>();
-        (pnl, q * mk)
+        (pnl * unit - fees, q * mk * unit)
     }
 }
 
@@ -130,6 +134,8 @@ pub struct Inputs {
     pub legs: Vec<Leg>,
     /// (t, asset, amount) of the day's market-maker rebates
     pub rebates: Vec<(i64, String, f64)>,
+    /// each rebate asset's way to the desk's currency
+    pub ways: HashMap<String, PastWay>,
     /// the day's hour blocks before the rebooked ones: Σ ref_hedge
     pub h_before: f64,
 }
@@ -164,12 +170,17 @@ impl<'a> Day<'a> {
             .filter(|(b, p)| !book.m0.contains_key(b) && p.q0 != 0.0)
             .map(|(b, p)| (b.to_string(), m.insts[p.inst].key.clone()))
             .collect();
+        let mut day = Day { inp, m, book, h: BTreeMap::new() };
+        if !day.m.numeraire.par {
+            day.set_prices(inp.ds);
+        }
         for (b, k) in missing {
             if let Some(v) = inp.bars.get(&k).and_then(|x| interp_at(x, inp.ds)) {
-                book.m0.insert(b, v);
+                let unit = day.m.id(&k).and_then(|i| day.m.unit(i)).unwrap_or(1.0);
+                day.book.m0.insert(b, v * unit);
             }
         }
-        Day { inp, m, book, h: BTreeMap::new() }
+        day
     }
 
     /// Every instrument with bars at its price at t (bid = ask = the price).
@@ -194,6 +205,9 @@ impl<'a> Day<'a> {
         let mut t = from;
         self.h.insert(t, h);
         while t < end {
+            if !self.m.numeraire.par {
+                self.set_prices(t);
+            }
             let g = Gap::new(t / 1000, (t + MIN) / 1000);
             let plan = self.book.plan(&self.m, &g);
             let before: f64 = self.book.hours.values().map(|b| b.ref_hedge).sum();
@@ -232,14 +246,14 @@ impl<'a> Day<'a> {
         let (mut hedge, mut fut) = (0.0, spot_hedge);
         hedge += self.book.hedge_legs(&mut self.m, t).iter().filter_map(|l| l.pnl).sum::<f64>();
         for l in &self.inp.legs {
-            let (p, n) = l.at(t);
+            let (p, n) = l.at(t, self.m.settle_rate(&l.settle));
             hedge += p;
             fut += n;
         }
         let mut reb = 0.0;
         for (ts, asset, amt) in self.inp.rebates.iter().filter(|r| r.0 <= t) {
-            let px = if asset == "USDT" { Some(1.0) } else { self.inp.bars.get(&format!("spot:{asset}USDT")).and_then(|b| interp_at(b, *ts)) };
-            reb += amt * px.unwrap_or(if STABLES.contains(&asset.as_str()) { 1.0 } else { 0.0 });
+            let px = self.inp.ways.get(asset).and_then(|w| past_price(w, &self.inp.bars, *ts));
+            reb += amt * px.unwrap_or_else(|| self.m.no_price(asset));
         }
         At { trading: pi, hedged: pi - self.h_at(t), realized: re, realized_old: re_old, floating: fl, mm, hedge, rebates: reb, inventory: inv,
              futures: fut }
@@ -454,7 +468,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         .collect();
     // Π books the flows of the desk's assets, not of its cash: a stablecoin moved between accounts (or in and out)
     // changes no position, only equity, which the rows' own offsets carry
-    let stables = STABLES.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(",");
+    let stables = STABLES.iter().copied().chain([cfg.numeraire.asset.as_str()]).map(|a| format!("'{a}'")).collect::<Vec<_>>().join(",");
     let n_transfers: i64 = c.query_row(&format!("SELECT count(*) FROM transfers WHERE ts >= ? AND amount != 0 AND asset NOT IN ({stables})"),
                                        [ds], |r| r.get(0))?;
     anyhow::ensure!(n_transfers == 0, "{n_transfers} transfers of a non-stable asset since {day}: the repair does not book them");
@@ -523,17 +537,26 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         }
     }
     want.extend(cfg.beta_vs.clone());
-    for f in &fills {
-        if f.fee != 0.0 && !STABLES.contains(&f.fee_asset.as_str()) && !f.fee_asset.is_empty() {
-            want.push(format!("spot:{}USDT", f.fee_asset));
-        }
+    // and what the conversions go through: at par the one pair each asks for, else each one's way to the desk's currency
+    let par = cfg.numeraire.par;
+    let mut assets: Vec<String> = fills.iter().filter(|f| f.fee != 0.0 && !f.fee_asset.is_empty() && !(par && STABLES.contains(&f.fee_asset.as_str()))).map(|f| f.fee_asset.clone()).collect();
+    assets.extend(rebates.iter().map(|r| r.1.clone()));
+    if par {
+        assets.push("USDC".into());
+    } else {
+        assets.extend(legs_raw.values().flat_map(|l| l.0.iter().map(|t| t.fee_asset.clone())));
+        assets.extend(want.iter().filter_map(|k| m.get(k).map(|i| i.quote.clone())).collect::<Vec<_>>());
+        assets.extend(legs_raw.keys().map(|(sym, venue)| m.info.get(venue).and_then(|i| i.get(sym)).map_or_else(|| venue.market().settle.to_string(), |i| i.quote.clone())));
     }
-    for (_, a, _) in &rebates {
-        if a != "USDT" {
-            want.push(format!("spot:{a}USDT"));
-        }
+    assets.retain(|a| !a.is_empty());
+    assets.sort();
+    assets.dedup();
+    let mut ways: HashMap<String, PastWay> = HashMap::new();
+    for a in assets {
+        let way = m.way(&a);
+        want.extend(way.iter().map(|w| w.0.clone()));
+        ways.insert(a, way);
     }
-    want.push("spot:USDCUSDT".into());
     want.sort();
     want.dedup();
     let mut bars = HashMap::new();
@@ -562,18 +585,20 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
                 }
                 continue;
             }
-            let fee_usd = if matches!(asset.as_str(), "USDT" | "USDC") {
+            let fee_value = if par && matches!(asset.as_str(), "USDT" | "USDC") {
                 fee
             } else {
-                fee * bars.get(&format!("spot:{asset}USDT")).and_then(|b| interp_at(b, ts)).unwrap_or(0.0)
+                let way = ways.get(&asset).cloned().unwrap_or_else(|| m.way(&asset));
+                fee * past_price(&way, &bars, ts).unwrap_or_else(|| if par { 0.0 } else { m.no_price(&asset) })
             };
-            day_trades.push((ts, sq, px, fee_usd));
+            day_trades.push((ts, sq, px, fee_value));
         }
         day_trades.sort_by_key(|x| x.0);
         let q0 = q_now - q_after - day_trades.iter().map(|x| x.1).sum::<f64>();
         let m0 = marks.iter().find(|x| x.0 == ds).map(|x| x.1).ok_or_else(|| anyhow!("{sym}: no mark at the day start"))?;
         eprintln!("leg {sym}: q0 {q0:.4} at {m0:.4}, {} trades, funding {:.4}", day_trades.len(), funding.iter().map(|x| x.1).sum::<f64>());
-        legs.push(Leg { q0, m0, trades: day_trades, funding, marks });
+        let settle = m.info.get(&venue).and_then(|i| i.get(&sym)).map_or_else(|| venue.market().settle.to_string(), |i| i.quote.clone());
+        legs.push(Leg { q0, m0, trades: day_trades, funding, marks, settle });
     }
 
     let inp = Inputs {
@@ -587,6 +612,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         bars,
         legs,
         rebates,
+        ways,
         h_before,
     };
     let beta: Box<dyn Fn(&str) -> f64> = match &cfg.beta {
@@ -764,7 +790,7 @@ mod tests {
         let mut f = FillRec::new("f", t_f, "a", "AAAUSDT", Venue::SPOT, Side::Buy, 10.5, 1.0);
         f.mk_raw.0 = [Some(1.0), Some(5.0), Some(10.0), Some(10.0)];
         f.mk.0 = f.mk_raw.0;
-        let leg = Leg { q0: -1.0, m0: 10.0, trades: vec![], funding: vec![(DS + 8 * HOUR, 0.25)], marks: bars.clone() };
+        let leg = Leg { q0: -1.0, m0: 10.0, trades: vec![], funding: vec![(DS + 8 * HOUR, 0.25)], marks: bars.clone(), settle: "USDT".into() };
         let inp = Inputs {
             ds: DS,
             horizon_s: 60,
@@ -776,6 +802,7 @@ mod tests {
             bars: HashMap::from([("spot:AAAUSDT".to_string(), bars)]),
             legs: vec![leg],
             rebates: vec![(DS + 9 * HOUR, "USDT".into(), 1.5)],
+            ways: HashMap::new(),
             h_before: 0.0,
         };
         let mut d = Day::new(&inp, market(), vec!["spot:AAAUSDT".into()], Box::new(|_| 1.0), None);
@@ -856,6 +883,7 @@ mod tests {
             bars: HashMap::from([("usdm:AAAUSDT".to_string(), marks), ("spot:BBBUSDT".to_string(), flat(12.0))]),
             legs: vec![],
             rebates: vec![],
+            ways: HashMap::new(),
             h_before: 0.0,
         };
         let mut d = Day::new(&inp, m, vec!["spot:BBBUSDT".into(), "usdm:AAAUSDT".into()], Box::new(|_| 1.0), None);
@@ -883,5 +911,40 @@ mod tests {
         assert_eq!(hhmm(DS, "24:00").unwrap(), DS + DAY);
         assert!(hhmm(DS, "24:01").is_err());
         assert_eq!(hm(DS + 22 * HOUR + 15 * MIN), "22:15");
+    }
+
+    /// A leg that settles in USDC on a desk in USDT, and a rebate paid in BNB, through the bars of what they go through.
+    #[test]
+    fn a_day_is_rebuilt_in_the_desks_currency() {
+        let mut info = Info::new();
+        info.insert(Venue::SPOT, HashMap::from([("USDCUSDT".to_string(), SymbolInfo::new("USDC", "USDT", 5.0)), ("BNBUSDC".to_string(), SymbolInfo::new("BNB", "USDC", 5.0))]));
+        info.insert(Venue::USDM, HashMap::from([("BTCUSDC".to_string(), SymbolInfo::new("BTC", "USDC", 5.0))]));
+        let mut m = Market::new(info, 120.0, 50.0);
+        m.numeraire = crate::market::Numeraire { asset: "USDT".into(), par: false };
+        let flat = |x: f64| -> Vec<(i64, f64, f64)> { (0..1441).map(|k| (DS + k * MIN, x, x)).collect() };
+        let way = m.way("BNB");
+        assert_eq!(way, [("spot:BNBUSDC".to_string(), false), ("spot:USDCUSDT".to_string(), false)]);
+        m.way("USDC");
+        let leg = Leg { q0: 1.0, m0: 100.0, trades: vec![(DS + HOUR, 1.0, 101.0, 0.5)], funding: vec![(DS + 2 * HOUR, 2.0)], marks: flat(110.0), settle: "USDC".into() };
+        let inp = Inputs {
+            ds: DS,
+            horizon_s: 60,
+            fills: vec![],
+            q_end: HashMap::new(),
+            roles: Default::default(),
+            perp_funding: HashMap::new(),
+            m0: Default::default(),
+            bars: HashMap::from([("spot:USDCUSDT".to_string(), flat(0.99)), ("spot:BNBUSDC".to_string(), flat(600.0))]),
+            legs: vec![leg],
+            rebates: vec![(DS + HOUR, "BNB".into(), 0.01), (DS + HOUR, "USDT".into(), 1.0), (DS + HOUR, "USDC".into(), 1.0)],
+            ways: HashMap::from([("BNB".to_string(), way), ("USDC".to_string(), vec![("spot:USDCUSDT".to_string(), false)]), ("USDT".to_string(), vec![])]),
+            h_before: 0.0,
+        };
+        let mut d = Day::new(&inp, m, vec![], Box::new(|_| 1.0), None);
+        let x = d.at(DS + 3 * HOUR);
+        // (1 × 10 + 1 × 9 + 2) in USDC at 0.99, less a fee already in USDT
+        assert_relative_eq!(x.hedge, 21.0 * 0.99 - 0.5, max_relative = 1e-9);
+        assert_relative_eq!(x.futures, 2.0 * 110.0 * 0.99, max_relative = 1e-9);
+        assert_relative_eq!(x.rebates, 0.01 * 600.0 * 0.99 + 1.0 + 0.99, max_relative = 1e-9);
     }
 }
