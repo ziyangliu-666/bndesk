@@ -33,16 +33,23 @@ pub struct Binance {
     http: reqwest::Client,
     govs: Governors,
     public: Rest,
+    bases: (String, String),
 }
 
 impl Binance {
     pub fn new(http: reqwest::Client, feed: Option<FeedRef>) -> Self {
+        Self::with_bases(http, feed, rest::SPOT, rest::FAPI)
+    }
+
+    /// `spot` / `fapi`: its REST at other addresses (a stand-in server in tests).
+    pub fn with_bases(http: reqwest::Client, feed: Option<FeedRef>, spot: &str, fapi: &str) -> Self {
         let govs = governors();
-        Binance { public: Rest::new(http.clone(), govs.clone(), None, feed), http, govs }
+        let public = Rest::new(http.clone(), govs.clone(), None, feed).with_bases(spot, fapi);
+        Binance { public, http, govs, bases: (spot.into(), fapi.into()) }
     }
 
     fn rest(&self, creds: Option<Rc<Credentials>>, feed: FeedRef) -> Rest {
-        Rest::new(self.http.clone(), self.govs.clone(), creds, Some(feed))
+        Rest::new(self.http.clone(), self.govs.clone(), creds, Some(feed)).with_bases(&self.bases.0, &self.bases.1)
     }
 }
 
@@ -127,7 +134,7 @@ impl Connector for Binance {
     }
 
     fn kline_source(&self) -> Arc<dyn KlineSource> {
-        Arc::new(klines::KlineProxy::new())
+        Arc::new(klines::KlineProxy::with_bases(&self.bases.0, &self.bases.1))
     }
 
     fn rest_bans(&self) -> Vec<RestBan> {
@@ -166,7 +173,7 @@ impl Connector for Binance {
 
     fn reader(&self, cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String> {
         let creds = self.credentials(cfg)?;
-        Ok(Box::new(reader::Reader(Rest::new(self.http.clone(), governors(), Some(creds), None))))
+        Ok(Box::new(reader::Reader(Rest::new(self.http.clone(), governors(), Some(creds), None).with_bases(&self.bases.0, &self.bases.1))))
     }
 
     fn is_rebate(&self, info: &str) -> bool {

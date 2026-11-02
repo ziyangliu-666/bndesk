@@ -49,15 +49,22 @@ macro_rules! params {
 /// A REST client for one key (or none) on one IP: shares the IP's governors and the HTTP pool.
 #[derive(Clone)]
 pub struct Rest {
-    pub client: reqwest::Client,
-    pub govs: Governors,
+    client: reqwest::Client,
+    govs: Governors,
     pub creds: Option<Rc<Credentials>>,
     pub feed: Option<FeedRef>,
+    bases: (Rc<str>, Rc<str>),
 }
 
 impl Rest {
     pub fn new(client: reqwest::Client, govs: Governors, creds: Option<Rc<Credentials>>, feed: Option<FeedRef>) -> Self {
-        Rest { client, govs, creds, feed }
+        Rest { client, govs, creds, feed, bases: (SPOT.into(), FAPI.into()) }
+    }
+
+    /// The exchange at other addresses (a stand-in server in tests).
+    pub fn with_bases(mut self, spot: &str, fapi: &str) -> Self {
+        self.bases = (spot.into(), fapi.into());
+        self
     }
 
     pub async fn get<T: DeserializeOwned>(&self, path: &str, params: &[(String, String)], weight: i64, signed: bool) -> anyhow::Result<T> {
@@ -86,7 +93,7 @@ impl Rest {
             query(params)
         };
         let mut url = String::with_capacity(64 + qs.len());
-        url.push_str(if fut { FAPI } else { SPOT });
+        url.push_str(if fut { &self.bases.1 } else { &self.bases.0 });
         url.push_str(path);
         if !qs.is_empty() {
             url.push('?');
