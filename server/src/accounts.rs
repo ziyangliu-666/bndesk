@@ -13,6 +13,8 @@ use crate::sign::Credentials;
 
 pub const MOVE_HOLD_MS: i64 = 180_000;
 pub const STALE_MS: i64 = 60_000;   // a stream value this much older than a REST request no longer outranks the REST one
+/// How long a new instrument is waited for before it is valued without a quote.
+pub const QUOTE_WAIT_MS: i64 = 30_000;
 
 pub type MarketRef = Rc<RefCell<Market>>;
 pub type AccountRef = Rc<RefCell<Account>>;
@@ -297,6 +299,27 @@ impl Account {
         self.ready() && self.spot_parts(m).3
     }
 
+    /// Valued, and every position held has its mark or has had `QUOTE_WAIT_MS` to get one. Until then `live_positions`
+    /// has it at its mid or, with no book either, at its entry, which is 0 unrealized P&L: an opening equity taken then
+    /// would book the position's whole unrealized P&L as today's when the mark arrives.
+    pub fn can_open(&self, m: &mut Market) -> bool {
+        self.valued(m)
+            && self.positions.iter().filter(|(_, p)| p.0 != 0.0).all(|(s, _)| {
+                let i = m.ensure(s, self.perp, None);
+                m.insts[i].mark.is_some_and(|x| x != 0.0) || now_ms() - m.insts[i].created > QUOTE_WAIT_MS
+            })
+    }
+
+    /// The day's opening equity, once it can be taken (`loaded`: the transfer history is in, so today's transfers can be
+    /// taken off) and if it has not been: Some on the tick that takes it, for the store to keep.
+    pub fn take_opening(&mut self, m: &mut Market, loaded: bool) -> Option<f64> {
+        if self.equity_open.is_some() || !loaded || !self.can_open(m) {
+            return None;
+        }
+        self.equity_open = Some(self.equity(m) - self.transfers_day);
+        self.equity_open
+    }
+
     /// Today's market-maker rebates, USD at each asset's price when credited.
     pub fn rebates(&self, m: &mut Market) -> f64 {
         self.dividends
@@ -382,7 +405,7 @@ impl Account {
                     let inst = m.asset_inst(a);
                     let quoted = inst.and_then(|i| m.px(i)).is_some_and(|p| p > 0.0);
                     if !quoted && f + l != 0.0 {
-                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > 30_000);
+                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > QUOTE_WAIT_MS);
                     }
                     m.asset_price(a).unwrap_or(1.0)
                 };
@@ -393,7 +416,7 @@ impl Account {
                     // wait briefly for a quote; then an unquoted asset counts as 0
                     None => {
                         let inst = m.asset_inst(a);
-                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > 30_000);
+                        priced = priced && inst.is_none_or(|i| now_ms() - m.insts[i].created > QUOTE_WAIT_MS);
                     }
                     Some(p) => inv += (f + l) * p,
                 }
@@ -993,7 +1016,7 @@ impl Transfers {
 mod tests {
     use super::*;
     use crate::binance::events::{apply_fut_snapshot, apply_spot_snapshot, on_fut_event, on_spot_event};
-    use crate::market::{Book, Info, SymbolInfo};
+    use crate::market::{Book, Info, Mark, SymbolInfo};
     use approx::assert_relative_eq;
     use serde_json::{Value, json};
 
@@ -1020,6 +1043,51 @@ mod tests {
         let mut a = Account::new(c, None, "");
         a.market = Some(m.clone());
         (a, m)
+    }
+
+    #[test]
+    fn the_opening_equity_waits_for_a_positions_mark() {
+        let (mut a, m) = acct();
+        let mut m = m.borrow_mut();
+        apply_spot_snapshot(&mut a, &snap(1, 0.0, 1000.0)).unwrap();
+        a.fut_loaded = true;
+        a.fut_wallet = 500.0;
+        // held since yesterday at 100, marked 110 now: 1 × 10 of unrealized P&L that is not today's
+        a.set_position("YUSDT", 1.0, 100.0, Some(1), 0);
+        assert!(a.valued(&mut m), "it counts as valued from the first tick");
+        assert_eq!(a.equity(&mut m), 1500.0);
+        assert_eq!(a.take_opening(&mut m, true), None);
+        assert_eq!(a.equity_open, None);
+        // a book is not the mark yet
+        m.on_book(Venue::USDM, &Book::new("YUSDT", 109.0, 109.2, Some(2)));
+        assert_eq!(a.take_opening(&mut m, true), None);
+        m.on_mark(Venue::USDM, &Mark { symbol: "YUSDT", price: 110.0, funding: None, next_funding: None });
+        assert_eq!(a.take_opening(&mut m, false), None, "the transfer history is not in");
+        assert_eq!(a.take_opening(&mut m, true), Some(1510.0));
+        // the day's P&L starts at 0, and taken once
+        assert_eq!(crate::metrics::account_pnl(&a, true, a.equity(&mut m)), 0.0);
+        m.on_mark(Venue::USDM, &Mark { symbol: "YUSDT", price: 111.0, funding: None, next_funding: None });
+        assert_eq!(a.take_opening(&mut m, true), None);
+        assert_eq!(crate::metrics::account_pnl(&a, true, a.equity(&mut m)), 1.0);
+    }
+
+    #[test]
+    fn a_position_that_never_gets_a_mark_holds_the_opening_back_only_so_long() {
+        let (mut a, m) = acct();
+        let mut m = m.borrow_mut();
+        apply_spot_snapshot(&mut a, &snap(1, 0.0, 1000.0)).unwrap();
+        a.fut_loaded = true;
+        a.set_position("YUSDT", 1.0, 100.0, Some(1), 0);
+        // the market was borrowed when the position came: the question itself starts its instrument
+        assert!(!a.can_open(&mut m));
+        let i = m.find("YUSDT", Venue::USDM).unwrap();
+        m.insts[i].created -= QUOTE_WAIT_MS + 1;
+        assert_eq!(a.take_opening(&mut m, true), Some(1000.0));
+        // no position, nothing to wait for
+        let (mut b, _) = acct();
+        apply_spot_snapshot(&mut b, &snap(1, 0.0, 7.0)).unwrap();
+        b.fut_loaded = true;
+        assert_eq!(b.take_opening(&mut m, true), Some(7.0));
     }
 
     fn snap(u: i64, x: f64, usdt: f64) -> Value {

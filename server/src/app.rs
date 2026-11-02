@@ -870,10 +870,8 @@ impl Desk {
                 let td = tr.net_in_live(&a, ds);
                 a.transfers_day = td;
                 a.day_start = ds;
-                a.equity_mark = if a.valued(&mut m) { Some((now, a.equity(&mut m))) } else { None };
-                if a.equity_open.is_none() && a.valued(&mut m) && tr.loaded {
-                    let eo = a.equity(&mut m) - a.transfers_day;
-                    a.equity_open = Some(eo);
+                a.equity_mark = if a.can_open(&mut m) { Some((now, a.equity(&mut m))) } else { None };
+                if let Some(eo) = a.take_opening(&mut m, tr.loaded) {
                     self.store.put(Row::Kv(format!("open:{}:{ds}", a.id), repr(eo)));
                 }
                 for (s, (amt, _)) in &a.positions {
@@ -1026,7 +1024,7 @@ impl Desk {
             }
             // the equity at the day start, not at this tick (a second or more later): what was made in between
             // (fills, funding at the day start) is the new day's, as Π and the hedge legs count it
-            let now_eq = if a.valued(&mut m) { Some(a.equity(&mut m)) } else { None };
+            let now_eq = if a.can_open(&mut m) { Some(a.equity(&mut m)) } else { None };
             a.equity_open = opening_equity(a.equity_mark, ds, now_eq);
             a.funding_stream.retain(|x| x.0 >= ds);
             if let Some(eo) = a.equity_open {

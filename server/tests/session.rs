@@ -150,9 +150,7 @@ impl Session {
             let mut a = a.borrow_mut();
             a.day_start = D;
             a.transfers_day = tr.net_in_live(&a, D);
-            if a.equity_open.is_none() && a.valued(&mut m) {
-                a.equity_open = Some(a.equity(&mut m) - a.transfers_day);
-            }
+            a.take_opening(&mut m, true);
             let mut r = me::account_row(&mut m, &mut a, now);
             r.updated = 0;
             rows.push(r);
