@@ -259,7 +259,9 @@ const activityNow = () => minuteActivity(minuteOf(now));
 
 // ---- how the desk is set up: `?currency=USD` names the figures otherwise; `?hedge=0&rebates=0&mm=0&engines=0` is a
 // desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures);
-// `?markets=2` adds a second perp market, its instruments and positions copies of USD-M's: no page should care which ----
+// `?markets=2` adds a second perp market, its instruments and positions copies of USD-M's: no page should care which;
+// `?perp=1` is a desk that makes markets on perps: what it quotes is on USD-M, traded, and it hedges with two USDC perps
+// (`&hedge=0`: with nothing) ----
 const params = new URLSearchParams(location.search);
 const MARKETS: Market[] = [
   { id: "spot", exchange: "Binance", kind: "spot", name: "Spot" },
@@ -268,18 +270,78 @@ const MARKETS: Market[] = [
 const SECOND: Market = { id: "demo-perp", exchange: "Demo", kind: "perp", name: "Demo" };
 if (params.get("markets") === "2") MARKETS.push(SECOND);
 const on = (k: string) => params.get(k) !== "0";
-const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", markets: MARKETS, hedge: on("hedge"), rebates: on("rebates"), mm: on("mm") };
+const PERP = params.get("perp") === "1";
+const hedgeSymbol = (s: string) => s.replace(/USDT$/, "USDC");
+const DESK: Desk = {
+  currency: params.get("currency") ?? "USDT",
+  quote: "USDT",
+  markets: MARKETS,
+  roles: PERP ? { markets: { usdm: "traded" }, instruments: on("hedge") ? { "usdm:BTCUSDC": "hedge", "usdm:ETHUSDC": "hedge" } : {} } : { markets: {}, instruments: {} },
+  perps: on("hedge") || PERP,
+  hedge: on("hedge"),
+  rebates: on("rebates"),
+  mm: on("mm"),
+};
+
+/** A row on the perp desk: what was on spot is the traded perp, what was a perp its hedge under another symbol. */
+function onPerps<R extends { symbol: string; venue: string }>(r: R): R {
+  return r.venue === "usdm" ? { ...r, symbol: hedgeSymbol(r.symbol) } : { ...r, venue: "usdm" };
+}
+
+function perpDesk<T extends Partial<Snapshot>>(m: T): T {
+  if (m.symbols) m.symbols = m.symbols.map((r) => (r.venue === "spot" && r.reference ? { ...onPerps(r), reference: `spot:${r.symbol}` } : onPerps(r)));
+  if (m.orders) m.orders = m.orders.map(onPerps);
+  if (m.fills) m.fills = m.fills.map(onPerps);
+  if (m.accounts) {
+    m.accounts = m.accounts.map((a) => {
+      const held = insts.filter((i) => i.account === a.id && Math.abs(i.inv) > 0);
+      const positions = held.map((i) => {
+        const mark = midOf(i);
+        const entry = i.cost ?? mark;
+        return { symbol: i.symbol, venue: "usdm", amt: i.inv, entry, mark, upnl: i.inv * (mark - entry), notional: i.inv * mark, pnl_day: tradingOf(i) };
+      });
+      const upnl = sumOf(positions, (p) => p.upnl);
+      // the same equity, margined on perps: the quote and the inventory are the wallet and the positions
+      const wallet = a.fut_wallet + a.quote_free + a.quote_locked + a.inventory_value - upnl;
+      return {
+        ...a,
+        quote_free: 0,
+        quote_locked: 0,
+        inventory_value: 0,
+        fut_wallet: wallet,
+        fut_upnl: a.fut_upnl + upnl,
+        fut_available: wallet * 0.62,
+        positions: [...a.positions.map(onPerps), ...positions],
+        fees: [{ venue: "usdm", maker_bps: 0.5, taker_bps: 4.5, changed: false }],
+      };
+    });
+  }
+  if (m.exposure) {
+    const e = m.exposure;
+    const legs = e.hedge_day?.legs.map(onPerps) ?? [];
+    m.exposure = {
+      ...e,
+      funding: [...e.funding.map((f) => ({ ...f, symbol: hedgeSymbol(f.symbol) })), ...insts.filter((i) => Math.abs(i.inv) > 0).slice(0, 6).map((i) => ({ symbol: i.symbol, rate: 0.0001, next: dayStart + Math.ceil((now - dayStart + 1) / (8 * H)) * 8 * H, position: i.inv }))],
+      hedge_day: e.hedge_day && { ...e.hedge_day, legs },
+    };
+  }
+  if (m.summary) m.summary = { ...m.summary, pnl: { ...m.summary.pnl, funding_day: 0.04 * Math.abs(m.summary.pnl.inventory) } };
+  return m;
+}
 
 /** What a message says on a desk without the parts `DESK` leaves out. */
 function shaped<T extends Partial<Snapshot>>(m: T): T {
+  if (PERP) perpDesk(m);
+  // what is not the hedge: spot, or on the perp desk anything but its USDC perps
+  const kept = (r: { symbol: string; venue: string }) => (PERP ? !r.symbol.endsWith("USDC") : r.venue === "spot");
   if (!DESK.hedge) {
-    if (m.symbols) m.symbols = m.symbols.filter((s) => s.venue === "spot");
-    if (m.orders) m.orders = m.orders.filter((o) => o.venue === "spot");
-    if (m.fills) m.fills = m.fills.filter((f) => f.venue === "spot");
-    if (m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, positions: [], fut_wallet: 0, fut_upnl: 0, fut_available: 0, fees: a.fees.filter((x) => x.venue === "spot") }));
+    if (m.symbols) m.symbols = m.symbols.filter(kept);
+    if (m.orders) m.orders = m.orders.filter(kept);
+    if (m.fills) m.fills = m.fills.filter(kept);
+    if (m.accounts) m.accounts = m.accounts.map((a) => (PERP ? { ...a, positions: a.positions.filter(kept) } : { ...a, positions: [], fut_wallet: 0, fut_upnl: 0, fut_available: 0, fees: a.fees.filter((x) => x.venue === "spot") }));
     if (m.exposure) m.exposure = { ...m.exposure, futures_notional: 0, net: m.exposure.spot_value, target: null, band: null, gap: null, funding: [], hedge_notional: 0, ratio: null, hedge_day: null, by_account: m.exposure.by_account.map((a) => ({ ...a, futures_notional: 0, net: a.spot_value })) };
   }
-  if (!DESK.hedge) {
+  if (!DESK.hedge && !PERP) {
     if (m.feeds) m.feeds = m.feeds.filter((f) => !f.name.includes("usdm"));
     if (m.alerts) m.alerts = m.alerts.filter((a) => !a.text.includes("usdm"));
   }
@@ -1675,7 +1737,7 @@ export function startMock(emit: Emit): () => void {
     if (newFills.length) fills = newFills.reverse().concat(fills).slice(0, 2000);
     const updated = mature();
     const out = newFills.concat(updated);
-    const tape = DESK.hedge ? out : out.filter((f) => f.venue === "spot");
+    const tape = PERP ? out.map(onPerps).filter((f) => DESK.hedge || !f.symbol.endsWith("USDC")) : DESK.hedge ? out : out.filter((f) => f.venue === "spot");
     if (tape.length) emit({ type: "fills", data: tape });
 
     // a stream flap on sub-a now and then

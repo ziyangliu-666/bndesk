@@ -404,7 +404,8 @@ function klines(symbol: string, venue: string, interval: string, from: number, t
 /** Binance's 24h rolling stats for an instrument (its `<sym>@miniTicker`), from the mock's minute path: the
  *  last close, the close 24 h ago, the high and low, and the base and quote volume. Null for an instrument the
  *  mock does not carry. */
-export function mockTicker24h(symbol: string, venue: string): { last: number; open: number; high: number; low: number; volume: number; quoteVolume: number } | null {
+export function mockTicker24h(symbol_: string, venue: string): { last: number; open: number; high: number; low: number; volume: number; quoteVolume: number } | null {
+  const symbol = pathSymbol(symbol_);
   if (!tracked(symbol)) return null;
   const p = path(symbol);
   const basis = venue === "usdm" ? 1.0002 : 1;
@@ -430,18 +431,28 @@ export function mockTicker24h(symbol: string, venue: string): { last: number; op
 }
 
 const ACCTS = ["sub-a", "sub-b", "sub-c", "sub-d"];
+/** `?perp=1`'s hedges are BTCUSDC and ETHUSDC: the same paths as their USDT markets. */
+function pathSymbol(symbol: string): string {
+  const usdt = symbol.replace(/USDC$/, "USDT");
+  return tracked(usdt) ? usdt : symbol;
+}
+/** Where what the desk quotes is: spot, or USD-M on a desk that trades perps. */
+const quotedVenue = () => (useStore.getState().snap?.desk?.roles?.markets.usdm === "traded" ? "usdm" : "spot");
+
 function fills(symbol: string, venue: string | undefined, from: number, to: number): HistFill[] {
-  if (!tracked(symbol)) return [];
-  const p = path(symbol);
-  const isPerpHedged = symbol === "BTCUSDT" || symbol === "ETHUSDT";
+  if (!tracked(pathSymbol(symbol))) return [];
+  const quoted = quotedVenue();
   const snap = useStore.getState().snap;
+  const hedge = symbol !== pathSymbol(symbol);
+  const p = path(pathSymbol(symbol));
+  const isPerpHedged = quoted === "spot" ? symbol === "BTCUSDT" || symbol === "ETHUSDT" : hedge;
   // the live mock's own fills where its tape reaches (the chart's markers and the Desk's lists show the same),
   // generated ones before it, at the instrument's own pace today (so a day's count is of the same order)
   const live = (snap?.fills ?? []).filter((f) => f.symbol === symbol);
   const tapeFrom = live.length ? live[live.length - 1]!.ts : Infinity;
-  const row = snap?.symbols.find((s) => s.symbol === symbol && s.venue === "spot");
+  const row = hedge ? undefined : snap?.symbols.find((s) => s.symbol === symbol && s.venue === quoted);
   const dayStart = snap?.summary.day_start ?? 0;
-  const perMin = row && snap ? row.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.15;
+  const perMin = hedge ? 0 : row && snap ? row.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.15;
   const perp = snap?.symbols.find((s) => s.symbol === symbol && s.venue === "usdm");
   const perpPerMin = Math.min(1, perp && snap ? perp.fills_day / Math.max(30, (snap.now - dayStart) / MIN) : 0.01);
   // a cluster has about 2.8 fills; activity averages about 1 (a busy instrument has several clusters a minute)
@@ -470,7 +481,7 @@ function fills(symbol: string, venue: string | undefined, from: number, to: numb
           price: px,
           qty: Math.min(150, Math.max(4, 11 * Math.exp(0.8 * gauss(mc * 8 + k, p.seed + 16)))) / px,
           account: ACCTS[p.seed % ACCTS.length]!,
-          venue: "spot",
+          venue: quoted,
           maker: hash(mc * 8 + k, p.seed + 17) < 0.95,
         });
       }
@@ -497,11 +508,12 @@ function markouts(q: Record<string, string | number>) {
   if (!snap) throw new Error("503 desk not ready");
   const dayStart = snap.summary.day_start;
   const acct = new Map<string, string>();
-  for (const f of snap.fills) if (f.venue === "spot") acct.set(f.symbol, f.account);
+  const quoted = quotedVenue();
+  for (const f of snap.fills) if (f.venue === quoted) acct.set(f.symbol, f.account);
   const day: MkFill[] = [];
   for (const symbol of new Set(snap.symbols.filter((s) => s.fills_day > 0).map((s) => s.symbol)))
     for (const f of fills(symbol, undefined, dayStart, snap.now + 1))
-      day.push({ t: f.t, symbol, venue: f.venue, side: f.side, notional: f.price * f.qty, account: f.venue === "spot" ? (acct.get(symbol) ?? f.account) : f.account });
+      day.push({ t: f.t, symbol, venue: f.venue, side: f.side, notional: f.price * f.qty, account: f.venue === quoted ? (acct.get(symbol) ?? f.account) : f.account });
   const s = (k: string) => (q[k] == null ? "" : String(q[k]));
   return markoutReport(day, { account: s("account"), venue: s("venue"), side: s("side"), ref: s("ref"), weight: s("weight"), h: q.h == null ? 10 : Number(q.h) }, snap.now, dayStart);
 }
@@ -512,7 +524,7 @@ export function mockApi(path: string, q: Record<string, string | number>): unkno
     case "/api/history":
       return history(n("from"), n("to"), n("step"), q.per === "day");
     case "/api/klines":
-      return klines(String(q.symbol), String(q.venue), String(q.interval), n("from"), n("to"));
+      return klines(pathSymbol(String(q.symbol)), String(q.venue), String(q.interval), n("from"), n("to"));
     case "/api/fills":
       return fills(String(q.symbol), q.venue == null ? undefined : String(q.venue), n("from"), n("to"));
     case "/api/markouts":
