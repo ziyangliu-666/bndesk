@@ -9,7 +9,7 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
-import { cur, baseOf, useDesk, isPerp } from "../desk";
+import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord } from "../desk";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -41,7 +41,7 @@ function exposureFact(x: Exposure, m: (s: string) => ReactNode, hide: boolean): 
   return {
     label: "Net exposure",
     value: m(pnl(x.net)),
-    title: `Net exposure: spot inventory value plus futures net notional, all accounts.${hide ? "" : ` Futures net notional ${pnl(x.futures_notional)}.`} ${cur()}.`,
+    title: `Net exposure: ${inventoryWord().toLowerCase()} value plus ${hedgeWord()} net notional, all accounts.${hide ? "" : ` ${hedgeWord() === "hedge" ? "Hedge" : "Futures"} net notional ${pnl(x.futures_notional)}.`} ${cur()}.`,
   };
 }
 
@@ -67,8 +67,8 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       value: m(pnl(p?.mm)),
       title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
     },
-    { label: "Inventory", value: m(pnl(p?.inventory)), title: "Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill." },
-    { label: "Hedge", value: m(pnl(hedge)), title: "The futures legs since the day start: price at mark, minus fees, plus funding." },
+    { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
+    { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
     { label: "Rebates", value: m(pnl(sm?.rebates)), title: "Market-maker rebates Binance credited since the day start, hourly per account." },
     { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus what the parts add up to: what the split does not explain." },
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
@@ -79,16 +79,16 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     ],
     [
       {
-        label: "Spot volume",
+        label: roled(d) ? "Volume" : "Spot volume",
         value: m(compact(sm?.volume_day)),
-        title: `Spot notional filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} ${d.hedge ? " (the perps' hedge fills are on their own rows)" : ""}. ${cur()}.`,
+        title: `${roled(d) ? "Notional" : "Spot notional"} filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} ${d.hedge ? " (the hedge's fills are on their own rows)" : ""}. ${cur()}.`,
       },
       {
         label: "Markout 10 s",
         value: sm?.markout_net_bps_1h == null ? "--" : `${bps(sm.markout_net_bps_1h)} bps`,
         title: "Last hour: the notional-weighted 10 s markout of the fills, net of the reference move.",
       },
-      { label: "Fills / h", value: int(sm?.fills_1h), title: `Spot fills in the last hour, all accounts; ${int(sm?.fills_day)} today.` },
+      { label: "Fills / h", value: int(sm?.fills_1h), title: `${roled(d) ? "Fills" : "Spot fills"} in the last hour, all accounts; ${int(sm?.fills_day)} today.` },
     ],
   ];
   return (
@@ -117,8 +117,8 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   const m = (s: string) => maskNode(hide, s);
   const tone = (v: number | null | undefined) => (hide ? undefined : signTone(v) || undefined);
   const hedgeOf = useHedgePnl();
-  const perp = isPerp(inst.venue);
-  const tp = row ? (perp ? hedgeOf(row) : tradingPnl(row)) : null;
+  const hedged = isHedge(inst);
+  const tp = row ? (hedged ? hedgeOf(row) : tradingPnl(row)) : null;
   const base = baseOf(inst.symbol);
   const aside: Fact[] = [
     { label: "24h", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", title: "Binance's 24 h change" },
@@ -127,10 +127,10 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
     { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `Binance's 24 h volume, ${cur()}` },
   ];
   const parts: Fact[] = [
-    perp
-      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this perp's hedge leg, price P&L at mark − fees + funding, ${cur()}. A perp has no Trading PnL (it is not quoted)` }
+    hedged
+      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this instrument's hedge leg, price P&L at mark − fees + funding, ${cur()}. What hedges has no Trading PnL` }
       : { label: "Trading PnL", value: m(pnl(tp)), tone: tone(tp), title: `Today: market making + inventory PnL, fees included, ${cur()}. The desk's Day PnL adds the hedge, rebates and other` },
-    ...(perp ? [] : [{ label: "Market making", value: m(pnl(row?.mm_pnl)), title: `Each fill against the mid 60 s later, minus fees, ${cur()}` }]),
+    ...(hedged ? [] : [{ label: "Market making", value: m(pnl(row?.mm_pnl)), title: `Each fill against the mid 60 s later, minus fees, ${cur()}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
     { label: "Value", value: m(usd(row?.inv_value)), title: `Inventory × mid, ${cur()}` },
     { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills" },

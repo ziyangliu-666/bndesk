@@ -17,7 +17,7 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
-import { cur, useDesk, isPerp } from "../../desk";
+import { cur, useDesk, isHedge, inventoryWord, hedgeWord } from "../../desk";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
@@ -227,7 +227,7 @@ function PartRows({ rows }: { rows: Part[] }) {
 // ---- top movers: the instruments that made or lost the most today ----
 
 /**
- * The best or the worst instruments today by what each made: a spot market's Trading PnL, a perp's hedge leg
+ * The best or the worst instruments today by what each made: its Trading PnL, or its hedge leg
  * (marked "hedge"), so the two biggest contributors are here whichever they are. With amounts hidden the
  * ranking would give the winners away: the busiest instruments by fills instead.
  */
@@ -277,23 +277,23 @@ const Movers = memo(function Movers({ symbols }: { symbols: SymbolRow[] | undefi
       }
     >
       {list.map((r) => {
-        const perp = isPerp(r.venue);
+        const hedged = isHedge(r);
         return (
           <ListRow
             key={r.venue + r.symbol}
             title={<InstName r={r} />}
             subtitle={
-              perp
+              hedged
                 ? `Hedge leg · ${int(r.fills_day)} fills`
                 : `${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + ` ${cur()}`} · ${int(r.fills_day)} fills`
             }
             primary={
               <>
-                {perp && <span className="dk-mv-k">hedge </span>}
+                {hedged && <span className="dk-mv-k">hedge </span>}
                 <Money v={made(r)} />
               </>
             }
-            secondary={perp ? undefined : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
+            secondary={hedged ? undefined : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
             to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
           />
         );
@@ -370,7 +370,7 @@ function ExposureBar({ x }: { x: Exposure }) {
   return (
     <LimitBar
       label="Net exposure"
-      info={`Spot inventory value ${money(x.spot_value, "usd")} plus futures net notional ${money(x.futures_notional, "pnl")}, all accounts. No hedge band is set. ${cur()}.`}
+      info={`${inventoryWord()} value ${money(x.spot_value, "usd")} plus ${hedgeWord()} net notional ${money(x.futures_notional, "pnl")}, all accounts. No hedge band is set. ${cur()}.`}
       value={x.net}
       limit={0}
       text={<Money v={x.net} color={false} />}

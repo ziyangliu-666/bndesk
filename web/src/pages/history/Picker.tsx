@@ -6,7 +6,7 @@ import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
 import { useHedgePnl } from "../../selectors";
 import type { SymbolRow, Venue } from "../../protocol";
-import { isPerp } from "../../desk";
+import { isHedge, isPerp } from "../../desk";
 
 export function InstrumentPicker({
   value,
@@ -123,13 +123,13 @@ export function InstrumentPicker({
   );
 }
 
-/** A spot market's Trading PnL, or a perp's hedge leg (marked so). */
+/** Its Trading PnL, or what hedges: its leg (marked so). */
 function PnlCell({ r, hedge, hide }: { r: SymbolRow; hedge: number | null; hide: boolean }) {
-  const perp = isPerp(r.venue);
-  const v = perp ? hedge : r.trading_pnl;
+  const hedged = isHedge(r);
+  const v = hedged ? hedge : r.trading_pnl;
   return (
     <span className={"fig " + (hide || v == null ? "" : v > 0.005 ? "up" : v < -0.005 ? "down" : "")}>
-      {perp && <span className="dk-mk-k">hedge </span>}
+      {hedged && <span className="dk-mk-k">hedge </span>}
       {maskNode(hide, pnl(v))}
     </span>
   );

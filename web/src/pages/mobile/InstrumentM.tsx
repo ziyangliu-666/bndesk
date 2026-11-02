@@ -13,7 +13,7 @@ import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
-import { cur, quoteOf, baseOf, isPerp, isSpot } from "../../desk";
+import { cur, quoteOf, baseOf, isPerp, isSpot, isHedge } from "../../desk";
 
 type H = "1" | "10" | "60" | "300";
 const HS: H[] = ["1", "10", "60", "300"];
@@ -126,17 +126,18 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
 
 function OurStats({ r }: { r: SymbolRow }) {
   const q = useQty();
-  const leg = useStore((s) => s.snap?.exposure.hedge_day?.legs.find((l) => l.symbol === r.symbol));
+  const leg = useStore((s) => s.snap?.exposure.hedge_day?.legs.find((l) => l.symbol === r.symbol && l.venue === r.venue));
   const funding = useStore((s) => s.snap?.exposure.funding.find((f) => f.symbol === r.symbol));
   const hide = useHide();
   const asset = baseOf(r.symbol);
   const perp = isPerp(r.venue);
+  const hedged = isHedge(r);
   const items: { label: string; value: ReactNode }[] = perp
     ? [
         { label: `Position (${asset})`, value: q(r.inv_qty, true) },
         { label: "Entry", value: price(r.avg_cost) },
-        // a perp is the hedge: its leg's P&L today (it has no Trading PnL, as on the Desk and Markets)
-        { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> },
+        // what hedges: its leg's P&L today (it has no Trading PnL, as on the Desk and Markets)
+        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
         {
           label: "Funding",
           value: funding?.rate != null ? <span className={tone(-funding.rate * Math.sign(r.inv_qty), bps(funding.rate * 1e4))}>{bpsUnit(funding.rate * 1e4)}</span> : "--",
@@ -145,7 +146,7 @@ function OurStats({ r }: { r: SymbolRow }) {
     : [
         { label: `Inventory (${asset})`, value: r.inv_qty === 0 && !hide ? "flat" : q(r.inv_qty, true) },
         { label: "Avg cost", value: r.inv_qty === 0 ? "--" : price(r.avg_cost) },
-        { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
+        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
         { label: "Edge", value: bpsUnit(r.edge_bps) },
       ];
   return (

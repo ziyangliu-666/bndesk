@@ -1,7 +1,7 @@
 // How this desk is set up (`Snapshot.desk`): the name on its money figures, the asset its balances are quoted in, and
 // which parts of the P&L it has. Pages read it to draw only what applies; no figure depends on it.
 import { useStore } from "./store";
-import type { Desk, Market, Venue } from "./protocol";
+import type { Desk, InstRole, Market, Venue } from "./protocol";
 
 /** A desk that has not said: Binance's two, the only markets before `desk.markets`. */
 const MARKETS: Market[] = [
@@ -26,6 +26,28 @@ export const marketOf = (v: Venue | null | undefined) => markets().find((m) => m
 /** Ask these, not a market's id: a perp tag, a funding row, a mark price go with the kind. */
 export const isPerp = (v: Venue | null | undefined) => marketOf(v)?.kind === "perp";
 export const isSpot = (v: Venue | null | undefined) => marketOf(v)?.kind === "spot";
+/** What an instrument is for: its own role, else its market's, else its market's kind's. Ask this, not the kind, whether
+ *  a figure is Trading PnL or Hedge; a spot role is its base asset's (`server/src/protocol.rs`, `Roles`). */
+export function roleOf(symbol: string, venue: Venue | null | undefined): InstRole {
+  const r = deskNow().roles;
+  const spot = isSpot(venue);
+  const k = spot ? (QUOTES.find((q) => symbol.endsWith(q)) ?? "") : "";
+  return r?.instruments[`${venue}:${k ? symbol.slice(0, -k.length) : symbol}`] ?? r?.markets[String(venue)] ?? (isPerp(venue) ? "hedge" : "traded");
+}
+export const isHedge = (r: { symbol: string; venue: Venue }) => roleOf(r.symbol, r.venue) === "hedge";
+export const isTraded = (r: { symbol: string; venue: Venue }) => roleOf(r.symbol, r.venue) === "traded";
+/** The desk trades what spot alone does not say: any role set makes "spot" and "futures" the wrong words for its figures. */
+export const roled = (d: Desk = deskNow()) =>
+  !!d.roles &&
+  (Object.keys(d.roles.markets).length > 0 || Object.entries(d.roles.instruments).some(([k, r]) => r !== (isPerp(k.split(":")[0]) ? "hedge" : "traded")));
+/** "Spot inventory", "Inventory". */
+export const inventoryWord = () => (roled() ? "Inventory" : "Spot inventory");
+/** "futures", "hedge": what the exposure's other side is called. */
+export const hedgeWord = () => (roled() ? "hedge" : "futures");
+/** "Futures notional", "Hedge notional". */
+export const notionalWord = () => (roled() ? "Hedge notional" : "Futures notional");
+/** The futures columns and tabs: positions and margin, whichever role they have. */
+export const hasPerps = (d: Desk) => d.perps ?? d.hedge;
 /** The desk's spot market, where something with no market of its own (a quote balance, the busiest list) belongs. */
 export const spotVenue = (): Venue => markets().find((m) => m.kind === "spot")?.id ?? "spot";
 /** "Spot", "Perp": a market's word beside a symbol; its name when the kind alone would not tell two apart. */
@@ -58,6 +80,7 @@ export const baseOf = (symbol: string) => {
 /** Alert rules that cannot fire on this desk, left out of the lists of checks. */
 export function ruleApplies(rule: string): boolean {
   if (rule === "engine" || rule === "engine_latency") return !!useStore.getState().snap?.engines.length;
-  if (rule === "futures_margin" || rule === "exposure_gap") return deskNow().hedge;
+  if (rule === "futures_margin") return hasPerps(deskNow());
+  if (rule === "exposure_gap") return deskNow().hedge;
   return true;
 }

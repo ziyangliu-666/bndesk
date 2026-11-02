@@ -18,7 +18,7 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
-import { cur, quoteAsset, baseOf, useDesk, isPerp, isSpot, spotVenue } from "../desk";
+import { cur, quoteAsset, baseOf, useDesk, isPerp, isSpot, spotVenue, hasPerps, inventoryWord, notionalWord, roled } from "../desk";
 import type { Venue } from "../protocol";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
@@ -94,7 +94,7 @@ function Hero() {
         ]}
         parts={[
           { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: `Spot: ${quoteAsset()} free and in orders plus the other assets at mid` },
-          ...(desk.hedge ? [{ label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },] : []),
+          ...(hasPerps(desk) ? [{ label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },] : []),
         ]}
         facts={[
           [
@@ -404,7 +404,7 @@ function Spot() {
       </section>
       <div className="ops-side">
         <SpotAccounts />
-        <SideChart id="assets-spot" title="Spot inventory" field="inventory" color={INV_COLOR} />
+        <SideChart id="assets-spot" title={inventoryWord()} field="inventory" color={INV_COLOR} />
       </div>
     </div>
   );
@@ -478,8 +478,8 @@ function Futures() {
       n({ field: "upnl", headerName: "uPnL", headerTooltip: `Unrealized PnL at mark against the entry price, ${cur()}. Not today's result: see Today`, width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({
         field: "pnl_day",
-        headerName: "Hedge",
-        headerTooltip: `Today, ${cur()}: the hedge leg, the position held at the day start and today's fills marked to mark now, minus fees, plus funding. A perp has no Trading PnL`,
+        headerName: roled() ? "Today" : "Hedge",
+        headerTooltip: `Today, ${cur()}: the position held at the day start and today's fills marked to mark now, minus fees, plus funding`,
         width: 90,
         valueFormatter: fSigned,
         cellClass: sCls(hide),
@@ -511,7 +511,7 @@ function Futures() {
         </div>
       </section>
       <FuturesAccounts />
-      <SideChart id="assets-fut" title="Futures notional" field="futures_notional" color={FUT_COLOR} />
+      <SideChart id="assets-fut" title={notionalWord()} field="futures_notional" color={FUT_COLOR} />
     </div>
   );
 }
@@ -563,9 +563,9 @@ function ExposureTable() {
           <thead>
             <tr>
               <th className="l">Account</th>
-              <th title={`Spot inventory value at mid, ${cur()}`}>Spot value</th>
-              <th title={`Futures net notional, signed, ${cur()}`}>Futures notional</th>
-              <th title={`Spot value + futures notional, ${cur()}`}>Net</th>
+              <th title={`${inventoryWord()} value at mid, ${cur()}`}>{inventoryWord() === "Inventory" ? "Value" : "Spot value"}</th>
+              <th title={`${notionalWord()}, net, signed, ${cur()}`}>{notionalWord()}</th>
+              <th title={`${inventoryWord()} value + ${notionalWord().toLowerCase()}, ${cur()}`}>Net</th>
             </tr>
           </thead>
           <tbody>
@@ -694,7 +694,7 @@ function HedgePanel() {
   const cols = useMemo<ColDef<HedgeLeg>[]>(() => {
     const n = (c: ColDef<HedgeLeg>): ColDef<HedgeLeg> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
-      { field: "symbol", headerName: "Leg", headerTooltip: "Futures hedge leg", width: 104, cellRenderer: LegCell },
+      { field: "symbol", headerName: "Leg", headerTooltip: "Hedge leg", width: 104, cellRenderer: LegCell },
       n({ field: "qty0", headerName: "Start", headerTooltip: "Position at the day start, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "qty", headerName: "Now", headerTooltip: "Position now, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "fills", headerName: "Fills", headerTooltip: "Futures fills today", width: 52 }),
@@ -707,7 +707,7 @@ function HedgePanel() {
   return (
     <section className="ops-panel ops-hedge">
       <header className="ops-head">
-        <span className="ops-title" title="Since the day start: the Inventory PnL of the Desk, against what the futures legs made">
+        <span className="ops-title" title="Since the day start: the Inventory PnL of the Desk, against what the hedge made">
           Inventory and hedge, today
         </span>
         {offset != null && (
@@ -765,8 +765,8 @@ function ExposureChart() {
   }, [series, x, now]);
   const fmt = (v: number) => amount(v, "pnlMoney", hide);
   const lines: ExSeries[] = [
-    { key: "inv", kind: "line", label: "Spot inventory", color: INV_COLOR, data: pts("inv", cols.t, cols.inv, step), format: fmt },
-    { key: "fut", kind: "line", label: "Futures notional", color: FUT_COLOR, data: pts("fut", cols.t, cols.fut, step), format: fmt },
+    { key: "inv", kind: "line", label: inventoryWord(), color: INV_COLOR, data: pts("inv", cols.t, cols.inv, step), format: fmt },
+    { key: "fut", kind: "line", label: notionalWord(), color: FUT_COLOR, data: pts("fut", cols.t, cols.fut, step), format: fmt },
     { key: "net", kind: "line", label: "Net", color: C.ink, width: 1, data: pts("net", cols.t, cols.net, step), format: fmt, lastValue: false },
   ];
   return (
@@ -804,9 +804,10 @@ function Exposure() {
 
 export function Accounts() {
   const [saved, setTab] = useExPref<AssetTab>("assets", "tab", "overview", ["overview", "spot", "futures", "exposure"]);
-  const { hedge } = useDesk();
-  // no futures on this desk: a tab remembered from elsewhere falls back
-  const tab = !hedge && (saved === "futures" || saved === "exposure") ? "overview" : saved;
+  const desk = useDesk();
+  const hedge = desk.hedge;
+  // no futures or no hedge on this desk: a tab remembered from elsewhere falls back
+  const tab = (!hasPerps(desk) && saved === "futures") || (!hedge && saved === "exposure") ? "overview" : saved;
   return (
     <div className="page ops-assets">
       <Hero />
@@ -817,12 +818,8 @@ export function Accounts() {
           items={[
             { value: "overview", label: "Overview" },
             { value: "spot", label: "Spot" },
-            ...(hedge
-              ? [
-                  { value: "futures" as const, label: "Futures" },
-                  { value: "exposure" as const, label: "Exposure & hedge" },
-                ]
-              : []),
+            ...(hasPerps(desk) ? [{ value: "futures" as const, label: "Futures" }] : []),
+            ...(hedge ? [{ value: "exposure" as const, label: "Exposure & hedge" }] : []),
           ]}
         />
       </div>

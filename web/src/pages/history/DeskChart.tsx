@@ -14,7 +14,7 @@ export const PART_META: Record<Part, { label: string; long: string; color: strin
   pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
   mm: { label: "Market making", long: "Market making", color: PNL_COLORS.mm, style: PNL_STROKES.mm, title: "Market making: each fill against the mid 60 s later, minus fees" },
   inv: { label: "Inventory PnL", long: "Inventory PnL", color: PNL_COLORS.inv, style: PNL_STROKES.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
-  hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, style: PNL_STROKES.hedge, title: "Futures legs: price, fees, funding" },
+  hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, style: PNL_STROKES.hedge, title: "The hedge's legs: price, fees, funding" },
   reb: { label: "Rebates", long: "Rebates", color: PNL_COLORS.reb, style: PNL_STROKES.reb, title: "Market-maker rebates" },
   other: { label: "Other", long: "Other", color: PNL_COLORS.other, style: PNL_STROKES.other, title: "What the split does not explain: Day PnL − trading − hedge − rebates" },
 };
@@ -243,7 +243,7 @@ export function DeskChart({
       label: "Net",
       pane: 2,
       line: 1,
-      title: "Inventory plus futures notional",
+      title: "Inventory plus hedge notional",
       value: (t) => {
         const r = at(t);
         return r && r.inventory != null && r.futures != null ? [hide ? MASK : num(r.inventory + r.futures, 0, true), C.ink] : "--";

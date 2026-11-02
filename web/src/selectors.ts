@@ -5,34 +5,35 @@ import type { Fill, HedgeLeg, OpenOrder, SymbolRow, Venue } from "./protocol";
 import { serverNow, useStore } from "./store";
 import { int } from "./format";
 import { maskText, money } from "./mask";
-import { cur, isPerp, spotVenue } from "./desk";
+import { cur, isHedge, isTraded } from "./desk";
 
 /**
  * "Trading PnL" is market making + inventory PnL, fees included, and never the hedge, on every page and size.
- * A spot market has one (`trading_pnl`); a perp is the hedge and has none (null: shown as `--`), its P&L today
- * is its hedge leg's (`hedgePnl`: price P&L at mark − fees + funding), shown under a Hedge figure or column. The
+ * What the desk trades has one (`trading_pnl`); what hedges has none (null: shown as `--`), its P&L today is its
+ * hedge leg's (`hedgePnl`: price P&L at mark − fees + funding), shown under a Hedge figure or column. Which is which is
+ * the instrument's role, whatever its market's kind (a perp hedges and spot is traded only until a desk says). The
  * desk's Day PnL = the Trading PnLs + the hedge legs + rebates + other.
  */
 export function tradingPnl(r: SymbolRow): number | null {
-  return isPerp(r.venue) ? null : r.trading_pnl;
+  return isHedge(r) ? null : r.trading_pnl;
 }
 
-/** A perp's hedge leg P&L today (null for spot, and for a perp with no leg today). */
+/** What hedges: its leg's P&L today (null for what is traded, and with no leg today). */
 export function hedgePnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number | null {
-  return isPerp(r.venue) ? (legs?.get(r.symbol) ?? null) : null;
+  return isHedge(r) ? (legs?.get(`${r.venue}:${r.symbol}`) ?? null) : null;
 }
 
-/** What an instrument made today, whichever kind it is: a spot market's Trading PnL, a perp's hedge leg.
+/** What an instrument made today, whichever role it has: its Trading PnL or its hedge leg.
  *  For rankings across both (top movers, the marquee), always shown with its kind. */
 export function instPnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number {
-  return (isPerp(r.venue) ? hedgePnl(r, legs) : r.trading_pnl) ?? 0;
+  return (isHedge(r) ? hedgePnl(r, legs) : r.trading_pnl) ?? 0;
 }
 
 const NO_LEGS: ReadonlyMap<string, number | null> = new Map();
 
-/** Today's P&L of each hedge leg by perp symbol. */
+/** Today's P&L of each hedge leg, by `venue:symbol`. */
 export function legPnl(legs: readonly HedgeLeg[] | undefined): ReadonlyMap<string, number | null> {
-  return legs?.length ? new Map(legs.map((l) => [l.symbol, l.pnl])) : NO_LEGS;
+  return legs?.length ? new Map(legs.map((l) => [`${l.venue}:${l.symbol}`, l.pnl])) : NO_LEGS;
 }
 
 /** The hedge legs' P&L from the store (a new map only when the legs change). */
@@ -63,8 +64,8 @@ const RECENT_MS = 15 * 60_000;
 
 /**
  * The `n` busiest quoted instruments, busiest first: those with resting orders, ranked by fills in the last
- * 15 minutes, then today's fills, then open orders. Spot only by default (the desk quotes spot; USD-M is the
- * hedge). Returns instrument keys, `"<venue>:<SYMBOL>"`.
+ * 15 minutes, then today's fills, then open orders. What the desk trades by default, not what hedges; a market's alone
+ * given `venue`, any with null. Returns instrument keys, `"<venue>:<SYMBOL>"`.
  */
 export function busiest(
   symbols: readonly SymbolRow[],
@@ -72,7 +73,7 @@ export function busiest(
   fills: readonly Fill[],
   n: number,
   now: number,
-  venue: Venue | null = spotVenue(),
+  venue?: Venue | null,
 ): string[] {
   const nOrders = new Map<string, number>();
   for (const o of orders) nOrders.set(key(o.symbol, o.venue), (nOrders.get(key(o.symbol, o.venue)) ?? 0) + 1);
@@ -82,7 +83,7 @@ export function busiest(
     recent.set(key(f.symbol, f.venue), (recent.get(key(f.symbol, f.venue)) ?? 0) + 1);
   }
   return symbols
-    .filter((s) => (venue == null || s.venue === venue) && nOrders.has(key(s.symbol, s.venue)))
+    .filter((s) => (venue === undefined ? isTraded(s) : venue === null || s.venue === venue) && nOrders.has(key(s.symbol, s.venue)))
     .map((s) => {
       const k = key(s.symbol, s.venue);
       return { k, r: recent.get(k) ?? 0, d: s.fills_day, o: nOrders.get(k) ?? 0, name: s.symbol };
@@ -100,7 +101,7 @@ const RERANK_MS = 30_000;
  * live list does not reshuffle under the finger. Returns `"<venue>:<SYMBOL>"` keys; pair with the live rows
  * (QuoteMapMini does).
  */
-export function useBusiest(n: number, venue: Venue | null = spotVenue()): string[] {
+export function useBusiest(n: number, venue?: Venue | null): string[] {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), RERANK_MS);

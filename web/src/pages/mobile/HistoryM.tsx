@@ -26,7 +26,7 @@ import {
 } from "./rest/ui";
 import "./history.css";
 import { MASK } from "../../mask";
-import { cur, useDesk, isPerp } from "../../desk";
+import { cur, useDesk, isPerp, isHedge } from "../../desk";
 
 // ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
 // kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
@@ -364,7 +364,7 @@ function InstRow({
   money,
 }: {
   r: SymbolRow;
-  /** A perp's hedge leg today (a perp has no Trading PnL). */
+  /** Its hedge leg today, for what hedges (it has no Trading PnL). */
   hedge: number | null;
   money: (
     v: number | null | undefined,
@@ -381,8 +381,8 @@ function InstRow({
         </>
       }
       sub={`${int(r.fills_day)} fills · Vol ${money(r.volume_day, "k")}`}
-      value={isPerp(r.venue) ? <Amt v={hedge} /> : <Amt v={r.trading_pnl} />}
-      valueSub={isPerp(r.venue) ? "hedge leg" : edge != null ? `edge ${bps(edge)} bps` : undefined}
+      value={isHedge(r) ? <Amt v={hedge} /> : <Amt v={r.trading_pnl} />}
+      valueSub={isHedge(r) ? "hedge leg" : edge != null ? `edge ${bps(edge)} bps` : undefined}
       to={{
         page: "history",
         detail: {

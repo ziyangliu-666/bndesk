@@ -11,7 +11,7 @@ import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
 import { Sec, Stats } from "./rest/ui";
-import { cur, quoteAsset, baseOf, isPerp, isSpot, marketOf, spotVenue } from "../../desk";
+import { cur, quoteAsset, baseOf, isPerp, isTraded, marketOf, spotVenue, inventoryWord } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -95,7 +95,7 @@ function instrumentsOf(a: Alert, snap: Snapshot): { list: { symbol: string; venu
     if (snap.symbols.some((s) => s.symbol === symbol && s.venue === venue)) list.push({ symbol, venue });
     else {
       // dust and the mock name the asset ("0.31 DOT"); find its USDT pair
-      const hit = snap.symbols.find((s) => isSpot(s.venue) && part.split(" ").some((w) => w && s.symbol === w + quoteAsset()));
+      const hit = snap.symbols.find((s) => isTraded(s) && part.split(" ").some((w) => w && s.symbol === w + quoteAsset()));
       if (hit) list.push({ symbol: hit.symbol, venue: hit.venue });
     }
   }
@@ -320,7 +320,7 @@ function ExposureEv({ a }: { a: Alert }) {
           },
           {
             label: "Spot × beta",
-            info: `The spot inventory's value with each market weighted by its beta to the hedge instrument (${e.beta_source === "estimate" ? "the desk's estimate" : "configured"}). Hedge target = −${num(e.ratio, 2)} × this.`,
+            info: `The ${inventoryWord().toLowerCase()}'s value with each market weighted by its beta to the hedge instrument (${e.beta_source === "estimate" ? "the desk's estimate" : "configured"}). Hedge target = −${num(e.ratio, 2)} × this.`,
             value: money(e.beta_value, "usd"),
           },
         ]}
@@ -646,7 +646,7 @@ function InventoryEv({ a, snap }: { a: Alert; snap: Snapshot }) {
   const money = useMoney();
   const named = instrumentsOf(a, snap).list.map((x) => x.symbol);
   const top = snap.symbols
-    .filter((s) => isSpot(s.venue) && Math.abs(s.inv_value) > 0)
+    .filter((s) => isTraded(s) && Math.abs(s.inv_value) > 0)
     .sort((x, y) => (named.includes(y.symbol) ? 1 : 0) - (named.includes(x.symbol) ? 1 : 0) || Math.abs(y.inv_value) - Math.abs(x.inv_value))
     .slice(0, 5);
   return (

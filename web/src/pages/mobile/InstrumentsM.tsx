@@ -11,7 +11,7 @@ import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
-import { cur, quoteOf, baseOf, useDesk, isPerp } from "../../desk";
+import { cur, quoteOf, baseOf, useDesk, isPerp, isHedge, hasPerps } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type Key = "fills" | "name" | "chg" | "pnl" | "inv";
@@ -59,7 +59,7 @@ function MarketList() {
   const [filter, setFilter] = useState<Filter>("all");
   const d = useDesk();
   const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
-  // a spot market's Trading PnL; a perp is the hedge: its leg's P&L today, shown as such (and sorted after)
+  // its Trading PnL; what hedges: its leg's P&L today, shown as such (and sorted after)
   const hedgeOf = useMemo(() => {
     const leg = legPnl(legs);
     return (r: SymbolRow) => hedgePnl(r, leg);
@@ -148,7 +148,7 @@ function MarketList() {
               { value: "all", label: "All" },
               { value: "held", label: "Held" },
               { value: "quoted", label: "Quoted" },
-              ...(d.hedge ? [{ value: "perp" as const, label: "Perp" }] : []),
+              ...(hasPerps(d) ? [{ value: "perp" as const, label: "Perp" }] : []),
             ]}
           />
         </div>
@@ -184,6 +184,7 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
   const hide = useHide();
   const t: Ticker24h | null = useTicker24h(r.symbol, r.venue);
   const perp = isPerp(r.venue);
+  const hedged = isHedge(r);
   const chg = t?.changePct ?? null;
   // with amounts hidden every row reads the same ("flat" would tell which are held)
   const inv = !hide && Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short") + (hide ? "" : ` ${cur()}`);
@@ -206,8 +207,8 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
       </span>
       <span className="mk-c-r">
         <span className="mk-pnl">
-          {perp && <span className="mk-k">hedge </span>}
-          <Money v={perp ? hedge : r.trading_pnl} />
+          {hedged && <span className="mk-k">hedge </span>}
+          <Money v={hedged ? hedge : r.trading_pnl} />
         </span>
         <span className="mk-sub m-fig">{inv}</span>
       </span>

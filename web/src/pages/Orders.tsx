@@ -15,7 +15,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
-import { cur, baseOf, isPerp, isSpot } from "../desk";
+import { cur, baseOf, isPerp, isTraded } from "../desk";
 
 const short = (s: string) => baseOf(s);
 
@@ -23,9 +23,9 @@ const short = (s: string) => baseOf(s);
  *  It steps down only when the quotes sit well inside the next smaller range, so a live wobble does not flip it. */
 function useFitRange(orders: OpenOrder[]): number {
   const cur = useRef<number>(RANGES[1]);
-  // what the map draws: spot orders with a known distance (an unknown one is not 0 bps)
+  // what the map draws: the orders of what the desk trades with a known distance (an unknown one is not 0 bps)
   const d = orders
-    .filter((o) => isSpot(o.venue) && o.dist_bps != null)
+    .filter((o) => isTraded(o) && o.dist_bps != null)
     .map((o) => Math.abs(o.dist_bps!))
     .sort((a, b) => a - b);
   if (!d.length) return cur.current;
@@ -232,7 +232,7 @@ export function Orders() {
   const acct = saved.account != null && trading.some((a) => a.id === saved.account) ? saved.account : null;
   const shown = acct == null ? orders : orders.filter((o) => o.account === acct);
   const counts = useMapCounts(acct);
-  // the map's own count (spot): the perps' hedge orders are not on it
+  // the map's own count: the hedge's orders are not on it
   const through = counts.through;
 
   // the range fits the quotes until a range is picked here (Fit goes back): the smallest of ±10 ±25 ±50 ±100

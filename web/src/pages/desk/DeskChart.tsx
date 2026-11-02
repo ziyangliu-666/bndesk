@@ -12,13 +12,13 @@ import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, typ
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
-import { cur, useDesk } from "../../desk";
+import { cur, roled, useDesk } from "../../desk";
 
 type Tab = "pnl" | "equity" | "exposure";
 const TABS: { value: Tab; label: string; title: string }[] = [
   { value: "pnl", label: "P&L", title: "Day PnL and its parts, notional filled" },
   { value: "equity", label: "Equity", title: "Equity of all accounts, and each account's Day PnL" },
-  { value: "exposure", label: "Exposure", title: "Spot inventory value, futures notional and the net" },
+  { value: "exposure", label: "Exposure", title: "Inventory value, hedge notional and the net" },
 ];
 
 const IVS = [
@@ -244,7 +244,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
       { key: "net", kind: "line", label: "Net", color: NET, width: 1.5, format: fSigned, data: pts("net", (r) => r.inv + r.fut) },
       ...(desk.hedge
         ? ([
-            { key: "spot", kind: "line", label: "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
+            { key: "spot", kind: "line", label: roled() ? "Inventory" : "Spot", color: INV_COLOR, width: 1, format: fSigned, data: pts("spot", (r) => r.inv), lastValue: false },
             { key: "fut", kind: "line", label: "Futures", color: FUT_COLOR, width: 1, format: fSigned, data: pts("fut", (r) => r.fut), lastValue: false },
           ] as ExSeries[])
         : []),

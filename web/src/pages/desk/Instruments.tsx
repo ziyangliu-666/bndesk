@@ -8,7 +8,7 @@ import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
 import { maskNode, useHide } from "../../mask";
 import { tradingPnl, useHedgePnl } from "../../selectors";
-import { cur, useDesk, isPerp } from "../../desk";
+import { cur, useDesk, isPerp, isHedge, hasPerps } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -38,7 +38,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
     out.sort((a, b) => {
       if (k === "symbol") return (sort.k === "symbol" && sort.desc ? -1 : 1) * byName(a, b);
       if (k === "value") return (sort.desc ? -1 : 1) * (Math.abs(a.inv_value) - Math.abs(b.inv_value));
-      // Trading PnL: the perps (the hedge, no Trading PnL) after the spot markets
+      // Trading PnL: what hedges (no Trading PnL) after what the desk trades
       const x = tradingPnl(a),
         y = tradingPnl(b);
       if (x == null || y == null) return x == null && y == null ? byName(a, b) : x == null ? 1 : -1;
@@ -90,7 +90,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
           { value: "all", label: "All" },
           { value: "held", label: "Held", title: `Inventory worth 1 ${cur()} or more` },
           { value: "quoted", label: "Quoted", title: "With resting orders of ours" },
-          ...(d.hedge ? [{ value: "perp" as const, label: "Perp", title: "USD-M perpetuals" }] : []),
+          ...(hasPerps(d) ? [{ value: "perp" as const, label: "Perp", title: "USD-M perpetuals" }] : []),
         ]}
         value={filter}
         onChange={setFilter}
@@ -98,12 +98,12 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       <div className="dk-mk-hd">
         {head("symbol", "Symbol", "Sort by name")}
         {head("value", "Inv value", `Inventory × mid, ${cur()}; sorted by size`)}
-        {head("pnl", "Trading PnL", `Today, ${cur()}: market making + inventory PnL. A perp is the hedge: its leg's P&L, marked hedge`)}
+        {head("pnl", "Trading PnL", `Today, ${cur()}: market making + inventory PnL. What hedges: its leg's P&L, marked hedge`)}
       </div>
       <div className="dk-mk-body" ref={body}>
         {list.map((r) => {
-          const perp = isPerp(r.venue);
-          const tp = perp ? hedgeOf(r) : r.trading_pnl;
+          const hedged = isHedge(r);
+          const tp = hedged ? hedgeOf(r) : r.trading_pnl;
           const on = sel?.symbol === r.symbol && sel.venue === r.venue;
           return (
             <button
@@ -118,7 +118,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
               </span>
               <span className="fig">{maskNode(hide, usd(r.inv_value))}</span>
               <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
-                {perp && <span className="dk-mk-k">hedge </span>}
+                {hedged && <span className="dk-mk-k">hedge </span>}
                 {maskNode(hide, pnl(tp))}
               </span>
             </button>

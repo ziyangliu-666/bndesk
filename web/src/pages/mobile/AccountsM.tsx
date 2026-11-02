@@ -10,7 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
-import { cur, quoteAsset, baseOf, useDesk, isSpot } from "../../desk";
+import { cur, quoteAsset, baseOf, useDesk, isSpot, hasPerps, inventoryWord, hedgeWord, roled } from "../../desk";
 
 type Tab = "accounts" | "spot" | "futures" | "exposure";
 const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
@@ -25,7 +25,7 @@ export function AccountsM() {
   const [saved, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
   const desk = useDesk();
   // no futures on this desk: a tab remembered from elsewhere falls back
-  const tab = !desk.hedge && (saved === "futures" || saved === "exposure") ? "accounts" : saved;
+  const tab = (!hasPerps(desk) && saved === "futures") || (!desk.hedge && saved === "exposure") ? "accounts" : saved;
   const money = useAmt();
   const hide = useHide();
   const open = sm ? sm.equity - sm.pnl_day : null;
@@ -53,12 +53,8 @@ export function AccountsM() {
         items={[
           { value: "accounts", label: "Accounts" },
           { value: "spot", label: "Spot" },
-          ...(desk.hedge
-            ? [
-                { value: "futures" as const, label: "Futures" },
-                { value: "exposure" as const, label: "Exposure" },
-              ]
-            : []),
+          ...(hasPerps(desk) ? [{ value: "futures" as const, label: "Futures" }] : []),
+          ...(desk.hedge ? [{ value: "exposure" as const, label: "Exposure" }] : []),
         ]}
         value={tab}
         onChange={setTab}
@@ -188,7 +184,7 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
           ]}
         />
       </Sec>
-      <Sec title="Positions" info={`uPnL: ${TIP.upnl}\n\nToday: ${TIP.today}`} right="uPnL · hedge today">
+      <Sec title="Positions" info={`uPnL: ${TIP.upnl}\n\nToday: ${TIP.today}`} right={roled() ? "uPnL · today" : "uPnL · hedge today"}>
         {pos.map(({ p, a }) => (
           <PositionRow key={a.id + p.symbol} p={p} account={a.label} />
         ))}
@@ -198,7 +194,7 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
         <Sec title="Hedge legs today" info="Since the day start: the position at the day start, today's fills and fees, and the day start's mark." right="fills · fees">
           {hd.legs.map((l) => (
             <Row
-              key={l.symbol}
+              key={l.venue + l.symbol}
               dense
               title={l.symbol}
               sub={`start ${q(l.qty0, true)} · mark then ${price(l.mark0)}`}
@@ -257,14 +253,14 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
         <Stats
           cols={3}
           items={[
-            { label: "Net exposure", info: `Spot inventory value plus futures net notional, all accounts. ${cur()}.`, value: <Amt v={x.net} plain /> },
+            { label: "Net exposure", info: `${inventoryWord()} value plus ${hedgeWord()} net notional, all accounts. ${cur()}.`, value: <Amt v={x.net} plain /> },
             {
               label: "Hedge target",
               info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} ${cur()}.`,
               value: <Amt v={x.target} plain />,
             },
             { label: "Hedge", info: `Futures notional of the hedge symbols, ${cur()}.`, value: <Amt v={x.hedge_notional} plain /> },
-            { label: "Spot value", value: money(x.spot_value, "full") },
+            { label: roled() ? "Inventory" : "Spot value", value: money(x.spot_value, "full") },
             ...(Math.abs(x.futures_notional - x.hedge_notional) > 0.005
               ? [{ label: "All futures", info: `Futures net notional of every symbol, hedge or not, ${cur()}.`, value: <Amt v={x.futures_notional} plain /> }]
               : []),
@@ -274,7 +270,7 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
       {hd && (
         <Sec
           title="Inventory and hedge today"
-          info="Since the day start: the Inventory PnL of the Desk against what the futures legs made. Offset: −Hedge ÷ Inventory PnL; 100 % cancels it exactly."
+          info="Since the day start: the Inventory PnL of the Desk against what the hedge made. Offset: −Hedge ÷ Inventory PnL; 100 % cancels it exactly."
         >
           <Stats
             cols={4}

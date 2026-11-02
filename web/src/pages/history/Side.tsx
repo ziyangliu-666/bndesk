@@ -10,7 +10,7 @@ import { daySummary, sumDays, summaryNote, type DayRow, type Part } from "./data
 import { maskText, qtyText } from "../../mask";
 import { SeriesKey } from "../../components/ex";
 import { hedgePnl, useLegPnl } from "../../selectors";
-import { cur, useDesk, isPerp } from "../../desk";
+import { cur, useDesk, isHedge } from "../../desk";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
@@ -257,8 +257,8 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
   const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   const dash = loading;
   const legs = useLegPnl();
-  const perp = isPerp(today?.venue);
-  const tp = today ? (perp ? hedgePnl(today, legs) : today.trading_pnl) : null;
+  const hedged = !!today && isHedge(today);
+  const tp = today ? (hedged ? hedgePnl(today, legs) : today.trading_pnl) : null;
   return (
     <>
       <div className="hx-side-head">
@@ -269,7 +269,7 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
         <Fig
           big
           dot
-          label={perp ? "Fills PnL" : "Trading PnL"}
+          label={hedged ? "Fills PnL" : "Trading PnL"}
           title="Our fills in the range marked at the last price: what they made, fees not included. Inventory held before the range is not counted"
           value={m(sg(pnl))}
           tone={tone(pnl)}
@@ -292,8 +292,8 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
       </div>
       <div className="hx-sect">Today</div>
       <div className="hx-figs">
-        {perp ? (
-          <Fig label="Hedge" value={m(sg(tp))} tone={tone(tp)} title="Today: this perp's hedge leg, price P&L at mark − fees + funding (a perp has no Trading PnL)" />
+        {hedged ? (
+          <Fig label="Hedge" value={m(sg(tp))} tone={tone(tp)} title="Today: this instrument's hedge leg, price P&L at mark − fees + funding (what hedges has no Trading PnL)" />
         ) : (
           <Fig label="Trading PnL" value={m(sg(tp))} tone={tone(tp)} title="Today: market making + inventory PnL, fees included" />
         )}

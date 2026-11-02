@@ -1,12 +1,12 @@
 // The ticker's name slot as a picker (`Desk ▾`, `ETHUSDT ▾`), as on an exchange's trade page: a searchable list
 // of the desk and its instruments, the biggest inventory first (by name while amounts are hidden), each with its
-// Trading PnL (a perp: its hedge leg, marked so).
+// Trading PnL (what hedges: its leg, marked so).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
 import { useHedgePnl } from "../../selectors";
-import { isPerp, isSpot } from "../../desk";
+import { isPerp, isHedge } from "../../desk";
 
 export function NamePicker({ sel, children }: { sel: Instrument | null; children: ReactNode }) {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -26,7 +26,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
       .sort((a, b) => (hide ? 0 : Math.abs(b.inv_value) - Math.abs(a.inv_value)) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue));
     return [...(f ? [] : [null]), ...rows];
   }, [symbols, q, hide]);
-  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (isSpot(r.venue) ? r.trading_pnl : 0), 0), [symbols]);
+  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (isHedge(r) ? 0 : r.trading_pnl), 0), [symbols]);
 
   useEffect(() => {
     if (!open) return;
@@ -81,8 +81,8 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
           <div className="dk-pick-list" role="listbox">
             {list.map((r, i) => {
               const on = r ? sel?.symbol === r.symbol && sel.venue === r.venue : !sel;
-              const perp = isPerp(r?.venue);
-              const tp = r ? (perp ? hedgeOf(r) : r.trading_pnl) : deskTp;
+              const hedged = !!r && isHedge(r);
+              const tp = r ? (hedged ? hedgeOf(r) : r.trading_pnl) : deskTp;
               return (
                 <button
                   type="button"
@@ -98,7 +98,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
                     {isPerp(r?.venue) && <span className="dk-tag">Perp</span>}
                   </span>
                   <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
-                    {perp && <span className="dk-mk-k">hedge </span>}
+                    {hedged && <span className="dk-mk-k">hedge </span>}
                     {maskNode(hide, pnl(tp))}
                   </span>
                 </button>

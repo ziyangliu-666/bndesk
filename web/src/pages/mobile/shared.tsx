@@ -21,7 +21,7 @@ import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../proto
 import { useStore } from "../../store";
 import { PNL_COLORS, PNL_STROKES } from "../../theme";
 import "./ops.css";
-import { cur, quoteAsset, baseOf, isPerp } from "../../desk";
+import { cur, quoteAsset, baseOf, isPerp, hedgeWord } from "../../desk";
 
 // ---- history: the loader and the day's parts (History, Day, instrument history) ----
 
@@ -89,7 +89,7 @@ export const PART_INFO: Record<PartKey, string> = {
     return `Trading PnL minus market making: what the held inventory made after the first 60 s of each fill. ${cur()}.`;
   },
   get hedge() {
-    return `The futures legs: price at mark, minus fees, plus funding. ${cur()}.`;
+    return `The ${hedgeWord()} legs: price at mark, minus fees, plus funding. ${cur()}.`;
   },
   get rebates() {
     return `Market-maker rebates Binance credited that day. ${cur()}.`;
