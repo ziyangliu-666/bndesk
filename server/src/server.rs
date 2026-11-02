@@ -39,8 +39,8 @@ use tower_http::services::ServeFile;
 use crate::auth::{self, Auth};
 use crate::protocol as P;
 
-pub const PATCH_KEYS: [&str; 11] = [
-    "summary", "accounts", "symbols", "exposure", "engines", "alerts", "feeds", "markouts", "orders", "days", "hours",
+pub const PATCH_KEYS: [&str; 12] = [
+    "summary", "accounts", "symbols", "exposure", "engines", "alerts", "feeds", "markouts", "orders", "days", "hours", "desk",
 ];
 pub const DEV_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -100,6 +100,7 @@ pub struct Patch<'a> {
     pub orders: &'a [P::OpenOrder],
     pub days: &'a [P::DayPnl],
     pub hours: &'a [P::HourPnl],
+    pub desk: &'a P::Desk,
 }
 
 impl<'a> Patch<'a> {
@@ -117,6 +118,7 @@ impl<'a> Patch<'a> {
             orders: &s.orders,
             days: &s.days,
             hours: &s.hours,
+            desk: &s.desk,
         }
     }
 
@@ -133,17 +135,18 @@ impl<'a> Patch<'a> {
             7 => serde_json::to_value(self.markouts),
             8 => serde_json::to_value(self.orders),
             9 => serde_json::to_value(self.days),
-            _ => serde_json::to_value(self.hours),
+            10 => serde_json::to_value(self.hours),
+            _ => serde_json::to_value(self.desk),
         };
         v.expect("protocol types always serialize")
     }
 
     /// Each PATCH_KEYS value, encoded.
-    fn parts(&self) -> [Vec<u8>; 11] {
+    fn parts(&self) -> [Vec<u8>; 12] {
         [
             P::encode(self.summary), P::encode(self.accounts), P::encode(self.symbols), P::encode(self.exposure),
             P::encode(self.engines), P::encode(self.alerts), P::encode(self.feeds), P::encode(self.markouts),
-            P::encode(self.orders), P::encode(self.days), P::encode(self.hours),
+            P::encode(self.orders), P::encode(self.days), P::encode(self.hours), P::encode(self.desk),
         ]
     }
 }
@@ -297,7 +300,7 @@ pub struct Hub {
     shared: Arc<Shared>,
     requests: Option<Requests>,
     /// each PATCH_KEYS value as last sent: its JSON, and as values for the next one's edits
-    last: [Option<(Vec<u8>, Value)>; 11],
+    last: [Option<(Vec<u8>, Value)>; 12],
     full: bool,
 }
 
@@ -777,7 +780,7 @@ mod tests {
         assert_eq!(m.len(), 1);
         let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
         assert_eq!(v["type"], "patch");
-        assert_eq!(v["data"].as_object().unwrap().len(), 12);
+        assert_eq!(v["data"].as_object().unwrap().len(), 13);
         s.now = 5;
         hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
         assert!(drain(&mut rx).is_empty()); // only "now" moved

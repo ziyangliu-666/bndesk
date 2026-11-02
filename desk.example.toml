@@ -12,6 +12,12 @@ mark_max_spread_bps = 100  # wider books are valued at the reference-implied fai
 # keep_days = 365
 # mm_horizon_s = 60         # market making marks each fill this long after it: 1, 10, 60 or 300
 
+# How the pages describe this desk; figures are the same whatever is set here.
+# [desk]
+# currency = "USD"          # the name on money figures (default USDT); USD or a USD stablecoin: not a conversion
+# market_making = false     # show Trading PnL without its market making and inventory parts
+# The Hedge and Rebates parts need no setting: they show when an account has futures, or once a rebate is credited.
+
 # Instruments to track besides those discovered from balances, positions and fills.
 # A reference is optional: with one, markouts are also shown net of the reference's move.
 [[markets]]

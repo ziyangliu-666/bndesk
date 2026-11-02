@@ -6,6 +6,7 @@ use serde::Deserialize;
 use toml::{Table, Value};
 
 use crate::beta::BetaCfg;
+use crate::market::{QUOTE, is_stable};
 use crate::protocol::{Role, Venue};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +175,10 @@ pub struct Config {
     pub keep_days: f64,
     /// market making is marked at the instrument's own mid this long after each fill (a markout horizon)
     pub mm_horizon_s: i64,
+    /// The name money figures carry: a name, not a conversion (figures are valued at USDT = 1).
+    pub currency: String,
+    /// Split Trading PnL into market making and inventory on the pages (the store keeps both either way).
+    pub market_making: bool,
     pub markets: Vec<MarketCfg>,
     pub target_ratio: Option<f64>,
     pub band_usd: Option<f64>,
@@ -206,6 +211,8 @@ impl Config {
             mark_max_spread_bps: 100.0,
             keep_days: 365.0,
             mm_horizon_s: 60,
+            currency: QUOTE.into(),
+            market_making: true,
             markets: vec![],
             target_ratio: None,
             band_usd: None,
@@ -510,6 +517,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         beta_vs: beta_vs(exp)?,
         sessions: array(&raw, "sessions")?.iter().map(|x| typed(x, "sessions")).collect::<Result<_>>()?,
         events: array(&raw, "events")?.iter().map(|x| typed(x, "events")).collect::<Result<_>>()?,
+        currency: {
+            let c = s(table(&raw, "desk")?, "currency", QUOTE)?;
+            // figures are not converted, so the name has to be a dollar's
+            if c != "USD" && !is_stable(c) {
+                bail!("desk.currency: {c:?} would label figures valued at USDT = 1 with no conversion: USD or a USD stablecoin");
+            }
+            c.into()
+        },
+        market_making: b(table(&raw, "desk")?, "market_making", true)?,
         fee_expiry: opt_s(table(&raw, "fees")?, "expiry")?.map(String::from),
         alerts: match raw.get("alerts") {
             None => AlertCfg::default(),
@@ -599,5 +615,23 @@ mod tests {
         assert!(c.accounts[0].futures && !c.accounts[1].futures);
         assert_eq!(c.master.as_ref().unwrap().private_key_env, "DESK_MASTER_PRIVATE_KEY");
         assert_eq!(c.fee_expiry, None);
+        assert_eq!((c.currency.as_str(), c.market_making), ("USDT", true));
+    }
+
+    #[test]
+    fn currency_is_a_dollars_name() {
+        let dir = tempfile_dir("currency");
+        let p = dir.join("c.toml");
+        std::fs::write(&p, "[desk]\ncurrency = \"USD\"\nmarket_making = false\n").unwrap();
+        let c = load(&p).unwrap();
+        assert_eq!((c.currency.as_str(), c.market_making), ("USD", false));
+        std::fs::write(&p, "[desk]\ncurrency = \"EUR\"\n").unwrap();
+        assert!(load(&p).unwrap_err().to_string().contains("no conversion"));
+    }
+
+    fn tempfile_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("desk-config-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
     }
 }

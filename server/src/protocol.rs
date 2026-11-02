@@ -515,9 +515,20 @@ impl DayBars {
     }
 }
 
+/// How this desk is set up, for the page to draw only what applies: see DESIGN.md.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Desk {
+    pub currency: String,
+    pub quote: String,
+    pub hedge: bool,
+    pub rebates: bool,
+    pub mm: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Snapshot {
     pub now: i64,
+    pub desk: Desk,
     pub summary: Summary,
     pub accounts: Vec<Account>,
     pub symbols: Vec<SymbolRow>,
@@ -535,8 +546,8 @@ pub struct Snapshot {
     pub bars: DayBars,
 }
 
-pub const SNAPSHOT_KEYS: [&str; 16] = [
-    "now", "summary", "accounts", "symbols", "fills", "series", "exposure", "engines", "alerts", "feeds",
+pub const SNAPSHOT_KEYS: [&str; 17] = [
+    "now", "desk", "summary", "accounts", "symbols", "fills", "series", "exposure", "engines", "alerts", "feeds",
     "markouts", "orders", "days", "hours", "account_series", "bars",
 ];
 
@@ -763,6 +774,7 @@ mod tests {
         let ifaces = interfaces();
         let cases: Vec<(&str, Vec<String>)> = vec![
             ("Snapshot", struct_fields(&Snapshot::default())),
+            ("Desk", struct_fields(&Desk::default())),
             ("Summary", struct_fields(&Summary::default())),
             ("Account", struct_fields(&Account::default())),
             ("SymbolRow", struct_fields(&SymbolRow::default())),

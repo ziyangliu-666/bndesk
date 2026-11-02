@@ -347,9 +347,9 @@ impl Alerts {
         if !big.is_empty() {
             let cap = fmt_num(ac.asset_cap_usd.unwrap_or_default(), 0, false);
             let text = if big.len() == 1 {
-                format!("{} USDT of inventory, over the per-asset cap of {cap}", big[0])
+                format!("{} {} of inventory, over the per-asset cap of {cap}", big[0], cfg.currency)
             } else {
-                format!("Inventory over the per-asset cap of {cap} USDT: {}", names(&big))
+                format!("Inventory over the per-asset cap of {cap} {}: {}", cfg.currency, names(&big))
             };
             add("inventory", "asset", Level::Warn, text);
         }

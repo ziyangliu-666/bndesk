@@ -55,6 +55,7 @@ const BARS_RESENT: i64 = 5;
 /// What one compute produced; the patch and the alerts read it.
 pub struct View {
     pub now: i64,
+    pub desk: P::Desk,
     pub summary: P::Summary,
     pub accounts: Vec<P::Account>,
     pub symbols: Vec<P::SymbolRow>,
@@ -67,6 +68,22 @@ pub struct View {
     pub orders: Vec<P::OpenOrder>,
     pub days: Vec<P::DayPnl>,
     pub hours: Vec<P::HourPnl>,
+}
+
+/// What the page should draw: a part with nothing behind it (no futures anywhere, no rebate ever credited) is left
+/// out, and Other goes on holding whatever the parts do not explain.
+pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> P::Desk {
+    let moved = |v: Option<f64>| v.is_some_and(|x| x != 0.0);
+    P::Desk {
+        currency: cfg.currency.clone(),
+        quote: crate::market::QUOTE.into(),
+        hedge: cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures)
+            || cfg.target_ratio.is_some()
+            || accounts.iter().any(|a| !a.positions.is_empty() || a.fut_wallet != 0.0)
+            || days.iter().any(|d| moved(d.hedge)),
+        rebates: accounts.iter().any(|a| a.rebates != 0.0) || days.iter().any(|d| moved(d.rebates)),
+        mm: cfg.market_making,
+    }
 }
 
 pub type DeskRef = Rc<RefCell<Desk>>;
@@ -695,8 +712,10 @@ impl Desk {
         drop(m);
         let feeds = self.all_feeds().iter().map(|f| f.borrow().proto()).collect();
         let engines = self.engines.iter().map(|e| e.borrow().engine()).collect();
+        let desk = desk_shape(&self.cfg, &accounts, &days);
         self.view = Some(View {
             now,
+            desk,
             summary,
             accounts,
             symbols,
@@ -751,6 +770,7 @@ impl Desk {
         let v = self.view.as_ref().expect("view computed");
         P::Snapshot {
             now: v.now,
+            desk: v.desk.clone(),
             summary: v.summary.clone(),
             accounts: v.accounts.clone(),
             symbols: v.symbols.clone(),
@@ -1118,6 +1138,7 @@ impl Desk {
         let bars = self.new_bars.take().map(|from| self.day_bars(from)).unwrap_or_default();
         let v = self.view.as_ref().expect("view");
         let patch = Patch {
+            desk: &v.desk,
             now: v.now,
             summary: &v.summary,
             accounts: &v.accounts,
@@ -1666,6 +1687,29 @@ fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_part_with_nothing_behind_it_is_left_out() {
+        let mut cfg = Config::default();
+        let mut acct = P::Account::default();
+        let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
+        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), hedge: false, rebates: false, mm: true });
+        // a day kept with zeros is not a hedge or a rebate
+        let zero = P::DayPnl { hedge: Some(0.0), rebates: Some(0.0), ..Default::default() };
+        assert!(!desk_shape(&cfg, &[], std::slice::from_ref(&zero)).hedge);
+        // futures on any account, a position held, a kept day's figure
+        let kept = P::DayPnl { hedge: Some(-1.0), rebates: Some(0.5), ..Default::default() };
+        let d = desk_shape(&cfg, &[], std::slice::from_ref(&kept));
+        assert!(d.hedge && d.rebates);
+        acct.fut_wallet = 5.0;
+        acct.rebates = 0.1;
+        let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
+        assert!(d.hedge && d.rebates);
+        let mut a = crate::config::AccountCfg::new("a", "a", "", P::Role::Sub);
+        a.futures = true;
+        cfg.accounts.push(a);
+        assert!(desk_shape(&cfg, &[], &[]).hedge);
+    }
     use crate::protocol::Side;
 
     #[test]
@@ -1708,4 +1752,3 @@ mod tests {
         assert!(!in_flight(&[(-380.7, None), (386.6, None)], 50.0));
     }
 }
-

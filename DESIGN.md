@@ -231,7 +231,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 ## Wire protocol (server -> web)
 
 `GET /api/snapshot` returns the `Snapshot` in full. `GET /ws` sends one `snapshot` on connect, then
-messages at most every 125 ms. JSON; money in USDT; times in epoch ms.
+messages at most every 125 ms. JSON; money valued at USDT = 1, named by `desk.currency`; times in epoch ms.
 `web/src/protocol.ts` mirrors these names exactly.
 
 The WebSocket's snapshot carries what the first screen draws, so it is small (tens of KB deflated at the end
@@ -286,6 +286,7 @@ type Msg =
 
 interface Snapshot {
   now: number;
+  desk: Desk;
   summary: Summary;
   accounts: Account[];
   symbols: SymbolRow[];
@@ -307,6 +308,16 @@ interface Snapshot {
            mm: number; inventory: number }[];   // today's UTC hours
   account_series: AccountSeries[];   // today's, 45 s grid (the last 65 minutes on the WebSocket)
   bars: DayBars;            // today's minute bars
+}
+
+// How this desk is set up, so the pages draw only what applies. Nothing here changes a figure: Day PnL, its parts
+// and Other are computed the same way whatever it says.
+interface Desk {
+  currency: string;   // [desk] currency: the name money figures carry, USD or a USD stablecoin; not a conversion
+  quote: string;      // the asset accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
+  hedge: boolean;     // futures are part of the desk: an account with futures = true, [exposure] target_ratio, a position or futures wallet now, or a kept day's hedge P&L
+  rebates: boolean;   // a rebate has been credited: today, or on a kept day (so it can turn true during a run)
+  mm: boolean;        // [desk] market_making: split Trading PnL into market making and inventory on the pages
 }
 
 // Today's desk at one minute, as columns: each minute's last series point (t = the minute's start), with market
@@ -539,6 +550,11 @@ size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, T
 making blue solid, inventory PnL violet long dashes, hedge teal dashes, rebates light grey spaced dots,
 other grey dots; none of them green, red or amber, each with a stroke of its own so colour is not the only
 cue. Spot inventory takes the inventory hue and futures the hedge hue wherever they are drawn.
+
+A desk draws what it has (`Snapshot.desk`): no hedge means no Hedge figure, line, column or chip, no Futures or Exposure
+& hedge tab, no futures columns; no rebates, the same for Rebates; `mm` false, Trading PnL without its two parts. No
+engine configured means no Engines section or tab. Other stays: it is what keeps the split adding up to Day PnL. While
+the snapshot has not come, or from a server without `desk`, everything is drawn, in USDT.
 
 Hiding an alert: a warning or info alert can be hidden on this browser (localStorage `desk.hiddenAlerts`),
 never a critical one. The key is the alert's id and `since`, so it stays hidden while its text's figures
