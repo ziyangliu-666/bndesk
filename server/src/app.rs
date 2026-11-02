@@ -74,8 +74,8 @@ pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> 
     P::Desk {
         currency: cfg.currency.clone(),
         quote: crate::market::QUOTE.into(),
-        markets: P::MARKETS.iter().collect(),
-        hedge: cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures)
+        markets: P::MARKETS.iter().filter(|m| m.exchange.eq_ignore_ascii_case(&cfg.exchange)).collect(),
+        hedge: cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures())
             || cfg.target_ratio.is_some()
             || accounts.iter().any(|a| !a.positions.is_empty() || a.fut_wallet != 0.0)
             || days.iter().any(|d| moved(d.hedge)),
@@ -1379,7 +1379,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let mut sig = Box::pin(shutdown_signal());
     let http = connector::client();
     let public_feed = Feed::shared("public rest", FeedKind::Rest, "");
-    let exchange = connector::open("binance", http.clone(), Some(public_feed.clone()))?;
+    let exchange = connector::open(&cfg.exchange, http.clone(), Some(public_feed.clone()))?;
     let market = tokio::select! {
         m = bootstrap(&*exchange, &public_feed, &cfg) => m,
         _ = &mut sig => return Ok(()),
@@ -1638,7 +1638,7 @@ mod tests {
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
         assert!(d.hedge && d.rebates);
         let mut a = crate::config::AccountCfg::new("a", "a", "", P::Role::Sub);
-        a.futures = true;
+        a.markets.push(P::Venue::USDM);
         cfg.accounts.push(a);
         assert!(desk_shape(&cfg, &[], &[]).hedge);
     }

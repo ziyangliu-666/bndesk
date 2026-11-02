@@ -266,7 +266,7 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
     let now = crate::clock::now_ms();
     let today = crate::sessions::day_start(now, cfg.day_start_min);
     let fixed = day_start_of(FIRST_FIXED_DAY, cfg.day_start_min)?;
-    let rest = crate::connector::open("binance", crate::connector::client(), None)?;
+    let rest = crate::connector::open(&cfg.exchange, crate::connector::client(), None)?;
     let info = rest.instruments().await?;
     let market = Rc::new(RefCell::new(Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps)));
     {

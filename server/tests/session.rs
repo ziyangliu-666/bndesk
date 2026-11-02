@@ -101,7 +101,9 @@ fn t(min: i64) -> i64 {
 
 fn acct(id: &str, role: Role, futures: bool) -> Account {
     let mut c = AccountCfg::new(id, id, &format!("{id}@x.io"), role);
-    c.futures = futures;
+    if futures {
+        c.markets.push(Venue::USDM);
+    }
     Account::new(c, None, "")
 }
 

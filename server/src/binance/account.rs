@@ -114,7 +114,7 @@ async fn poll(p: Rc<Passes>, rest: Rest, job: Job, every: f64, delay: f64) {
 pub fn start(acct: &AccountRef, rest: Rest) -> Vec<JoinHandle<()>> {
     let (has_creds, futures) = {
         let a = acct.borrow();
-        (a.creds.is_some(), a.cfg.futures)
+        (a.creds.is_some(), a.cfg.futures())
     };
     if !has_creds {
         return vec![];
@@ -490,7 +490,7 @@ pub async fn commissions(p: &Passes, rest: &impl RestGet) -> Result<()> {
             vec![]
         };
         spot.sort();
-        let mut usdm: Vec<String> = if !a.cfg.futures || now < fee_next[ui] {
+        let mut usdm: Vec<String> = if !a.cfg.futures() || now < fee_next[ui] {
             vec![]
         } else {
             let mut set: HashSet<String> =
@@ -773,7 +773,7 @@ mod tests {
         m.on_book(Venue::SPOT, &Book::new("XUSDT", 100.0, 100.0, Some(1)));
         let m = Rc::new(RefCell::new(m));
         let mut c = cfg("a", "");
-        c.futures = true;
+        c.markets.push(Venue::USDM);
         let mut a = Account::new(c, None, "");
         a.market = Some(m.clone());
         (a, m)

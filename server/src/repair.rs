@@ -372,7 +372,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let (from, to) = (hhmm(ds, from)?, hhmm(ds, to)?);
     let now = crate::clock::now_ms();
     anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min), "{day} is not over yet");
-    let public = connector::open("binance", connector::client(), None)?;
+    let public = connector::open(&cfg.exchange, connector::client(), None)?;
     public.sync_clock().await.context("time sync")?;
     let t_bal = CLOCK.now();
 
@@ -392,7 +392,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         for (a, q) in balances.rows {
             *bal.entry(a).or_default() += q;
         }
-        if !ac.futures {
+        if !ac.futures() {
             continue;
         }
         let mut held = vec![];

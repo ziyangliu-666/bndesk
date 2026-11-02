@@ -30,13 +30,19 @@ impl MarketCfg {
     }
 }
 
+/// The exchange of a config that names none.
+pub const DEFAULT_EXCHANGE: &str = "binance";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountCfg {
     pub id: String,
     pub label: String,
     pub email: String,
     pub role: Role,
-    pub futures: bool,
+    /// The connector that reads it.
+    pub exchange: String,
+    /// The markets it is read on, in `Venue` order: `futures = true` is the exchange's spot and perp.
+    pub markets: Vec<Venue>,
     pub api_key_env: String,
     pub secret_env: String,
     pub private_key_env: String,
@@ -50,12 +56,23 @@ impl AccountCfg {
             label: label.into(),
             email: email.into(),
             role,
-            futures: false,
+            exchange: DEFAULT_EXCHANGE.into(),
+            markets: vec![Venue::SPOT],
             api_key_env: String::new(),
             secret_env: String::new(),
             private_key_env: String::new(),
             show: true,
         }
+    }
+
+    /// It has a perp market, which is what `futures = true` said.
+    pub fn futures(&self) -> bool {
+        self.markets.iter().any(|v| !v.is_spot())
+    }
+
+    /// The market its positions are on.
+    pub fn perp(&self) -> Venue {
+        self.markets.iter().copied().find(|v| !v.is_spot()).unwrap_or(Venue::USDM)
     }
 }
 
@@ -196,6 +213,8 @@ pub struct Config {
     pub master: Option<AccountCfg>,
     pub accounts: Vec<AccountCfg>,
     pub engines: Vec<EngineCfg>,
+    /// The one exchange the accounts name: a desk reads one until a second connector exists.
+    pub exchange: String,
 }
 
 impl Config {
@@ -230,6 +249,7 @@ impl Config {
             master: None,
             accounts: vec![],
             engines: vec![],
+            exchange: DEFAULT_EXCHANGE.into(),
         }
     }
 }
@@ -349,14 +369,45 @@ fn sub_tables<'a>(t: &'a Table, k: &str) -> Result<Vec<&'a Table>> {
         .collect()
 }
 
+/// An account's markets: `markets`, or `futures` as it always read. Both must agree, and they are the exchange's.
+fn account_markets(d: &Table, aid: &str, exchange: &str) -> Result<Vec<Venue>> {
+    let futures = b(d, "futures", false)?;
+    let mut markets = vec![Venue::SPOT];
+    if d.contains_key("markets") {
+        markets = array(d, "markets")?
+            .iter()
+            .map(|v| v.as_str().ok_or_else(|| anyhow!("account {aid}: markets: expected strings"))?.parse().map_err(|e: String| anyhow!("account {aid}: {e}")))
+            .collect::<Result<_>>()?;
+        markets.sort();
+        markets.dedup();
+        if d.contains_key("futures") && futures != markets.iter().any(|v| !v.is_spot()) {
+            bail!("account {aid}: futures = {futures} and markets = {markets:?} say different things");
+        }
+        if !markets.iter().any(|v| v.is_spot()) {
+            bail!("account {aid}: markets need its spot market: the account's balances are read there");
+        }
+    } else if futures {
+        markets.push(Venue::USDM);
+    }
+    if let Some(v) = markets.iter().find(|v| !v.market().exchange.eq_ignore_ascii_case(exchange)) {
+        bail!("account {aid}: market {v} is not on exchange {exchange:?}");
+    }
+    Ok(markets)
+}
+
 fn account(d: &Table, role: Role, default_id: &str) -> Result<AccountCfg> {
     let aid = s(d, "id", default_id)?;
+    let exchange = s(d, "exchange", DEFAULT_EXCHANGE)?;
+    if !crate::protocol::MARKETS.iter().any(|m| m.exchange.eq_ignore_ascii_case(exchange)) {
+        bail!("account {aid}: no connector for exchange {exchange:?}");
+    }
     Ok(AccountCfg {
         id: aid.into(),
         label: s(d, "label", aid)?.into(),
         email: s(d, "email", "")?.into(),
         role,
-        futures: b(d, "futures", false)?,
+        markets: account_markets(d, aid, exchange)?,
+        exchange: exchange.into(),
         api_key_env: s(d, "api_key_env", "")?.into(),
         secret_env: s(d, "secret_env", "")?.into(),
         private_key_env: s(d, "private_key_env", "")?.into(),
@@ -479,7 +530,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         Some(Value::Table(t)) => Some(account(t, Role::Master, "master")?),
         Some(_) => bail!("[master]: expected a table"),
     };
-    let accounts = sub_tables(&raw, "accounts")?
+    let accounts: Vec<AccountCfg> = sub_tables(&raw, "accounts")?
         .into_iter()
         .enumerate()
         .map(|(i, a)| account(a, Role::Sub, &format!("sub-{}", i + 1)))
@@ -494,6 +545,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
             Ok(EngineCfg { name: get("name")?, url: get("url")? })
         })
         .collect::<Result<_>>()?;
+    let exchange = {
+        let all: Vec<&AccountCfg> = master.iter().chain(&accounts).collect();
+        let first = all.first().map_or(DEFAULT_EXCHANGE, |a| a.exchange.as_str());
+        if let Some(other) = all.iter().find(|a| a.exchange != first) {
+            bail!("account {}: exchange {:?}, where the desk's is {first:?}: a desk reads one exchange for now", other.id, other.exchange);
+        }
+        first.to_string()
+    };
     let c = Config {
         path: path.clone(),
         listen: s(srv, "listen", "127.0.0.1:8710")?.into(),
@@ -543,6 +602,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         master,
         accounts,
         engines,
+        exchange,
     };
     validate(&c)?;
     Ok(c)
@@ -614,6 +674,23 @@ mod tests {
     }
 
     #[test]
+    fn an_accounts_markets_and_exchange() {
+        let d = tempfile::tempdir().unwrap();
+        let one = |t: &str| load(write(&d, &format!("[[accounts]]\nid = \"a\"\n{t}\n")));
+        // markets say what futures = true says, whichever the names and order
+        for t in ["futures = true", "markets = [\"usdm\", \"spot\"]", "markets = [\"binance:spot\", \"binance:usdm\"]",
+                  "exchange = \"binance\"\nfutures = true\nmarkets = [\"spot\", \"usdm\"]"] {
+            let c = one(t).unwrap();
+            assert_eq!((c.accounts[0].markets.as_slice(), c.accounts[0].perp()), ([Venue::SPOT, Venue::USDM].as_slice(), Venue::USDM), "{t}");
+        }
+        assert_eq!(one("markets = [\"spot\"]").unwrap().accounts[0].markets, [Venue::SPOT]);
+        assert!(one("futures = false\nmarkets = [\"spot\", \"usdm\"]").unwrap_err().to_string().contains("different things"));
+        assert!(one("markets = [\"usdm\"]").unwrap_err().to_string().contains("spot market"));
+        assert!(one("markets = [\"coinm\"]").is_err());
+        assert!(one("exchange = \"elsewhere\"").unwrap_err().to_string().contains("no connector"));
+    }
+
+    #[test]
     fn bad_keys_are_refused() {
         let d = tempfile::tempdir().unwrap();
         assert!(load(write(&d, "[alerts]\nnope = 1\n")).is_err());
@@ -635,7 +712,10 @@ mod tests {
         });
         assert_eq!(c.alerts, AlertCfg::default());
         assert_eq!(c.accounts.len(), 2);
-        assert!(c.accounts[0].futures && !c.accounts[1].futures);
+        assert!(c.accounts[0].futures() && !c.accounts[1].futures());
+        assert_eq!(c.accounts[0].markets, [Venue::SPOT, Venue::USDM]);
+        assert_eq!(c.accounts[1].markets, [Venue::SPOT]);
+        assert_eq!(c.exchange, "binance");
         assert_eq!(c.master.as_ref().unwrap().private_key_env, "DESK_MASTER_PRIVATE_KEY");
         assert_eq!(c.fee_expiry, None);
         assert_eq!((c.currency.as_str(), c.market_making), ("USDT", true));

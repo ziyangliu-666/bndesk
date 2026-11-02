@@ -260,7 +260,7 @@ impl Alerts {
             }
             let (spot_active, futures) = acct.map_or((false, false), |x| {
                 let x = x.borrow();
-                (x.traded.iter().any(|k| k.starts_with("spot:")), x.cfg.futures)
+                (x.traded.iter().any(|k| k.starts_with("spot:")), x.cfg.futures())
             });
             if self.held(&format!("quote_idle:{}", a.id), spot_active && a.quote_free < ac.quote_idle_usd, now,
                          (ac.quote_idle_s * 1000.0) as i64) {

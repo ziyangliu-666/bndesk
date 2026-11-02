@@ -51,7 +51,9 @@ pub fn accounts() -> Vec<Account> {
     for (aid, role, label, fut) in [("master", Role::Master, "master", false), ("sub-1", Role::Sub, "sim mm 1", false),
                                     ("sub-2", Role::Sub, "sim mm 2", false), ("sub-3", Role::Sub, "sim futures", true)] {
         let mut c = AccountCfg::new(aid, label, &format!("{aid}@sim.invalid"), role);
-        c.futures = fut;
+        if fut {
+            c.markets.push(Venue::USDM);
+        }
         let a = Account::new(c, None, "");
         for f in a.feeds.iter().chain([&a.rest_feed]) {
             f.borrow_mut().set_up(true, Some("simulated"));

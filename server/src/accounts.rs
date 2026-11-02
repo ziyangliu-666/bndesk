@@ -224,10 +224,7 @@ pub struct Account {
 
 impl Account {
     pub fn new(cfg: AccountCfg, creds: Option<Rc<Credentials>>, reason: &str) -> Self {
-        let mut feeds = vec![Feed::shared(format!("{} spot user", cfg.id), FeedKind::User, "")];
-        if cfg.futures {
-            feeds.push(Feed::shared(format!("{} usdm user", cfg.id), FeedKind::User, ""));
-        }
+        let feeds: Vec<FeedRef> = cfg.markets.iter().map(|v| Feed::shared(format!("{} {v} user", cfg.id), FeedKind::User, "")).collect();
         let rest_feed = Feed::shared(format!("{} rest", cfg.id), FeedKind::Rest, "");
         if creds.is_none() {
             for f in feeds.iter().chain([&rest_feed]) {
@@ -243,14 +240,14 @@ impl Account {
             balances: HashMap::new(),
             bal_u: HashMap::new(),
             spot_loaded: false,
-            fut_loaded: !cfg.futures,
+            fut_loaded: !cfg.futures(),
             fut_wallet: 0.0,
             fut_upnl_rest: 0.0,
             fut_available: 0.0,
             fut_usdt: 0.0,
             fut_usdt_u: 0,
             positions: HashMap::new(),
-            perp: Venue::USDM,
+            perp: cfg.perp(),
             pos_u: HashMap::new(),
             orders_10s: 0,
             orders_10s_limit: 0,
@@ -1019,7 +1016,7 @@ mod tests {
         m.on_book(Venue::SPOT, &Book::new("XUSDT", 100.0, 100.0, Some(1)));
         let m = Rc::new(RefCell::new(m));
         let mut c = cfg("a", "");
-        c.futures = true;
+        c.markets.push(Venue::USDM);
         let mut a = Account::new(c, None, "");
         a.market = Some(m.clone());
         (a, m)
@@ -1124,9 +1121,7 @@ mod tests {
         let mut m = Market::new(info(&[("USDCUSDT", SymbolInfo::new("USDC", "USDT", 5.0))]), 120.0, 100.0);
         m.asset_inst("USDC");
         m.on_book(Venue::SPOT, &Book::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
-        let mut c = cfg("usdc", "u@x.io");
-        c.futures = false;
-        let a = Account::new(c, None, "").shared();
+        let a = Account::new(cfg("usdc", "u@x.io"), None, "").shared();
         a.borrow_mut().set_balances([("USDT", 1000.0, 0.0), ("USDC", 500.0, 0.0)], true);
         let open = a.borrow().equity(&mut m);
         assert_relative_eq!(open, 1000.0 + 500.0 * 1.0012, max_relative = 1e-12);
