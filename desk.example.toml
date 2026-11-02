@@ -16,23 +16,29 @@ mark_max_spread_bps = 100  # wider books are valued at the reference-implied fai
 # [desk]
 # currency = "USD"          # the name on money figures (default USDT); USD or a USD stablecoin: not a conversion
 # market_making = false     # show Trading PnL without its market making and inventory parts
-# The Hedge and Rebates parts need no setting: they show when an account has futures, or once a rebate is credited.
+# The Hedge and Rebates parts need no setting: they show when something hedges, or once a rebate is credited.
+
+# What each market is for. "traded" makes Trading PnL, market making and inventory; "hedge" makes Hedge. Unset, spot is
+# traded and a perp hedges. A desk that makes markets on perps says so here, and names what hedges it:
+# [roles]
+# usdm = "traded"
 
 # Instruments to track besides those discovered from balances, positions and fills.
 # A reference is optional: with one, markouts are also shown net of the reference's move.
+# role = "traded" or "hedge" overrides [roles] for one instrument; on spot, for its base asset, whichever pair it trades on.
 [[markets]]
 symbol = "ETHUSDT"
 venue = "spot"
 reference = { symbol = "ETHUSDT", venue = "usdm" }
 
-# Optional hedge check: the hedge symbols' futures notional (all futures if none named) should be
-# -target_ratio x the beta-weighted spot inventory value. Set beta = ... on [[markets]] entries.
+# Optional hedge check: the hedge's notional (the hedge symbols, else every perp that hedges, and any spot asset that
+# does) should be -target_ratio x the beta-weighted value of what the desk trades. Set beta = ... on [[markets]] entries.
 # [exposure]
 # target_ratio = 1.0
 # band_usd = 200               # band = max(band_usd, band_frac x |target|)
 # band_frac = 0.25
 # max_notional = 5000          # target clamped to ±this
-# hedge_symbols = ["BTCUSDT"]  # the futures that count as the hedge (default: every futures position)
+# hedge_symbols = ["BTCUSDT"]  # the perps that count as the hedge (default: every perp that hedges); these hedge whatever [roles] says
 # markets_only = true          # count only the configured markets' assets (not stray coins)
 # beta = "estimate"            # or "fixed" (the beta on each [[markets]] entry, default 1)
 # beta_vs = "BTCUSDT"          # usdm instrument the betas are measured against (default: first hedge symbol)

@@ -1,12 +1,12 @@
 # Generalizing the desk
 
-bndesk began as the dashboard for one setup: market making on Binance spot, hedged with USD-M perps, from a master account and its sub-accounts, with a FastMM engine beside it. This page records what still ties the code to that setup, most costly first, and the design that removes it. Phase 1 and steps 1 and 2 of the order of work are done; what they changed is marked. The rest needs a change in what a figure means, or a second exchange to test against.
+bndesk began as the dashboard for one setup: market making on Binance spot, hedged with USD-M perps, from a master account and its sub-accounts, with a FastMM engine beside it. This page records what still ties the code to that setup, most costly first, and the design that removes it. Phase 1 and steps 1 to 3 of the order of work are done; what they changed is marked. The rest needs a second exchange to test against.
 
 ## What ties it to one setup
 
-**1. The P&L model assumes spot is what you trade and a perp is your hedge.** `Π` (Trading PnL) is built from spot fills only; every USD-M instrument is a "hedge leg" (`server/src/pnl.rs`, `selectors.ts`). A desk that makes markets on perps gets no market making or Trading PnL at all: everything it does lands under Hedge. This costs the most because the numbers themselves are wrong for that desk, not only the labels, and it reaches `pnl.rs`, `metrics.rs`, `accounts.rs` (`fut_day`), `recompute.rs`, `repair.rs` and the stored `equity` columns.
+**1. The P&L model assumes spot is what you trade and a perp is your hedge.** `Π` (Trading PnL) is built from spot fills only; every USD-M instrument is a "hedge leg" (`server/src/pnl.rs`, `selectors.ts`). A desk that makes markets on perps gets no market making or Trading PnL at all: everything it does lands under Hedge. This costs the most because the numbers themselves are wrong for that desk, not only the labels, and it reaches `pnl.rs`, `metrics.rs`, `accounts.rs` (`fut_day`), `recompute.rs`, `repair.rs` and the stored `equity` columns. *Step 3: an instrument has a role, and these ask it.*
 
-**2. `Venue = "spot" | "usdm"` is also the exchange's name.** It runs through the protocol (`Fill`, `SymbolRow`, `OpenOrder`, `Account.fees`), about 200 sites in the server and 48 web files, and it carries three meanings at once: which exchange, which product, which margin rules. A second exchange has nowhere to go. Instrument keys (`spot:BTCUSDT`) are stored in `kv`, so they are persistent too. *Step 1: a venue is the id of a market in a table, and pages ask its kind. The server still answers "is this spot?" where it means "is this what the desk trades": that is item 1.*
+**2. `Venue = "spot" | "usdm"` is also the exchange's name.** It runs through the protocol (`Fill`, `SymbolRow`, `OpenOrder`, `Account.fees`), about 200 sites in the server and 48 web files, and it carries three meanings at once: which exchange, which product, which margin rules. A second exchange has nowhere to go. Instrument keys (`spot:BTCUSDT`) are stored in `kv`, so they are persistent too. *Step 1: a venue is the id of a market in a table, and pages ask its kind. Step 3: where the server asked "is this spot?" and meant "is this what the desk trades", it asks the role.*
 
 **3. Binance is called from everywhere, not from a connector.** `server/src/binance/` holds only the transport (REST, signing, weight, WebSocket). The endpoints and their JSON are read in `accounts.rs` (the user streams, balances, positions, fees, rate limits), `market.rs` (exchange info), `backfill.rs`, `history.rs` (klines), `recompute.rs` and `repair.rs`. The browser also connects to `stream.binance.com` itself for the forming candle and the 24 h ticker (`components/ex/klines.ts`, `ticker.ts`). *Step 2: every endpoint and field name is in `server/src/binance/`, behind a trait, and a test keeps it there. The browser's two sockets stay, for Binance's two markets only.*
 
@@ -14,7 +14,7 @@ bndesk began as the dashboard for one setup: market making on Binance spot, hedg
 
 **5. Accounts assume a master with sub-accounts.** Transfers come from the master's `sub-account/universalTransfer`, matched by email across the desk (`Role`, `email` in 27 places in `accounts.rs`); accounts without a key are read through the master's sub-account endpoints. A desk of separate accounts, or one account, works, but with no transfer history behind it a deposit or withdrawal the stream reports is taken off P&L for three minutes (`MOVE_HOLD_MS`) and then reads as P&L.
 
-**6. Fixed P&L parts and pages that assume them.** Day PnL = market making + inventory + hedge + rebates + other is written out in 41 web files for the hedge and 28 for the rebates. *Phase 1: pages draw the parts a desk has (below). Step 2: the connector tags a distribution as a rebate. The list of parts is still fixed.*
+**6. Fixed P&L parts and pages that assume them.** Day PnL = market making + inventory + hedge + rebates + other is written out in 41 web files for the hedge and 28 for the rebates. *Phase 1: pages draw the parts a desk has (below). Step 2: the connector tags a distribution as a rebate. Step 3: the list stays fixed, on purpose (below): a role says which instrument goes in which part.*
 
 **7. Order limits are Binance's two windows.** `orders_10s`, `orders_1d`, their limits and alerts, and `orders_source: "binance"`, are in the protocol, the Orders page and the phone's meters.
 
@@ -73,9 +73,35 @@ Reading the code changed the proposal's shape in four places:
 
 `tests/readonly.rs` holds the guarantee at this boundary: the trait's methods are listed one by one, none may trade, every market has a connector, no URL or endpoint appears outside a connector's directory, and a stand-in exchange sees only GETs and the listen key from every read Binance makes.
 
-## What the later steps need from this
+## Done in step 3
 
-**3. Roles and P&L parts.** These are where `is_spot()` means "is this what the desk trades": `PnlBook::on_fill_at`, `plan` and the fill loops (`pnl.rs`), `metrics::aggregate`, `mm_split`, `symbol_rows` and `beta_weighted_spot`, the `spot` scope in `app.rs`, the volume filter in `history.rs`, `leg_symbols` and the keys in `repair.rs`, and `isPerp` in `selectors.ts` and `SymbolsGrid`. A role belongs on `MarketCfg`, with these asking it. `pnl.rs` also calls `m.ensure(symbol, Venue::SPOT, ..)` and builds `spot:<symbol>` keys, which assume every traded fill is on the one spot market.
+A desk that sets no role serves the figures it did: `tests/session.rs` compares it with the same golden file, untouched. A desk that sets one gets Trading PnL, market making, inventory, volume and fills for what it trades and Hedge for what hedges, on any market, and `tests/roles.rs` runs a session through both and checks that the parts add up to Day PnL with Other at 0.
+
+```toml
+[roles]
+usdm = "traded"          # a market's default: unset, spot is traded and a perp hedges
+
+[[markets]]
+symbol = "BTCUSDC"
+venue = "usdm"
+role = "hedge"           # one instrument's; on spot, its base asset's
+```
+
+An instrument named in `[exposure] hedge_symbols` hedges too, so a desk that has those does not repeat itself, and naming one and calling it traded is refused at load. `Roles` is in `protocol.rs`, and goes to the page as `Snapshot.desk.roles`, which asks `roleOf` the same way (`web/src/desk.ts`). Pages keep `isPerp` for what goes with the kind (a `Perp` tag, a funding row, a mark) and ask `isHedge` or `isTraded` where a figure goes.
+
+Reading the code changed the proposal in five places:
+
+- **No parts list, no `pnl_parts` table.** The proposal replaced `DayPnl`, `HistoryBar` and `Summary.pnl`'s named columns with `values: Record<string, number>` and a new table. Nothing needs it: the parts did not change, only which instruments go in them, so `trading`, `mm`, `hedge` and the rest keep their columns and their meaning, and stored rows read as they always did, with no aliases to expire. A list can come when a desk needs a part that is not one of these. Funding did not ask for one: it is what a position costs, so it is in Inventory for what is traded and in Hedge for what hedges, and `Summary.pnl.funding_day` says how much of Inventory it is.
+- **A market's default as well as an instrument's role.** The proposal put roles on `[[markets]]`, but instruments are discovered from fills and positions: a desk on 80 perps would have to list them all, and one it forgot would land in Hedge.
+- **A role on spot is its base asset's.** A balance cannot be split between BTCUSDT and BTCFDUSD. Two roles on one base are refused at load.
+- **A traded perp is valued at its mark, not its mid.** Equity counts unrealized P&L at the mark, so Π at the mid would leave mark − mid × position wandering in Other, the figure meant to show what the desk cannot explain. `Market::value` and a second 1 s ring of marks hold it. Market making stays at the mid, as markouts are.
+- **`Hedge` needed two sources.** A perp's leg is the account's `fut_day`, read from the exchange by trade id, and stays so: the golden file holds it. A spot asset has no such thing, so it stays in `PnlBook`, which already has its fills, flows and M_k(D), with a flag keeping it out of Π, and `hedge_legs` gives it the leg's shape.
+
+The positions the book keeps are keyed by base on spot, as stored `pnlstate` rows are, and by instrument key for a perp, which a stored row cannot collide with. `spot_value`, `futures_notional` and the `inventory` and `futures_notional` columns keep their names and mean what the desk trades and what hedges it, which is what they meant before. `perps` is new beside `hedge` on `Snapshot.desk`: a desk whose perps are all traded has positions, margin and the Futures tab, and no Hedge figure.
+
+What a role does not do: rows already written stay as written, so a desk that sets one sees the change from its next start (today's figures are rebuilt then from the fills) and its kept days do not move. History's volume and `repair-day` and `recompute-mm` take the roles set now. `repair-day` reads a traded perp's funding from the exchange and its prices from mark klines, as equity has them.
+
+## What the later steps need from this
 
 **4. A second connector.** Add its markets at the end of `MARKETS` (a place is a `Venue`), implement `Connector`, add it to `connector::open`. Then what the trait does not yet settle:
 
@@ -88,25 +114,19 @@ Reading the code changed the proposal's shape in four places:
 - `Credentials` is an API key and one signer. A passphrase needs another field.
 - A stored fill whose venue no longer parses reads as spot (`store::row_fill`), as it always did. With more markets that should be an error or a kept string.
 - A row says `Perp`, not which perp. With `?markets=2` two BTCUSDT Perp rows read alike in the lists; only the instrument's header and the Markouts filter name the market. `kindWord` is the helper for it.
+- Roles assume what Binance's USD-M is: a quantity in base units, linear, a price in USD (`PnlBook::quote_px`; `Roles::asset` asks the one spot market, and `hedge_symbols` names a symbol on every perp market). An inverse contract needs a size, and a position's value is no longer q × M.
+- `Account.perp` is one market, so the book's perp position and `PerpDay` ask the accounts on that market only: an account with two perp markets has to change that with `positions`.
+- A market without 1 s bars backfills a missed mark from one trade request per fill per horizon (`backfill::prices_at`). Hedge fills are few; a desk that makes markets there and was down for an hour is not. 1 min bars for horizons of 60 s and more would do.
+- `Inst.mark_ring` is timed by `CLOCK` on receipt, as `Mark` has no time, and `CLOCK` is one offset.
 - The 24 h ticker has no server route: another market's reads `--` until `/api/ticker` exists. `web/src/store.ts` defaults a link with no venue to `spot`, and `"perp"` in a link to `usdm`.
 
-**5. The numeraire, engine adapters, the interface's words.** `market::QUOTE`, `asset_inst` and `asset_price` still pin valuation to `<asset>USDT` on `Venue::SPOT`; `recompute.rs` and `repair.rs` build those keys directly, and `PerpSnapshot.wallet` is a USD total. Add `settle` to `Market` then. Engine adapters do not touch any of this. The words (`Binance's limit` and 50 or so like it, `orders_source: "binance"`) can read `Market.exchange`, which is on the wire and otherwise unread by the page.
+**5. The numeraire, engine adapters, the interface's words.** `market::QUOTE`, `asset_inst` and `asset_price` still pin valuation to `<asset>USDT` on `Venue::SPOT`; `recompute.rs` and `repair.rs` build those keys directly, `PerpSnapshot.wallet` is a USD total, and a traded perp's price and funding are taken as USD (`quote_px`, `PerpDay`), where USDC-margined ones are off by USDC's price. Add `settle` to `Market` then. Engine adapters do not touch any of this. The words (`Binance's limit` and 50 or so like it, `orders_source: "binance"`) can read `Market.exchange`, which is on the wire and otherwise unread by the page.
 
 ## Target design
 
 ### A numeraire that is real
 
 `[desk] currency` becomes what valuation is in: `Market::asset_price` asks for a path to it (direct pair, or through the connector's stable), the futures wallet is converted by its `settle`, and the check that limits the name to dollars goes. A stored row needs its currency, so a desk that changes it starts a new series rather than mixing two.
-
-### P&L parts as a list
-
-Split the fixed model into what a fill makes and what a position costs:
-
-```ts
-interface PnlPart { key: string; label: string; of: string | null; info: string }  // of: the part this one splits
-```
-
-`Snapshot.desk.parts` and a generic `values: Record<string, number | null>` on `HistoryBar`, `DayPnl` and `Summary.pnl` replace the named columns, with the old names kept as aliases for a release. The default list is today's. The perp problem (item 1) is solved here: an instrument's role becomes config, not its market's kind, so `Π` covers whatever is marked `role = "traded"` and `Hedge` whatever is `role = "hedge"`, defaulting to today's spot and perp. The store needs a `pnl_parts` table beside the `equity` columns; old rows read through the aliases.
 
 ### Engines by adapter
 
@@ -116,8 +136,8 @@ interface PnlPart { key: string; label: string; of: string | null; info: string 
 
 1. ~~Markets as data, with the aliases.~~ Done.
 2. ~~The connector split of `accounts.rs`, `market.rs` and the kline paths, still only Binance.~~ Done.
-3. Instrument roles and P&L parts, the only step that changes figures for anyone, and only for a desk that sets a role.
+3. ~~Instrument roles, the only step that changes figures for anyone, and only for a desk that sets a role.~~ Done.
 4. A second connector, chosen for having the least in common with Binance (no sub-account transfers, one margin account), to find what the trait got wrong.
 5. The real numeraire, engine adapters and the interface's words, each small after that.
 
-The mock demo moves with each step: `web/src/mock.ts` takes `?currency=`, `?hedge=0`, `?rebates=0`, `?mm=0`, `?engines=0` and `?markets=2`, the last a second perp market.
+The mock demo moves with each step: `web/src/mock.ts` takes `?currency=`, `?hedge=0`, `?rebates=0`, `?mm=0`, `?engines=0`, `?markets=2`, a second perp market, and `?perp=1`, a desk that makes markets on perps and hedges with two others (`&hedge=0`: with nothing).

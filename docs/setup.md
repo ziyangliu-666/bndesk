@@ -23,6 +23,8 @@ The manifest and icons sit behind the login too, so add the desk to a phone's ho
 
 The desk stores its figures in the SQLite file named by `db`. Five-second rows are kept for `keep_fine_days` (7) and thinned to one a minute after that; nothing older than `keep_days` (365) is kept. Market making marks each fill at `mm_horizon_s` (60) after it, one of 1, 10, 60 or 300.
 
+A desk that makes markets on perps sets `[roles] usdm = "traded"` and `role = "hedge"` on what hedges it, as in [desk.example.toml](../desk.example.toml): Trading PnL, market making, volume and inventory are then the perps', with their funding in Inventory, and Hedge is what is left. With nothing set, spot is traded and a perp hedges. Days already kept stay as they were written.
+
 A mark the desk missed because it was down at the time is filled in from Binance's klines once it is back. Days stored before that fix valued such fills at the mid of the moment; `desk recompute-mm` corrects them, and is safe to run beside the live desk:
 
 ```sh
