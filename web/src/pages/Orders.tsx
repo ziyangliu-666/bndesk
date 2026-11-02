@@ -15,7 +15,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
-import { cur, baseOf } from "../desk";
+import { cur, baseOf, isPerp, isSpot } from "../desk";
 
 const short = (s: string) => baseOf(s);
 
@@ -25,7 +25,7 @@ function useFitRange(orders: OpenOrder[]): number {
   const cur = useRef<number>(RANGES[1]);
   // what the map draws: spot orders with a known distance (an unknown one is not 0 bps)
   const d = orders
-    .filter((o) => o.venue === "spot" && o.dist_bps != null)
+    .filter((o) => isSpot(o.venue) && o.dist_bps != null)
     .map((o) => Math.abs(o.dist_bps!))
     .sort((a, b) => a - b);
   if (!d.length) return cur.current;
@@ -125,7 +125,7 @@ function SymbolCell(p: ICellRendererParams<OpenOrder>) {
   return (
     <span className="ops-sym">
       {o.symbol}
-      {o.venue === "usdm" && <span className="ops-perp">Perp</span>}
+      {isPerp(o.venue) && <span className="ops-perp">Perp</span>}
     </span>
   );
 }

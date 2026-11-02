@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { IconAlertTriangle, IconInfoCircle, IconAlertOctagon } from "@tabler/icons-react";
 import { C } from "../theme";
+import { isPerp } from "../desk";
 
 export function Panel({
   title,
@@ -78,6 +79,6 @@ export function StateTag({ state }: { state: string }) {
 /** "usdm:ETHUSDT" -> "ETHUSDT perp", "spot:ETHUSDT" -> "ETHUSDT spot". */
 export function refLabel(ref: string | null | undefined): string {
   if (!ref) return "none";
-  const [venue, sym] = ref.includes(":") ? ref.split(":", 2) : ["usdm", ref];
-  return `${sym} ${venue === "usdm" ? "perp" : "spot"}`;
+  const i = ref.indexOf(":");
+  return `${ref.slice(i + 1)} ${i < 0 || isPerp(ref.slice(0, i)) ? "perp" : "spot"}`;
 }

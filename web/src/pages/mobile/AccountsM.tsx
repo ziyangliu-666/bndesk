@@ -10,7 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
-import { cur, quoteAsset, baseOf, useDesk } from "../../desk";
+import { cur, quoteAsset, baseOf, useDesk, isSpot } from "../../desk";
 
 type Tab = "accounts" | "spot" | "futures" | "exposure";
 const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
@@ -125,7 +125,7 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
   const q = useQty();
   const t = accounts.reduce((m, a) => ({ free: m.free + a.quote_free, locked: m.locked + a.quote_locked, inv: m.inv + a.inventory_value }), { free: 0, locked: 0, inv: 0 });
   const held = useMemo(
-    () => (symbols ?? []).filter((r) => r.venue === "spot" && Math.abs(r.inv_value) >= 1).sort((a, b) => Math.abs(b.inv_value) - Math.abs(a.inv_value)),
+    () => (symbols ?? []).filter((r) => isSpot(r.venue) && Math.abs(r.inv_value) >= 1).sort((a, b) => Math.abs(b.inv_value) - Math.abs(a.inv_value)),
     [symbols],
   );
   return (
@@ -155,7 +155,7 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
               sub={`${q(r.inv_qty)} ${base}${r.avg_cost ? ` · avg ${price(r.avg_cost)}` : ""}`}
               value={<Amt v={r.inv_value} kind="full" />}
               valueSub={<Amt v={r.trading_pnl} />}
-              to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: "spot" } }}
+              to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
             />
           );
         })}

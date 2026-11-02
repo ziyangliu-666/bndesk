@@ -6,6 +6,7 @@ import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
 import { useHedgePnl } from "../../selectors";
+import { isPerp, isSpot } from "../../desk";
 
 export function NamePicker({ sel, children }: { sel: Instrument | null; children: ReactNode }) {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -25,7 +26,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
       .sort((a, b) => (hide ? 0 : Math.abs(b.inv_value) - Math.abs(a.inv_value)) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue));
     return [...(f ? [] : [null]), ...rows];
   }, [symbols, q, hide]);
-  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (r.venue === "spot" ? r.trading_pnl : 0), 0), [symbols]);
+  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (isSpot(r.venue) ? r.trading_pnl : 0), 0), [symbols]);
 
   useEffect(() => {
     if (!open) return;
@@ -80,7 +81,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
           <div className="dk-pick-list" role="listbox">
             {list.map((r, i) => {
               const on = r ? sel?.symbol === r.symbol && sel.venue === r.venue : !sel;
-              const perp = r?.venue === "usdm";
+              const perp = isPerp(r?.venue);
               const tp = r ? (perp ? hedgeOf(r) : r.trading_pnl) : deskTp;
               return (
                 <button
@@ -94,7 +95,7 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
                 >
                   <span>
                     {r ? r.symbol : "Desk"}
-                    {r?.venue === "usdm" && <span className="dk-tag">Perp</span>}
+                    {isPerp(r?.venue) && <span className="dk-tag">Perp</span>}
                   </span>
                   <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
                     {perp && <span className="dk-mk-k">hedge </span>}

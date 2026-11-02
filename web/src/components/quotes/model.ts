@@ -1,7 +1,7 @@
 // The quote map's rows and geometry, shared by the desktop map (ECharts, QuoteMap.tsx) and the light canvas
 // maps (QuoteRows: the phone's full map, the mini map, the single-row band).
 import type { OpenOrder, SymbolRow, Venue } from "../../protocol";
-import { baseOf } from "../../desk";
+import { baseOf, isSpot } from "../../desk";
 
 /** One instrument's row: the instrument and its resting orders. */
 export interface QRow {
@@ -114,8 +114,8 @@ export function ordersBy(orders: readonly OpenOrder[], account: string | null = 
 export function quoteRows(symbols: readonly SymbolRow[], orders: readonly OpenOrder[], sort: MapSort, account: string | null = null, hide = false): QRow[] {
   const by = ordersBy(orders, account);
   const rows = symbols
-    .filter((s) => s.venue === "spot" && (by.has(key(s.symbol, "spot")) || Math.abs(s.inv_value) >= 5))
-    .map((s) => ({ sym: s, orders: by.get(key(s.symbol, "spot")) ?? [] }));
+    .filter((s) => isSpot(s.venue) && (by.has(key(s.symbol, s.venue)) || Math.abs(s.inv_value) >= 5))
+    .map((s) => ({ sym: s, orders: by.get(key(s.symbol, s.venue)) ?? [] }));
   const name = (r: QRow) => r.sym.symbol;
   const busy = (a: QRow, b: QRow) => b.sym.fills_day - a.sym.fills_day || name(a).localeCompare(name(b));
   if (sort === "name") rows.sort((a, b) => name(a).localeCompare(name(b)));

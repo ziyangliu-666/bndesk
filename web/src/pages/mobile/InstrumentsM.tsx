@@ -11,7 +11,7 @@ import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
-import { cur, quoteOf, baseOf, useDesk } from "../../desk";
+import { cur, quoteOf, baseOf, useDesk, isPerp } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type Key = "fills" | "name" | "chg" | "pnl" | "inv";
@@ -23,7 +23,7 @@ const FILTERS: Record<Filter, (r: SymbolRow) => boolean> = {
   all: () => true,
   held,
   quoted,
-  perp: (r) => r.venue === "usdm",
+  perp: (r) => isPerp(r.venue),
 };
 const NO_ROWS: { symbol: string; venue: Venue }[] = [];
 
@@ -183,7 +183,7 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
   const money = useMoney();
   const hide = useHide();
   const t: Ticker24h | null = useTicker24h(r.symbol, r.venue);
-  const perp = r.venue === "usdm";
+  const perp = isPerp(r.venue);
   const chg = t?.changePct ?? null;
   // with amounts hidden every row reads the same ("flat" would tell which are held)
   const inv = !hide && Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short") + (hide ? "" : ` ${cur()}`);

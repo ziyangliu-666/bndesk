@@ -9,6 +9,7 @@ import { AccountsGrid } from "../../components/AccountsGrid";
 import { AlertsList } from "../../components/AlertsList";
 import { OrdersGrid } from "./OrdersGrid";
 import { useHide } from "../../mask";
+import { isPerp } from "../../desk";
 
 type Tab = "inventory" | "orders" | "fills" | "accounts" | "alerts";
 const TABS: Tab[] = ["inventory", "orders", "fills", "accounts", "alerts"];
@@ -32,7 +33,7 @@ export function BottomPanel({ sel }: { sel: Instrument | null }) {
           label="Instruments shown"
           options={[
             { value: "all", label: "All" },
-            { value: "one", label: sel!.symbol + (sel!.venue === "usdm" ? " Perp" : "") },
+            { value: "one", label: sel!.symbol + (isPerp(sel!.venue) ? " Perp" : "") },
           ]}
           value={scope === "one" ? "one" : "all"}
           onChange={setScope}

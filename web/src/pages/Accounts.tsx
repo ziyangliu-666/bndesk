@@ -18,7 +18,8 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
-import { cur, quoteAsset, baseOf, useDesk } from "../desk";
+import { cur, quoteAsset, baseOf, useDesk, isPerp, isSpot, spotVenue } from "../desk";
+import type { Venue } from "../protocol";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
 
@@ -35,7 +36,7 @@ function SymCell(p: ICellRendererParams<{ symbol: string; venue?: string }>) {
   return (
     <span className="ops-sym">
       {d.symbol}
-      {d.venue === "usdm" && <span className="ops-perp">Perp</span>}
+      {isPerp(d.venue) && <span className="ops-perp">Perp</span>}
     </span>
   );
 }
@@ -264,7 +265,7 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
 interface SpotRow {
   symbol: string;
   asset: string;
-  venue: "spot";
+  venue: Venue;
   amount: number;
   locked: number;
   free: number;
@@ -277,7 +278,7 @@ interface SpotRow {
 }
 
 const rowIdSpot = (p: GetRowIdParams<SpotRow>) => p.data.symbol;
-const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== quoteAsset() && selectInstrument({ symbol: e.data.symbol, venue: "spot" });
+const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== quoteAsset() && selectInstrument({ symbol: e.data.symbol, venue: e.data.venue });
 
 function useSpotRows() {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -285,15 +286,15 @@ function useSpotRows() {
   const accounts = useStore((s) => s.snap?.accounts);
   return useMemo(() => {
     const locked = new Map<string, number>();
-    for (const o of orders ?? []) if (o.venue === "spot" && o.side === "sell") locked.set(o.symbol, (locked.get(o.symbol) ?? 0) + o.qty);
+    for (const o of orders ?? []) if (isSpot(o.venue) && o.side === "sell") locked.set(o.symbol, (locked.get(o.symbol) ?? 0) + o.qty);
     const rows: SpotRow[] = (symbols ?? [])
-      .filter((s: SymbolRow) => s.venue === "spot" && Math.abs(s.inv_qty) > 0)
+      .filter((s: SymbolRow) => isSpot(s.venue) && Math.abs(s.inv_qty) > 0)
       .map((s) => {
         const l = Math.min(locked.get(s.symbol) ?? 0, s.inv_qty);
         return {
           symbol: s.symbol,
           asset: baseOf(s.symbol),
-          venue: "spot" as const,
+          venue: s.venue,
           amount: s.inv_qty,
           locked: l,
           free: s.inv_qty - l,
@@ -308,7 +309,7 @@ function useSpotRows() {
       .sort((a, b) => b.value - a.value);
     const free = (accounts ?? []).reduce((k, a) => k + a.quote_free, 0);
     const inOrders = (accounts ?? []).reduce((k, a) => k + a.quote_locked, 0);
-    const usdt: SpotRow = { symbol: quoteAsset(), asset: quoteAsset(), venue: "spot", amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
+    const usdt: SpotRow = { symbol: quoteAsset(), asset: quoteAsset(), venue: spotVenue(), amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
     return { rows, usdt };
   }, [symbols, orders, accounts]);
 }
@@ -411,9 +412,9 @@ function Spot() {
 
 // ================================ Futures ================================
 
-type PosRow = Position & { account: string; venue: "usdm" };
+type PosRow = Position & { account: string };
 const rowIdPos = (p: GetRowIdParams<PosRow>) => `${p.data.account}:${p.data.symbol}`;
-const openPos = (e: RowClickedEvent<PosRow>) => e.data && selectInstrument({ symbol: e.data.symbol, venue: "usdm" });
+const openPos = (e: RowClickedEvent<PosRow>) => e.data && selectInstrument({ symbol: e.data.symbol, venue: e.data.venue });
 
 function FuturesAccounts() {
   const accounts = useStore((s) => s.snap?.accounts);
@@ -463,7 +464,7 @@ function Futures() {
   const accounts = useStore((s) => s.snap?.accounts);
   const hide = useHide();
   const rows = useMemo<PosRow[]>(
-    () => accounts?.flatMap((a) => a.positions.map((p) => ({ ...p, account: a.label, venue: "usdm" as const }))) ?? [],
+    () => accounts?.flatMap((a) => a.positions.map((p) => ({ ...p, account: a.label }))) ?? [],
     [accounts],
   );
   const cols = useMemo<ColDef<PosRow>[]>(() => {
@@ -684,7 +685,7 @@ function FundingPanel() {
 }
 
 const rowIdLeg = (p: GetRowIdParams<HedgeLeg>) => p.data.symbol;
-const openLeg = (e: RowClickedEvent<HedgeLeg>) => e.data && selectInstrument({ symbol: e.data.symbol, venue: "usdm" });
+const openLeg = (e: RowClickedEvent<HedgeLeg>) => e.data && selectInstrument({ symbol: e.data.symbol, venue: e.data.venue });
 
 function HedgePanel() {
   const h = useStore((s) => s.snap?.exposure.hedge_day);

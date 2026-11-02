@@ -27,7 +27,7 @@ import {
 } from "../../components/ex";
 import { refLabel } from "../../components/ui";
 import { maskFormat, maskNode, useHide } from "../../mask";
-import { cur, baseOf } from "../../desk";
+import { cur, baseOf, marketTitle } from "../../desk";
 
 // research §3.2: Line 1s 1m 5m 15m 1H 4H 1D ▾(30m 1W), 1m first. No 1s: the server's kline proxy has no 1 s
 // bars (spec, Data), and the Line already draws the 1 m closes.
@@ -284,7 +284,7 @@ function Info({ inst }: { inst: Instrument }) {
   const m = (s: string) => maskNode(hide, s);
   const items: [string, ReactNode, string?][] = row
     ? [
-        ["Venue", inst.venue === "usdm" ? "USD-M perpetual" : "Spot"],
+        ["Venue", marketTitle(inst.venue)],
         ["Reference", row.reference != null ? refLabel(row.reference) : "--"],
         ["Mid", price(row.mid)],
         ["Fair", price(row.fair)],

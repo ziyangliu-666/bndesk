@@ -9,7 +9,7 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
-import { cur, baseOf, useDesk } from "../desk";
+import { cur, baseOf, useDesk, isPerp } from "../desk";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -117,7 +117,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   const m = (s: string) => maskNode(hide, s);
   const tone = (v: number | null | undefined) => (hide ? undefined : signTone(v) || undefined);
   const hedgeOf = useHedgePnl();
-  const perp = inst.venue === "usdm";
+  const perp = isPerp(inst.venue);
   const tp = row ? (perp ? hedgeOf(row) : tradingPnl(row)) : null;
   const base = baseOf(inst.symbol);
   const aside: Fact[] = [

@@ -12,7 +12,7 @@ import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./rest/ops.css";
-import { cur, baseOf } from "../../desk";
+import { cur, baseOf, isPerp, isSpot } from "../../desk";
 
 const base = (s: string) => baseOf(s);
 const MAX_ROWS = 200;
@@ -68,7 +68,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
   const from = useStore((s) => s.route);
   const [acct, setAcct] = useState(() => (from.account && all.some((a) => a.id === from.account) ? from.account : "all"));
   const [side, setSide] = useState<SideF>("all");
-  const [q, setQ] = useState(() => (from.symbol ? `${from.symbol} ${from.venue === "usdm" ? "perp" : "spot"}` : ""));
+  const [q, setQ] = useState(() => (from.symbol ? `${from.symbol} ${isPerp(from.venue) ? "perp" : "spot"}` : ""));
   const [open, setOpen] = useState<OpenOrder | null>(null);
 
   // the search and the side before the account: the account pills count what the search leaves
@@ -181,7 +181,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
               title={
                 <>
                   {sel.symbol}
-                  {sel.venue === "usdm" && <span className="r-tag">Perp</span>}
+                  {isPerp(sel.venue) && <span className="r-tag">Perp</span>}
                 </>
               }
               sub="The instrument's page"
@@ -210,7 +210,7 @@ const OrderRow = memo(
         title={
           <>
             {o.symbol}
-            {o.venue === "usdm" && <span className="r-tag">Perp</span>}
+            {isPerp(o.venue) && <span className="r-tag">Perp</span>}
             <span className={"o-side " + (o.side === "buy" ? "o-buy" : "o-sell")}>{o.side === "buy" ? "Buy" : "Sell"}</span>
           </>
         }
@@ -268,10 +268,10 @@ function Rates({ accounts }: { accounts: Account[] }) {
  *  name that some order has exactly shows only that symbol (BTC does not also match BTCDOM). */
 function matcher(q: string, orders: OpenOrder[]): (o: OpenOrder) => boolean {
   const words = q.trim().toUpperCase().split(/\s+/).filter(Boolean);
-  const venue = words.includes("PERP") ? "usdm" : words.includes("SPOT") ? "spot" : null;
+  const kind = words.includes("PERP") ? isPerp : words.includes("SPOT") ? isSpot : null;
   const k = words.filter((w) => w !== "PERP" && w !== "SPOT").join(" ");
   const exact = k && orders.some((o) => base(o.symbol) === k);
   return (o) =>
-    (!venue || o.venue === venue) &&
+    (!kind || kind(o.venue)) &&
     (!k || (exact ? base(o.symbol) === k : o.symbol.includes(k) || o.account.toUpperCase().includes(k)));
 }

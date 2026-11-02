@@ -11,7 +11,7 @@ import { fBps, fPrice, fTime, fUsd, DEFAULT_COL } from "../grid";
 import { qty } from "../format";
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import type { Option } from "./ex";
-import { cur } from "../desk";
+import { cur, isPerp } from "../desk";
 
 function SideCell(p: ICellRendererParams<Fill>) {
   const f = p.data;
@@ -67,7 +67,7 @@ export function FillsTape({ mode = "net", symbol = null }: { mode?: MarkoutBasis
           p.data ? (
             <span className="sym">
               {p.data.symbol}
-              {p.data.venue === "usdm" && <span className="dk-tag">Perp</span>}
+              {isPerp(p.data.venue) && <span className="dk-tag">Perp</span>}
               {p.data.conversion && (
                 <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">
                   Conv

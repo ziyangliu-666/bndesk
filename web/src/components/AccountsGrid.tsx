@@ -9,7 +9,8 @@ import { flexCols } from "../grid";
 import { int, num, pct } from "../format";
 import { Meter, StateTag } from "./ui";
 import { amount, hideNow, money } from "../mask";
-import { cur, quoteAsset, useDesk } from "../desk";
+import { cur, quoteAsset, useDesk, markets } from "../desk";
+import type { Venue } from "../protocol";
 
 type Row = Account & { _total?: boolean };
 
@@ -72,7 +73,7 @@ function StreamCell(p: ICellRendererParams<Row>) {
   return <StateTag state={p.data.user_stream} />;
 }
 
-function feeFor(venue: "spot" | "usdm") {
+function feeFor(venue: Venue) {
   return function FeeCell(p: ICellRendererParams<Row>) {
     const a = p.data;
     if (!a || a._total) return null;
@@ -86,8 +87,8 @@ function feeFor(venue: "spot" | "usdm") {
     );
   };
 }
-const FeeSpot = feeFor("spot");
-const FeeUsdm = feeFor("usdm");
+const feeCells = new Map<Venue, ReturnType<typeof feeFor>>();
+const feeCell = (venue: Venue) => feeCells.get(venue) ?? feeCells.set(venue, feeFor(venue)).get(venue)!;
 
 function total(rows: Account[]): Row {
   const sum = (k: keyof Account) => rows.reduce((a, r) => a + (r[k] as number), 0);
@@ -159,8 +160,9 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
         ...(d.hedge ? [n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 100, valueFormatter: futOnly }),] : []),
         ...(d.hedge ? [n({ field: "fut_upnl", headerName: "Futures uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 96, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),] : []),
         open,
-        { colId: "fee_spot", headerName: "Spot fee (bps)", width: 96, cellRenderer: FeeSpot, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "Spot commission, maker / taker, bps of notional" },
-        ...(d.hedge ? [{ colId: "fee_usdm", headerName: "USD-M fee (bps)", width: 104, cellRenderer: FeeUsdm, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "USD-M futures commission, maker / taker, bps of notional" },] : []),
+        ...markets()
+          .filter((m) => m.kind === "spot" || d.hedge)
+          .map((m) => ({ colId: `fee_${m.id}`, headerName: `${m.name} fee (bps)`, width: m.kind === "spot" ? 96 : 104, cellRenderer: feeCell(m.id), sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: `${m.name} ${m.kind === "spot" ? "" : "futures "}commission, maker / taker, bps of notional` })),
         { ...stream, width: 72 },
         n({ field: "updated", headerName: "Updated", headerTooltip: "Time since the account was last updated", width: 70, cellClass: "num", valueFormatter: (p) => (p.data?._total ? "" : fAge(p)), hide: !wide }),
       ];

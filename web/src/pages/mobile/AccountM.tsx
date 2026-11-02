@@ -9,7 +9,7 @@ import { FillRow, TIP, useFillSheet } from "./shared";
 import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
-import { cur, deskNow, quoteAsset } from "../../desk";
+import { cur, deskNow, quoteAsset, isPerp, marketOf } from "../../desk";
 
 const FILLS = 30;
 type Tab = "balance" | "instruments" | "orders" | "fills";
@@ -137,11 +137,11 @@ function Instruments({ id }: { id: string }) {
     const total = xs.reduce((t, x) => t + x.volume, 0);
     xs = xs.map((x) => ({ ...x, share: total > 0 ? x.volume / total : 0 })).sort((p, q) => q.volume - p.volume);
     for (const r of symbols ?? []) {
-      if (r.venue !== "usdm" || !(r.fills_day > 0)) continue;
-      if (xs.some((x) => x.venue === "usdm" && x.symbol === r.symbol)) continue;
+      if (!isPerp(r.venue) || !(r.fills_day > 0)) continue;
+      if (xs.some((x) => isPerp(x.venue) && x.symbol === r.symbol)) continue;
       const who = (holders ?? []).filter((h) => h.positions.some((p) => p.symbol === r.symbol));
       if (who.length !== 1 || who[0]!.id !== id) continue;
-      xs.push({ symbol: r.symbol, venue: "usdm", n: r.fills_day, volume: r.volume_day, share: null, edge: undefined });
+      xs.push({ symbol: r.symbol, venue: r.venue, n: r.fills_day, volume: r.volume_day, share: null, edge: undefined });
     }
     return xs;
   }, [allFills, symbols, holders, id]);
@@ -158,7 +158,7 @@ function Instruments({ id }: { id: string }) {
           title={
             <>
               {x.symbol}
-              {x.venue === "usdm" && <span className="r-tag">Perp</span>}
+              {isPerp(x.venue) && <span className="r-tag">Perp</span>}
             </>
           }
           sub={x.share != null ? `${int(x.n)} fills · ${pct(x.share, 0)} of volume` : `${int(x.n)} fills`}
@@ -204,7 +204,7 @@ function Orders({ id }: { id: string }) {
             dense
             title={
               <>
-                {f.venue === "spot" ? "Spot" : "USD-M"}
+                {marketOf(f.venue)?.name ?? f.venue}
                 {f.changed && <span className="r-tag warn">Changed</span>}
               </>
             }

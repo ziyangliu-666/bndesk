@@ -1,3 +1,4 @@
+import type { Venue } from "./protocol";
 // REST reads for the history page. Same-origin; the session cookie rides along.
 
 export interface HistBar {
@@ -32,7 +33,7 @@ export interface HistFill {
   price: number;
   qty: number;
   account: string;
-  venue: "spot" | "usdm";
+  venue: Venue;
   maker: boolean;
 }
 /** [t, o, h, l, c, v] */

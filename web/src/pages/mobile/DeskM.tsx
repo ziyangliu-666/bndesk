@@ -17,7 +17,7 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
-import { cur, useDesk } from "../../desk";
+import { cur, useDesk, isPerp } from "../../desk";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
@@ -277,7 +277,7 @@ const Movers = memo(function Movers({ symbols }: { symbols: SymbolRow[] | undefi
       }
     >
       {list.map((r) => {
-        const perp = r.venue === "usdm";
+        const perp = isPerp(r.venue);
         return (
           <ListRow
             key={r.venue + r.symbol}

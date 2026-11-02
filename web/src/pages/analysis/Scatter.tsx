@@ -8,9 +8,10 @@ import { C } from "../../theme";
 import { maskText } from "../../mask";
 import type { MarkoutInst } from "../../protocol";
 import { niceTicks } from "./scale";
+import { isPerp } from "../../desk";
 
 export const instKey = (r: { symbol: string; venue: string }) => r.venue + ":" + r.symbol;
-const base = (r: MarkoutInst) => r.symbol.replace(/(USDT|USDC|FDUSD)$/, "") + (r.venue === "usdm" ? " perp" : "");
+const base = (r: MarkoutInst) => r.symbol.replace(/(USDT|USDC|FDUSD)$/, "") + (isPerp(r.venue) ? " perp" : "");
 
 export function Scatter({
   rows,
@@ -144,7 +145,7 @@ export function Scatter({
           {cur ? (
             <>
               <span className="ex-lg-it">
-                <span className="ex-lg-v an-lg-h">{cur.symbol + (cur.venue === "usdm" ? " perp" : "")}</span>
+                <span className="ex-lg-v an-lg-h">{cur.symbol + (isPerp(cur.venue) ? " perp" : "")}</span>
               </span>
               <span className="ex-lg-it">
                 <span className="ex-lg-l">Edge</span>

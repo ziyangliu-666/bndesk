@@ -6,7 +6,7 @@ import { useInstFills } from "./instFills";
 import { bps, compact, hms, int, price, qtyDecimals, qtyFixed } from "../../format";
 import type { Fill } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
-import { quoteOf, baseOf } from "../../desk";
+import { quoteOf, baseOf, isPerp, spotVenue } from "../../desk";
 
 const N = 80;
 
@@ -35,7 +35,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
   // instrument's fills (instFills.ts: /api/fills from today's start, fetched again, so a failed load retries
   // and the day roll starts a new day)
   const short = !!inst && fills != null && tape.length < N && (fillsDay ?? 0) > tape.length;
-  const own = useInstFills(short ? inst!.symbol : null, inst?.venue ?? "spot", short && dayStart ? dayStart : null);
+  const own = useInstFills(short ? inst!.symbol : null, inst?.venue ?? spotVenue(), short && dayStart ? dayStart : null);
   const list: ShownFill[] = useMemo(() => {
     if (!short || !own.fills.length) return tape;
     const oldest = tape.length ? tape[tape.length - 1]!.ts : Infinity;
@@ -120,7 +120,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: S
         <>
           <span className="dk-tr-sym">
             {baseOf(f.symbol)}
-            {f.venue === "usdm" && <span className="dk-tag">Perp</span>}
+            {isPerp(f.venue) && <span className="dk-tag">Perp</span>}
             {f.conversion && <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">Conv</span>}
           </span>
           <span className={"fig " + side}>{price(f.price)}</span>

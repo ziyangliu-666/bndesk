@@ -17,18 +17,14 @@ import { Scatter, instKey } from "./analysis/Scatter";
 import { Spark } from "./analysis/Spark";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
-import { cur } from "../desk";
+import { cur, isPerp, kindWord, markets } from "../desk";
 
 const SIDES = [
   { value: "all" as SideF, label: "All" },
   { value: "buy" as SideF, label: "Buys" },
   { value: "sell" as SideF, label: "Sells" },
 ];
-const VENUES = [
-  { value: "all" as VenueF, label: "All" },
-  { value: "spot" as VenueF, label: "Spot" },
-  { value: "usdm" as VenueF, label: "Perp" },
-];
+const venues = () => [{ value: "all" as VenueF, label: "All" }, ...markets().map((m) => ({ value: m.id as VenueF, label: kindWord(m) }))];
 const WEIGHTS = [
   { value: "notional" as Weight, label: "By notional" },
   { value: "fill" as Weight, label: "By fill" },
@@ -62,7 +58,7 @@ export function Markouts() {
             />
           </Group>
           <Group label="Venue">
-            <TextToggle label="Venue" options={VENUES} value={v.venue} onChange={c.setVenue} />
+            <TextToggle label="Venue" options={venues()} value={v.venue} onChange={c.setVenue} />
           </Group>
           <Group label="Weight">
             <TextToggle label="Weight" options={WEIGHTS} value={v.weight} onChange={c.setWeight} />
@@ -218,7 +214,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
       cell: (x) => (
         <span className="an-sym">
           {x.symbol}
-          {x.venue === "usdm" && <span className="an-tag">Perp</span>}
+          {isPerp(x.venue) && <span className="an-tag">Perp</span>}
         </span>
       ),
       sort: (x) => x.symbol,

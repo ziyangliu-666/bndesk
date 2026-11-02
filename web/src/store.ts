@@ -319,7 +319,7 @@ const DESK_SYMBOL_KEY = "desk.deskSymbol";
 function savedDeskSymbol(): Instrument | null {
   try {
     const v = JSON.parse((typeof localStorage !== "undefined" && localStorage.getItem(DESK_SYMBOL_KEY)) || "null") as Instrument | null;
-    return v && typeof v.symbol === "string" && (v.venue === "spot" || v.venue === "usdm") ? { symbol: v.symbol, venue: v.venue } : null;
+    return v && typeof v.symbol === "string" && typeof v.venue === "string" ? { symbol: v.symbol, venue: v.venue } : null;
   } catch {
     return null;
   }
@@ -426,7 +426,8 @@ export function tabOf(r: Route): Tab {
 /** A route below a tab's own page: it gets a back button, and opening it pushes a history entry. */
 export const isSub = (r: Route) => r.detail != null || !["desk", "markets", "assets", "history", "more"].includes(r.page);
 
-const venueOf = (v: string | undefined): Venue => (v === "usdm" || v === "perp" ? "usdm" : "spot");
+/** A link's venue: a market's id, "perp" for Binance's USD-M as links have said; none or nonsense is spot. */
+const venueOf = (v: string | undefined): Venue => (v === "perp" ? "usdm" : v && /^[a-z0-9-]+$/.test(v) ? v : "spot");
 const enc = encodeURIComponent;
 
 export function routeFromHash(hash: string): Route {

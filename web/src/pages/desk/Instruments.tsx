@@ -8,7 +8,7 @@ import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
 import { maskNode, useHide } from "../../mask";
 import { tradingPnl, useHedgePnl } from "../../selectors";
-import { cur, useDesk } from "../../desk";
+import { cur, useDesk, isPerp } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -30,7 +30,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
     const out = (rows ?? []).filter(
       (r) =>
         (!qq || r.symbol.includes(qq)) &&
-        (filter === "all" || (filter === "held" && held(r)) || (filter === "quoted" && quoted(r)) || (filter === "perp" && r.venue === "usdm")),
+        (filter === "all" || (filter === "held" && held(r)) || (filter === "quoted" && quoted(r)) || (filter === "perp" && isPerp(r.venue))),
     );
     // Hide amounts: a sort by a hidden figure would give its ranking away, so the list keeps the names' order
     const k = hide && sort.k !== "symbol" ? "symbol" : sort.k;
@@ -102,7 +102,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       </div>
       <div className="dk-mk-body" ref={body}>
         {list.map((r) => {
-          const perp = r.venue === "usdm";
+          const perp = isPerp(r.venue);
           const tp = perp ? hedgeOf(r) : r.trading_pnl;
           const on = sel?.symbol === r.symbol && sel.venue === r.venue;
           return (
@@ -114,7 +114,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
             >
               <span className="dk-mk-sym">
                 {r.symbol}
-                {r.venue === "usdm" && <span className="dk-tag">Perp</span>}
+                {isPerp(r.venue) && <span className="dk-tag">Perp</span>}
               </span>
               <span className="fig">{maskNode(hide, usd(r.inv_value))}</span>
               <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>

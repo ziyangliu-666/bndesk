@@ -13,7 +13,7 @@ import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
-import { cur, quoteOf, baseOf } from "../../desk";
+import { cur, quoteOf, baseOf, isPerp, isSpot } from "../../desk";
 
 type H = "1" | "10" | "60" | "300";
 const HS: H[] = ["1", "10", "60", "300"];
@@ -49,7 +49,7 @@ export function InstrumentM({ symbol, venue }: { symbol: string; venue: Venue })
     return (
       <Section>
         <div className="m-empty">
-          {symbol} {venue === "usdm" ? "perp " : ""}is not tracked right now.
+          {symbol} {isPerp(venue) ? "perp " : ""}is not tracked right now.
         </div>
       </Section>
     );
@@ -58,7 +58,7 @@ export function InstrumentM({ symbol, venue }: { symbol: string; venue: Venue })
     <>
       <Header r={r} t={t} />
       <OurStats r={r} />
-      {venue === "spot" && <Band symbol={symbol} venue={venue} />}
+      {isSpot(venue) && <Band symbol={symbol} venue={venue} />}
       <section className="dk-chart-sec in-chart-sec">
         <InstChart symbol={symbol} venue={venue} />
       </section>
@@ -94,7 +94,7 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
         <div className="in-mid-sub m-fig">
           {/* the big figure is the book's mid: the chart's last close and the fair (legend) are the other two prices */}
           <span>Mid</span>
-          {r.venue === "usdm" && <span className="in-venue">Perp</span>}
+          {isPerp(r.venue) && <span className="in-venue">Perp</span>}
           <span>
             24h <span className="in-venue">{pctText(chg)}</span>
           </span>
@@ -130,7 +130,7 @@ function OurStats({ r }: { r: SymbolRow }) {
   const funding = useStore((s) => s.snap?.exposure.funding.find((f) => f.symbol === r.symbol));
   const hide = useHide();
   const asset = baseOf(r.symbol);
-  const perp = r.venue === "usdm";
+  const perp = isPerp(r.venue);
   const items: { label: string; value: ReactNode }[] = perp
     ? [
         { label: `Position (${asset})`, value: q(r.inv_qty, true) },
@@ -329,7 +329,7 @@ function InfoTab({ r }: { r: SymbolRow }) {
     return null;
   });
   useNow(5000);
-  const perp = r.venue === "usdm";
+  const perp = isPerp(r.venue);
   const items: KVItem[] = [
     { label: perp ? "Notional" : "Inventory value", value: money(r.inv_value, "usd") },
     { label: "Market making", value: <Money v={r.mm_pnl} />, info: `Each fill against the mid 60 s later, minus fees, ${cur()}.` },

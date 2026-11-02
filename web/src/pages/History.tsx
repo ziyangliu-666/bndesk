@@ -40,7 +40,7 @@ import {
 } from "./history/data";
 import "./history/history.css";
 import { useInstFills } from "./desk/instFills";
-import { cur } from "../desk";
+import { cur, isPerp, spotVenue } from "../desk";
 
 const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
@@ -54,7 +54,7 @@ const KLINE_EAGER = 5_000;
 function savedInst(): { symbol: string; venue: Venue } | null {
   try {
     const v = JSON.parse(localStorage.getItem(INST_KEY) ?? "null") as { symbol?: string; venue?: string } | null;
-    return v?.symbol ? { symbol: v.symbol, venue: v.venue === "usdm" ? "usdm" : "spot" } : null;
+    return v?.symbol ? { symbol: v.symbol, venue: typeof v.venue === "string" ? v.venue : spotVenue() } : null;
   } catch {
     return null;
   }
@@ -141,7 +141,7 @@ export function History() {
   // ---- instrument ----
   const barsFor = (start: number | null) => (start == null || dayStart == null ? 0 : Math.ceil((dayStart + DAY - start) / IV_MS[iv]));
   const nBars = Math.min(MAX_KLINES, barsFor(from));
-  const kl = useKlines(inst && nBars ? inst.symbol : null, inst?.venue ?? "spot", iv as KInterval, {
+  const kl = useKlines(inst && nBars ? inst.symbol : null, inst?.venue ?? spotVenue(), iv as KInterval, {
     bars: nBars,
     // no further back than "All" reaches: there the coarse intervals have every bar long before this many
     eager: Math.min(KLINE_EAGER, dayStart == null ? 0 : barsFor(rangeFrom("all", dayStart))),
@@ -155,7 +155,7 @@ export function History() {
   const onViewStart = (t: number) => {
     if (fillsFrom != null && t < fillsFrom) setSeen({ key: instKey, t: Math.floor(t / DAY) * DAY - 7 * DAY });
   };
-  const allFills = useInstFills(inst?.symbol ?? null, inst?.venue ?? "spot", inst ? fillsFrom : null);
+  const allFills = useInstFills(inst?.symbol ?? null, inst?.venue ?? spotVenue(), inst ? fillsFrom : null);
   const fills = useMemo(() => {
     const start = from ?? 0;
     return { ...allFills, fills: allFills.fills.length && allFills.fills[0]!.t < start ? allFills.fills.filter((f) => f.t >= start) : allFills.fills };
@@ -240,7 +240,7 @@ export function History() {
   ];
   const span = from == null || dayStart == null ? "" : `${ymd(range === "all" && desk.bars[0] ? desk.bars[0].t : from)} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
 
-  const instTitle = inst ? `${inst.symbol}${inst.venue === "usdm" ? " Perp" : ""} · ${RANGE_LABEL[range]}` : "";
+  const instTitle = inst ? `${inst.symbol}${isPerp(inst.venue) ? " Perp" : ""} · ${RANGE_LABEL[range]}` : "";
   return (
     <div className="page hx-page">
       <section className="panel hx-chart">

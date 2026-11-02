@@ -11,7 +11,7 @@ import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, fVol, signCls, DEFA
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import { refLabel } from "./ui";
 import { hedgePnl, tradingPnl, useLegPnl } from "../selectors";
-import { cur, useDesk } from "../desk";
+import { cur, useDesk, isPerp, isSpot, spotVenue } from "../desk";
 
 /** A row, with its hedge leg's P&L today (perps) put in the row: AG Grid refreshes a row whose data changed. */
 type Row = SymbolRow & { _total?: boolean; _hedge?: number | null };
@@ -24,7 +24,7 @@ function SymbolCell(p: ICellRendererParams<Row>) {
   return (
     <span className={"sym" + (r.dust ? " dust" : "")} title={tip || undefined}>
       {r.symbol}
-      {r.venue === "usdm" && <span className="dk-tag">Perp</span>}
+      {isPerp(r.venue) && <span className="dk-tag">Perp</span>}
     </span>
   );
 }
@@ -45,7 +45,7 @@ function totals(rows: Row[]): Row {
   let asks = 0;
   const w = { mk10: [0, 0], edge: [0, 0] };
   for (const r of rows) {
-    if (r.venue === "usdm") {
+    if (isPerp(r.venue)) {
       if (r._hedge != null) hedge = (hedge ?? 0) + r._hedge;
       continue;
     }
@@ -70,7 +70,7 @@ function totals(rows: Row[]): Row {
   return {
     _total: true,
     symbol: "Total",
-    venue: "spot",
+    venue: spotVenue(),
     reference: null,
     mid: null,
     ref_mid: null,
@@ -116,7 +116,7 @@ const money = (f: VF): VF => maskVF(f);
 const moneyCls = maskCls<CellClassParams<Row>>(signCls);
 const plainCls = maskCls();
 /** A spot figure: a perp has none (its P&L is the hedge leg's), so `--`, not 0.00. */
-const spotOnly = (k: "mm_pnl" | "inv_pnl") => (p: ValueGetterParams<Row>) => (p.data && (p.data._total || p.data.venue === "spot") ? p.data[k] : null);
+const spotOnly = (k: "mm_pnl" | "inv_pnl") => (p: ValueGetterParams<Row>) => (p.data && (p.data._total || isSpot(p.data.venue)) ? p.data[k] : null);
 /** Trading PnL: spot only (a perp is the hedge: `--`); the total row carries the sum. */
 const pnlOf = (p: ValueGetterParams<Row>) => (p.data ? (p.data._total ? p.data.trading_pnl : tradingPnl(p.data)) : null);
 /** Hedge: a perp's leg today; the total row the legs' sum; spot rows have none. */
@@ -205,7 +205,7 @@ export function SymbolsGrid({ selected, hideDust = false }: { selected?: Instrum
     () =>
       (all ?? [])
         .filter((r) => !hideDust || !r.dust || r.fills_day > 0)
-        .map((r) => (r.venue === "usdm" ? { ...r, _hedge: hedgePnl(r, legs) } : r)),
+        .map((r) => (isPerp(r.venue) ? { ...r, _hedge: hedgePnl(r, legs) } : r)),
     [all, hideDust, legs],
   );
   // new column definitions when Hide amounts flips: the cell classes (muted, no sign colour) follow

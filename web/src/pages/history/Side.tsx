@@ -10,7 +10,7 @@ import { daySummary, sumDays, summaryNote, type DayRow, type Part } from "./data
 import { maskText, qtyText } from "../../mask";
 import { SeriesKey } from "../../components/ex";
 import { hedgePnl, useLegPnl } from "../../selectors";
-import { cur, useDesk } from "../../desk";
+import { cur, useDesk, isPerp } from "../../desk";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
@@ -257,7 +257,7 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
   const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   const dash = loading;
   const legs = useLegPnl();
-  const perp = today?.venue === "usdm";
+  const perp = isPerp(today?.venue);
   const tp = today ? (perp ? hedgePnl(today, legs) : today.trading_pnl) : null;
   return (
     <>

@@ -11,7 +11,7 @@ import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
 import { Sec, Stats } from "./rest/ui";
-import { cur, quoteAsset, baseOf } from "../../desk";
+import { cur, quoteAsset, baseOf, isPerp, isSpot, marketOf, spotVenue } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -88,14 +88,15 @@ function instrumentsOf(a: Alert, snap: Snapshot): { list: { symbol: string; venu
       more = Number(m[1]);
       part = part.slice(0, m.index);
     }
-    const venue: Venue = part.includes("(usdm)") ? "usdm" : "spot";
-    const symbol = part.replace("(usdm)", "").trim().split(" ")[0]!;
+    const named = /\(([\w-]+)\)/.exec(part); // the market after a symbol: "ETHUSDT (usdm)"
+    const venue: Venue = named && marketOf(named[1]) ? named[1]! : spotVenue();
+    const symbol = (named && marketOf(named[1]) ? part.replace(named[0], "") : part).trim().split(" ")[0]!;
     if (!symbol) continue;
     if (snap.symbols.some((s) => s.symbol === symbol && s.venue === venue)) list.push({ symbol, venue });
     else {
       // dust and the mock name the asset ("0.31 DOT"); find its USDT pair
-      const hit = snap.symbols.find((s) => s.venue === "spot" && part.split(" ").some((w) => w && s.symbol === w + quoteAsset()));
-      if (hit) list.push({ symbol: hit.symbol, venue: "spot" });
+      const hit = snap.symbols.find((s) => isSpot(s.venue) && part.split(" ").some((w) => w && s.symbol === w + quoteAsset()));
+      if (hit) list.push({ symbol: hit.symbol, venue: hit.venue });
     }
   }
   return { list, more };
@@ -195,7 +196,7 @@ function Subject({ a }: { a: Alert }) {
           title={
             <>
               {symbol}
-              {venue === "usdm" && <Tag>Perp</Tag>}
+              {isPerp(venue) && <Tag>Perp</Tag>}
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol, venue } }}
@@ -424,7 +425,7 @@ function InstrumentsEv({ a, snap, dust }: { a: Alert; snap: Snapshot; dust: bool
             title={
               <>
                 {symbol}
-                {venue === "usdm" && <Tag>Perp</Tag>}
+                {isPerp(venue) && <Tag>Perp</Tag>}
               </>
             }
             subtitle={
@@ -613,7 +614,7 @@ function FeesEv({ acct }: { acct: Account }) {
           dense
           title={
             <>
-              {f.venue === "usdm" ? "USD-M" : "Spot"}
+              {marketOf(f.venue)?.name ?? f.venue}
               {f.changed && <Tag tone="warn">changed</Tag>}
             </>
           }
@@ -645,7 +646,7 @@ function InventoryEv({ a, snap }: { a: Alert; snap: Snapshot }) {
   const money = useMoney();
   const named = instrumentsOf(a, snap).list.map((x) => x.symbol);
   const top = snap.symbols
-    .filter((s) => s.venue === "spot" && Math.abs(s.inv_value) > 0)
+    .filter((s) => isSpot(s.venue) && Math.abs(s.inv_value) > 0)
     .sort((x, y) => (named.includes(y.symbol) ? 1 : 0) - (named.includes(x.symbol) ? 1 : 0) || Math.abs(y.inv_value) - Math.abs(x.inv_value))
     .slice(0, 5);
   return (
@@ -657,7 +658,7 @@ function InventoryEv({ a, snap }: { a: Alert; snap: Snapshot }) {
           title={s.symbol}
           tone={named.includes(s.symbol) ? "warn" : undefined}
           primary={<Money v={s.inv_value} kind="short" />}
-          to={{ page: "desk", detail: { kind: "instrument", symbol: s.symbol, venue: "spot" } }}
+          to={{ page: "desk", detail: { kind: "instrument", symbol: s.symbol, venue: s.venue } }}
         />
       ))}
     </Section>

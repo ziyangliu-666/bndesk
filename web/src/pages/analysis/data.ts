@@ -6,11 +6,12 @@ import { getJSON } from "../../api";
 import { usePageVisible } from "../../hooks";
 import { useExPref } from "../../components/ex";
 import type { MarkoutLine, MarkoutReport } from "../../protocol";
+import { markets } from "../../desk";
 
 export type Ref = "net" | "fast" | "raw";
 export type SideF = "all" | "buy" | "sell";
 export type Weight = "notional" | "fill";
-export type VenueF = "all" | "spot" | "usdm";
+export type VenueF = string; // "all" or a market's id
 
 export interface View {
   ref: Ref;
@@ -36,7 +37,7 @@ export function useView(id: string) {
   const [ref, setRef] = useExPref<Ref>(id, "ref", "net", ["net", "fast", "raw"]);
   const [side, setSide] = useExPref<SideF>(id, "side", "all", ["all", "buy", "sell"]);
   const [account, setAccount] = useExPref<string>(id, "account", "");
-  const [venue, setVenue] = useExPref<VenueF>(id, "venue", "all", ["all", "spot", "usdm"]);
+  const [venue, setVenue] = useExPref<VenueF>(id, "venue", "all", ["all", ...markets().map((m) => m.id)]);
   const [weight, setWeight] = useExPref<Weight>(id, "weight", "notional", ["notional", "fill"]);
   const [h, setH] = useExPref<number>(id, "h", 10);
   const view: View = { ref, side, account, venue, weight, h };

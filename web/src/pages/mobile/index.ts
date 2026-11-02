@@ -3,6 +3,7 @@ import { lazyPage, type LazyPage } from "../../lazyPage";
 import type { Detail, Page, Route } from "../../store";
 import type { Snapshot } from "../../protocol";
 import { RULES, levelWord } from "./rules";
+import { isPerp } from "../../desk";
 
 // The phone's pages, one lazy chunk each. A page agent owns its own file; this table only maps routes to
 // them. A detail page gets its detail's fields as props (InstrumentM gets { symbol, venue }, and so on).
@@ -65,9 +66,9 @@ export function titleOf(r: Route, snap: Snapshot | null): [string, string?] {
   if (!d) return [PAGES[r.page].title];
   switch (d.kind) {
     case "instrument":
-      return [d.symbol, d.venue === "usdm" ? "perp" : undefined];
+      return [d.symbol, isPerp(d.venue) ? "perp" : undefined];
     case "history-instrument":
-      return [d.symbol, d.venue === "usdm" ? "perp history" : "history"];
+      return [d.symbol, isPerp(d.venue) ? "perp history" : "history"];
     case "account":
       return [snap?.accounts.find((a) => a.id === d.id)?.label ?? d.id, "account"];
     case "day":

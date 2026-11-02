@@ -8,6 +8,7 @@
 // page and the websocket agree.
 import type {
   Desk,
+  Market,
   Account,
   AccountSeries,
   Alert,
@@ -259,8 +260,12 @@ const activityNow = () => minuteActivity(minuteOf(now));
 // ---- how the desk is set up: `?currency=USD` names the figures otherwise; `?hedge=0&rebates=0&mm=0&engines=0` is a
 // desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures) ----
 const params = new URLSearchParams(location.search);
+const MARKETS: Market[] = [
+  { id: "spot", exchange: "Binance", kind: "spot", name: "Spot" },
+  { id: "usdm", exchange: "Binance", kind: "perp", name: "USD-M" },
+];
 const on = (k: string) => params.get(k) !== "0";
-const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", hedge: on("hedge"), rebates: on("rebates"), mm: on("mm") };
+const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", markets: MARKETS, hedge: on("hedge"), rebates: on("rebates"), mm: on("mm") };
 
 /** What a message says on a desk without the parts `DESK` leaves out. */
 function shaped<T extends Partial<Snapshot>>(m: T): T {
@@ -1177,6 +1182,7 @@ function account(a: (typeof ACCOUNTS)[number]): Account {
     positions: isMain
       ? legs.map((l) => ({
           symbol: l.symbol,
+          venue: "usdm",
           amt: l.q,
           entry: l.entry,
           mark: legMark(l),
@@ -1259,6 +1265,7 @@ function exposure(acc: Account[]): Exposure {
       net: drift + hedge,
       legs: legs.map((l) => ({
         symbol: l.symbol,
+        venue: "usdm",
         qty0: l.q0,
         qty: l.q,
         mark0: l.mark0,

@@ -5,7 +5,7 @@ import type { Fill, HedgeLeg, OpenOrder, SymbolRow, Venue } from "./protocol";
 import { serverNow, useStore } from "./store";
 import { int } from "./format";
 import { maskText, money } from "./mask";
-import { cur } from "./desk";
+import { cur, isPerp, spotVenue } from "./desk";
 
 /**
  * "Trading PnL" is market making + inventory PnL, fees included, and never the hedge, on every page and size.
@@ -14,18 +14,18 @@ import { cur } from "./desk";
  * desk's Day PnL = the Trading PnLs + the hedge legs + rebates + other.
  */
 export function tradingPnl(r: SymbolRow): number | null {
-  return r.venue === "usdm" ? null : r.trading_pnl;
+  return isPerp(r.venue) ? null : r.trading_pnl;
 }
 
 /** A perp's hedge leg P&L today (null for spot, and for a perp with no leg today). */
 export function hedgePnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number | null {
-  return r.venue === "usdm" ? (legs?.get(r.symbol) ?? null) : null;
+  return isPerp(r.venue) ? (legs?.get(r.symbol) ?? null) : null;
 }
 
 /** What an instrument made today, whichever kind it is: a spot market's Trading PnL, a perp's hedge leg.
  *  For rankings across both (top movers, the marquee), always shown with its kind. */
 export function instPnl(r: SymbolRow, legs: ReadonlyMap<string, number | null> | null | undefined): number {
-  return (r.venue === "usdm" ? hedgePnl(r, legs) : r.trading_pnl) ?? 0;
+  return (isPerp(r.venue) ? hedgePnl(r, legs) : r.trading_pnl) ?? 0;
 }
 
 const NO_LEGS: ReadonlyMap<string, number | null> = new Map();
@@ -72,7 +72,7 @@ export function busiest(
   fills: readonly Fill[],
   n: number,
   now: number,
-  venue: Venue | null = "spot",
+  venue: Venue | null = spotVenue(),
 ): string[] {
   const nOrders = new Map<string, number>();
   for (const o of orders) nOrders.set(key(o.symbol, o.venue), (nOrders.get(key(o.symbol, o.venue)) ?? 0) + 1);
@@ -100,7 +100,7 @@ const RERANK_MS = 30_000;
  * live list does not reshuffle under the finger. Returns `"<venue>:<SYMBOL>"` keys; pair with the live rows
  * (QuoteMapMini does).
  */
-export function useBusiest(n: number, venue: Venue | null = "spot"): string[] {
+export function useBusiest(n: number, venue: Venue | null = spotVenue()): string[] {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), RERANK_MS);

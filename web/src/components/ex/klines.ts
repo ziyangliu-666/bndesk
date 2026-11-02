@@ -114,10 +114,12 @@ async function loadBars(symbol: string, venue: Venue, interval: KInterval, from:
   }
 }
 
-function streamUrl(symbol: string, venue: Venue, iv: KInterval): string {
+/** Binance's own kline socket, for its two markets: a market with none has its candle follow the desk's mid. */
+function streamUrl(symbol: string, venue: Venue, iv: KInterval): string | null {
   const s = `${symbol.toLowerCase()}@kline_${iv}`;
   // USD-M's market-data streams moved under /market (DESIGN.md: bookTicker under /public, the rest /market)
-  return venue === "spot" ? `wss://stream.binance.com:9443/ws/${s}` : `wss://fstream.binance.com/market/ws/${s}`;
+  if (venue === "spot") return `wss://stream.binance.com:9443/ws/${s}`;
+  return venue === "usdm" ? `wss://fstream.binance.com/market/ws/${s}` : null;
 }
 
 /**
@@ -204,9 +206,10 @@ export function useKlines(symbol: string | null, venue: Venue, interval: KInterv
 
     // ---- the forming candle: Binance's stream ----
     const openStream = () => {
-      if (done || !useStream || typeof WebSocket === "undefined") return;
+      const url = streamUrl(symbol, venue, interval);
+      if (done || !useStream || !url || typeof WebSocket === "undefined") return;
       try {
-        ws = new WebSocket(streamUrl(symbol, venue, interval));
+        ws = new WebSocket(url);
       } catch {
         return;
       }

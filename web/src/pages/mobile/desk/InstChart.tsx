@@ -24,7 +24,7 @@ import { C, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
 import type { Venue } from "../../../protocol";
 import { maskText } from "../../../mask";
-import { cur } from "../../../desk";
+import { cur, isPerp } from "../../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -63,7 +63,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   const ask = ours.filter((o) => o.side === "sell").sort((a, b) => a.price - b.price)[0];
   const fair = row?.fair ?? null;
   const avg = row && row.inv_qty !== 0 ? row.avg_cost : null;
-  const avgWord = venue === "usdm" ? "Entry" : "Avg cost";
+  const avgWord = isPerp(venue) ? "Entry" : "Avg cost";
 
   const line = iv === "line";
   const series: ExSeries[] = [
@@ -113,7 +113,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
   return (
     <ExChart
       id="m-inst"
-      title={symbol + (venue === "usdm" ? " Perp" : "")}
+      title={symbol + (isPerp(venue) ? " Perp" : "")}
       className="in-chart"
       series={series}
       paneStretch={[1, 0.24]}

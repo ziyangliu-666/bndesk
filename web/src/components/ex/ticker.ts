@@ -25,7 +25,8 @@ export interface Ticker24h {
 }
 
 const MOCK = import.meta.env.VITE_MOCK === "1";
-const URL: Record<Venue, string> = {
+/** Binance's own sockets, for its two markets: a market with none shows `--`. */
+const URL: Partial<Record<Venue, string>> = {
   spot: "wss://stream.binance.com:9443/stream",
   // USD-M market streams live under /market (DESIGN.md); verified with SUBSCRIBE on 2026-10-16
   usdm: "wss://fstream.binance.com/market/stream",
@@ -89,7 +90,12 @@ interface Conn {
   flush?: ReturnType<typeof setTimeout>;
   id: number;
 }
-const conns: Record<Venue, Conn> = { spot: { ws: null, on: new Set(), tries: 0, id: 1 }, usdm: { ws: null, on: new Set(), tries: 0, id: 1 } };
+const conns = new Map<Venue, Conn>();
+const connOf = (venue: Venue): Conn => {
+  let c = conns.get(venue);
+  if (!c) conns.set(venue, (c = { ws: null, on: new Set(), tries: 0, id: 1 }));
+  return c;
+};
 
 /** The streams a venue's subscribers want now. */
 function wanted(venue: Venue): Set<string> {
@@ -99,11 +105,12 @@ function wanted(venue: Venue): Set<string> {
 }
 
 function open(venue: Venue) {
-  const c = conns[venue];
-  if (c.ws || typeof WebSocket === "undefined") return;
+  const c = connOf(venue);
+  const url = URL[venue];
+  if (c.ws || !url || typeof WebSocket === "undefined") return;
   let ws: WebSocket;
   try {
-    ws = new WebSocket(URL[venue]);
+    ws = new WebSocket(url);
   } catch {
     return;
   }
@@ -136,7 +143,7 @@ function open(venue: Venue) {
 
 /** Ask for what is wanted and drop what is not (batched: a page mounting many rows sends one message). */
 function sync(venue: Venue) {
-  const c = conns[venue];
+  const c = connOf(venue);
   clearTimeout(c.flush);
   c.flush = setTimeout(() => {
     const want = wanted(venue);

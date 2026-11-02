@@ -19,7 +19,7 @@ import {
 import type { Venue } from "../../protocol";
 import { Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./history.css";
-import { cur } from "../../desk";
+import { cur, isPerp, marketOf } from "../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -107,7 +107,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
         />
       </div>
 
-      <Sec title="Our fills" right={first != null ? `in the chart's ${int(k.bars.length)} bars` : undefined} info={`Fills on ${venue === "usdm" ? "USD-M" : "spot"} over the bars loaded, all accounts; @ is the quantity-weighted price.`}>
+      <Sec title="Our fills" right={first != null ? `in the chart's ${int(k.bars.length)} bars` : undefined} info={`Fills on ${isPerp(venue) ? marketOf(venue)?.name : "spot"} over the bars loaded, all accounts; @ is the quantity-weighted price.`}>
         <Stats
           cols={2}
           items={[

@@ -8,7 +8,7 @@ import type { OpenOrder } from "../../protocol";
 import { gridTheme } from "../../gridTheme";
 import { fBps, fPrice, fTime, fUsd, DEFAULT_COL, flexCols, maskCls, maskVF } from "../../grid";
 import { qty } from "../../format";
-import { cur } from "../../desk";
+import { cur, isPerp } from "../../desk";
 
 const rowId = (p: GetRowIdParams<OpenOrder>) => p.data.id;
 
@@ -24,7 +24,7 @@ function cols(): ColDef<OpenOrder>[] {
         p.data ? (
           <span className="sym">
             {p.data.symbol}
-            {p.data.venue === "usdm" && <span className="dk-tag">Perp</span>}
+            {isPerp(p.data.venue) && <span className="dk-tag">Perp</span>}
           </span>
         ) : null,
     },

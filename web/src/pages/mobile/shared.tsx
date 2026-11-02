@@ -21,7 +21,7 @@ import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../proto
 import { useStore } from "../../store";
 import { PNL_COLORS, PNL_STROKES } from "../../theme";
 import "./ops.css";
-import { cur, quoteAsset, baseOf } from "../../desk";
+import { cur, quoteAsset, baseOf, isPerp } from "../../desk";
 
 // ---- history: the loader and the day's parts (History, Day, instrument history) ----
 
@@ -107,7 +107,7 @@ export function InstName({ r }: { r: Pick<SymbolRow, "symbol" | "venue" | "dust"
   return (
     <>
       {r.symbol}
-      {r.venue === "usdm" && <Tag>Perp</Tag>}
+      {isPerp(r.venue) && <Tag>Perp</Tag>}
       {r.dust && <Tag>Dust</Tag>}
     </>
   );
@@ -170,7 +170,7 @@ export const FillRow = memo(function FillRow({
           {symbol && (
             <>
               {baseOf(f.symbol)}
-              {f.venue === "usdm" && <Tag>Perp</Tag>}
+              {isPerp(f.venue) && <Tag>Perp</Tag>}
             </>
           )}
           {f.conversion && <Tag>conversion</Tag>}
@@ -217,7 +217,7 @@ export function useFillSheet() {
           cur ? (
             <>
               {cur.symbol}
-              {cur.venue === "usdm" && " Perp"} <Side side={cur.side} />
+              {isPerp(cur.venue) && " Perp"} <Side side={cur.side} />
             </>
           ) : null
         }
@@ -310,7 +310,7 @@ function FillFields({ f }: { f: Fill }) {
           title={
             <>
               Open {f.symbol}
-              {f.venue === "usdm" && <Tag>Perp</Tag>}
+              {isPerp(f.venue) && <Tag>Perp</Tag>}
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol: f.symbol, venue: f.venue } }}

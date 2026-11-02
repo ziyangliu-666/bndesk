@@ -18,18 +18,14 @@ import { Spark } from "../analysis/Spark";
 import { Empty, Row, Sec, Stats, type Stat } from "./rest/ui";
 import "../analysis/analysis.css";
 import "./rest/ops.css";
-import { cur } from "../../desk";
+import { cur, isPerp, kindWord, markets, marketOf } from "../../desk";
 
 const SIDES: { value: SideF; label: string }[] = [
   { value: "all", label: "All" },
   { value: "buy", label: "Buys" },
   { value: "sell", label: "Sells" },
 ];
-const VENUES: { value: VenueF; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "spot", label: "Spot" },
-  { value: "usdm", label: "Perp" },
-];
+const venues = (): { value: VenueF; label: string }[] => [{ value: "all", label: "All" }, ...markets().map((m) => ({ value: m.id, label: kindWord(m) }))];
 const WEIGHTS: { value: Weight; label: string }[] = [
   { value: "notional", label: "By notional" },
   { value: "fill", label: "By fill" },
@@ -45,7 +41,7 @@ export function MarkoutsM() {
   const { hidden, toggle } = useExHidden("m-an-path");
   const of = v.weight === "fill" ? "fills" : "notional";
   const acctLabel = v.account ? (accounts?.find((a) => a.id === v.account)?.label ?? v.account) : "All accounts";
-  const venueLabel = v.venue === "all" ? "all venues" : v.venue === "spot" ? "spot" : "perp";
+  const venueLabel = v.venue === "all" ? "all venues" : kindWord(marketOf(v.venue) ?? { id: v.venue, exchange: "", kind: "spot", name: v.venue }).toLowerCase();
 
   const lines: PathLineDef[] = !r
     ? []
@@ -114,7 +110,7 @@ export function MarkoutsM() {
             data={[{ value: "*", label: "All" }, ...(accounts ?? []).map((a) => ({ value: a.id, label: a.label || a.id }))]}
           />
           <div className="m-an-sheet-l">Venue</div>
-          <Segmented label="Venue" value={v.venue} onChange={c.setVenue} data={VENUES} />
+          <Segmented label="Venue" value={v.venue} onChange={c.setVenue} data={venues()} />
           <div className="m-an-sheet-l">Weight</div>
           <Segmented label="Weight" value={v.weight} onChange={c.setWeight} data={WEIGHTS} />
         </div>
@@ -164,7 +160,7 @@ function Instruments({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
           title={
             <>
               {x.symbol}
-              {x.venue === "usdm" && <span className="r-tag">Perp</span>}
+              {isPerp(x.venue) && <span className="r-tag">Perp</span>}
             </>
           }
           sub={`${int(x.fills)} fills · ${maskText(hide, compact(x.notional))} · edge ${bps(x.edge)}`}
