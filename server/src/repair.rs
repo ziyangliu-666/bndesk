@@ -18,7 +18,8 @@
 //! for 10 minutes and more), and Π, hedged, realized, floating, market making, hedge and rebates in the rows
 //! there (their Day PnL, equity, inventory and futures notional are the live desk's). The hour blocks from
 //! `--from`'s hour on are booked again. Per-account rows are not (only today's are drawn). One transaction,
-//! a kv record `repair:day-rows:<day>` of what changed; the desk reads the rows on its next start.
+//! a kv record `repair:day-rows:<day>` of what changed; the desk reads the rows on its next start. `--hedge`
+//! also takes the kept day's hedge from the recompute, for a day the desk counted its legs wrongly.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -364,8 +365,22 @@ fn hhmm(ds: i64, s: &str) -> Result<i64> {
     Ok(ds + h * HOUR + m * MIN)
 }
 
-/// `desk repair-day --day D --from HH:MM [--to HH:MM] [--dry-run] [--csv PATH]`.
-pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, csv: Option<&str>) -> Result<()> {
+/// The legs of an account's futures: the configured hedge symbols, or as the live desk counts them with none
+/// configured, every symbol it holds now or has traded since the day start.
+fn leg_symbols(c: &Connection, cfg: &Config, account: &str, ds: i64, held: &[String]) -> Result<Vec<String>> {
+    if !cfg.hedge_symbols.is_empty() {
+        return Ok(cfg.hedge_symbols.clone());
+    }
+    let mut st = c.prepare("SELECT DISTINCT symbol FROM fills WHERE venue = 'usdm' AND account = ? AND ts >= ?")?;
+    let mut syms = st.query_map(params![account, ds], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    syms.extend_from_slice(held);
+    syms.sort();
+    syms.dedup();
+    Ok(syms)
+}
+
+/// `desk repair-day --day D --from HH:MM [--to HH:MM] [--hedge] [--dry-run] [--csv PATH]`.
+pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry_run: bool, csv: Option<&str>) -> Result<()> {
     let ds = day_start_of(day, cfg.day_start_min)?;
     let (from, to) = (hhmm(ds, from)?, hhmm(ds, to)?);
     let now = crate::clock::now_ms();
@@ -381,7 +396,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     // symbol -> (trades (t, s q, price, fee, fee asset), funding (t, amount))
     type Raw = (Vec<(i64, f64, f64, f64, String)>, Vec<(i64, f64)>);
     let mut legs_raw: HashMap<String, Raw> = HashMap::new();
-    let hedges = &cfg.hedge_symbols;
+    let c = crate::store::open(&cfg.db)?;
     for ac in &cfg.accounts {
         let creds = credentials(&ac.api_key_env, &ac.private_key_env, &ac.secret_env)
             .map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
@@ -397,11 +412,16 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
             continue;
         }
         let r: Value = rest.get("/fapi/v3/positionRisk", &[], 5, true).await?;
+        let mut held = vec![];
         for p in r.as_array().into_iter().flatten() {
             let s = p.get("symbol").and_then(Value::as_str).unwrap_or_default().to_string();
-            *pos.entry(s).or_default() += num(p, "positionAmt")?;
+            let q = num(p, "positionAmt")?;
+            if q != 0.0 {
+                held.push(s.clone());
+            }
+            *pos.entry(s).or_default() += q;
         }
-        for sym in hedges {
+        for sym in &leg_symbols(&c, cfg, &ac.id, ds, &held)? {
             let e = legs_raw.entry(sym.clone()).or_default();
             let mut frm: Option<i64> = None;
             loop {
@@ -430,7 +450,6 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
             }
         }
     }
-    let c = crate::store::open(&cfg.db)?;
     let fills = fills_between(&c, ds, ds + DAY)?;
     // wait for the fills up to the last read to be in the db, then take each account's up to its own read
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -635,7 +654,9 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
     {
         let e = d.at(ds + DAY - 1);
         let num = |j: &Value, k: &str| j.get(k).and_then(Value::as_f64);
-        let (pnl_day, hedge, reb) = (num(&j, "pnl_day").unwrap_or(0.0), num(&j, "hedge").unwrap_or(e.hedge), num(&j, "rebates").unwrap_or(e.rebates));
+        let kept_hedge = num(&j, "hedge");
+        let (pnl_day, h, reb) = (num(&j, "pnl_day").unwrap_or(0.0), kept_hedge.filter(|_| !hedge).unwrap_or(e.hedge), num(&j, "rebates").unwrap_or(e.rebates));
+        let hedge = h;
         eprintln!("kept {day}: trading {} -> {:.2}, mm {} -> {:.2}, other {} -> {:.2} (Day PnL {pnl_day:.2}, hedge {hedge:.2}, rebates {reb:.2}; \
                    recomputed hedge {:.2}, rebates {:.2})", f2(num(&j, "trading")), e.trading, f2(num(&j, "mm")), e.mm, f2(num(&j, "other")),
                   pnl_day - e.trading - hedge - reb, e.hedge, e.rebates);
@@ -645,6 +666,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, dry_run: bool, c
         j["floating"] = serde_json::json!(e.floating);
         j["mm"] = serde_json::json!(e.mm);
         j["inventory"] = serde_json::json!(e.trading - e.mm);
+        j["hedge"] = serde_json::json!(hedge);
         j["other"] = serde_json::json!(pnl_day - e.trading - hedge - reb);
         new_kept = Some(j.to_string());
     }
@@ -695,6 +717,17 @@ mod tests {
     use approx::assert_relative_eq;
 
     const DS: i64 = 1_000 * DAY;
+
+    #[test]
+    fn legs_are_the_symbols_held_and_traded_when_none_are_configured() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE fills (symbol TEXT, venue TEXT, account TEXT, ts INTEGER);
+            INSERT INTO fills VALUES ('AUSDT', 'usdm', 'a', 2000), ('BUSDT', 'usdm', 'b', 2000), ('CUSDT', 'spot', 'a', 2000), ('DUSDT', 'usdm', 'a', 500);").unwrap();
+        let mut cfg = Config::default();
+        assert_eq!(leg_symbols(&c, &cfg, "a", 1000, &["EUSDT".into()]).unwrap(), ["AUSDT", "EUSDT"]);
+        cfg.hedge_symbols = vec!["HUSDT".into()];
+        assert_eq!(leg_symbols(&c, &cfg, "a", 1000, &["EUSDT".into()]).unwrap(), ["HUSDT"]);
+    }
 
     fn market() -> Market {
         let mut info: Info = HashMap::new();

@@ -1576,6 +1576,9 @@ enum Cmd {
         from: String,
         #[arg(long, default_value = "24:00")]
         to: String,
+        /// take the kept day's hedge from the recompute too (the desk counted its legs wrongly that day)
+        #[arg(long)]
+        hedge: bool,
         /// print what would change, write nothing
         #[arg(long)]
         dry_run: bool,
@@ -1625,8 +1628,8 @@ pub fn main() {
         }
         return;
     }
-    if let Some(Cmd::RepairDay { day, from, to, dry_run, csv }) = &args.cmd {
-        if let Err(e) = rt.block_on(crate::repair::run(&cfg, day, from, to, *dry_run, csv.as_deref())) {
+    if let Some(Cmd::RepairDay { day, from, to, hedge, dry_run, csv }) = &args.cmd {
+        if let Err(e) = rt.block_on(crate::repair::run(&cfg, day, from, to, *hedge, *dry_run, csv.as_deref())) {
             eprintln!("{e:#}");
             std::process::exit(1);
         }
