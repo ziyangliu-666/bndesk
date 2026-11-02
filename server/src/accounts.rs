@@ -996,7 +996,7 @@ impl Transfers {
 mod tests {
     use super::*;
     use crate::binance::events::{apply_fut_snapshot, apply_spot_snapshot, on_fut_event, on_spot_event};
-    use crate::market::{BookTicker, Info, SymbolInfo};
+    use crate::market::{Book, Info, SymbolInfo};
     use approx::assert_relative_eq;
     use serde_json::{Value, json};
 
@@ -1016,7 +1016,7 @@ mod tests {
     fn acct() -> (Account, MarketRef) {
         let mut m = Market::new(info(&[("XUSDT", SymbolInfo::new("X", "USDT", 5.0))]), 120.0, 100.0);
         m.ensure("XUSDT", Venue::SPOT, None);
-        m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", 100.0, 100.0, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("XUSDT", 100.0, 100.0, Some(1)));
         let m = Rc::new(RefCell::new(m));
         let mut c = cfg("a", "");
         c.futures = true;
@@ -1123,7 +1123,7 @@ mod tests {
     fn usdc_in_then_converted_leaves_day_pnl_unchanged() {
         let mut m = Market::new(info(&[("USDCUSDT", SymbolInfo::new("USDC", "USDT", 5.0))]), 120.0, 100.0);
         m.asset_inst("USDC");
-        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
+        m.on_book(Venue::SPOT, &Book::new("USDCUSDT", 1.0011, 1.0013, Some(1_000)));
         let mut c = cfg("usdc", "u@x.io");
         c.futures = false;
         let a = Account::new(c, None, "").shared();
@@ -1175,7 +1175,7 @@ mod tests {
     }
 
     fn bnb(m: &mut Market, t: i64, px: f64) {
-        m.on_book(Venue::SPOT, &BookTicker::new("BNBUSDT", px, px, Some(t)));
+        m.on_book(Venue::SPOT, &Book::new("BNBUSDT", px, px, Some(t)));
     }
 
     #[test]

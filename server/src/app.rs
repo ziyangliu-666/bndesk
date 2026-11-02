@@ -19,18 +19,13 @@ use crate::accounts::{self, Account, AccountRef, Dividend, MarketRef, OnDividend
 use crate::alerts::Alerts;
 use crate::backfill;
 use crate::beta::Betas;
-use crate::binance::account as binance_account;
-use crate::binance::public::{ORDER_LIMITS, parse_exchange_info, parse_order_limits};
-use crate::binance::rest::{CLOCK, RESYNC, Rest, client, governors, sync_time};
-use crate::sign::credentials;
-use crate::binance::weight::Governors;
-use crate::binance::ws::{SPOT_STREAM, StreamMux, USDM_MARKET, USDM_PUBLIC};
-use crate::clock::now_s;
+use crate::clock::{CLOCK, now_s};
 use crate::config::{self as C, Config};
+use crate::connector::{self, Connector, PublicFeed};
 use crate::engine::{self, EngineScraper, EngineScraperRef};
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::{FillBook, FillRec};
-use crate::market::{BookTicker, Info, Inst, Market};
+use crate::market::{Book, Inst, Market};
 use crate::metrics::{
     FillAgg, HOUR, MmSplit, account_row, aggregate, mm_split, beta_weighted_spot, exposure, hedge_day, inventory_assets, markout_stats,
     open_orders, symbol_rows,
@@ -123,7 +118,7 @@ pub struct Desk {
     pub started: f64,
     /// the last logged gaps between Π's quantities and the balances (check_positions)
     pub position_gaps: String,
-    pub govs: Governors,
+    pub connector: Rc<dyn Connector>,
     pub store: Rc<Store>,
     pub alerts: RefCell<Alerts>,
     pub engines: Vec<EngineScraperRef>,
@@ -146,7 +141,7 @@ pub struct Desk {
     pub new_acct: HashMap<String, Vec<(i64, f64, f64)>>,
     pub fill_protos: HashMap<String, P::Fill>,
     pub tracked: Rc<RefCell<HashSet<String>>>,
-    pub muxes: Vec<Rc<RefCell<StreamMux>>>,
+    pub streams: Option<Rc<dyn PublicFeed>>,
     pub betas: Option<Rc<RefCell<Betas>>>,
     pub accounts: Vec<AccountRef>,
     pub view: Option<View>,
@@ -158,7 +153,6 @@ pub struct Desk {
     pub spot_filled: Rc<RefCell<Vec<String>>>,   // spot instruments filled today: in the P&L scope (a set, insertion order)
     pub fixed_betas: Rc<HashMap<String, f64>>,
     pub on_fill: OnFill,
-    pub http: reqwest::Client,
 }
 
 fn dummy_pnl(day_start: i64) -> PnlBook {
@@ -194,7 +188,7 @@ fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store) {
 }
 
 impl Desk {
-    fn new(cfg: Config, market: Market, govs: Governors, public_feed: FeedRef, http: reqwest::Client) -> Desk {
+    fn new(cfg: Config, market: Market, connector: Rc<dyn Connector>, public_feed: FeedRef) -> Desk {
         let store = Rc::new(Store::new(&cfg.db));
         let s2 = store.clone();
         let alerts = Alerts::new(Box::new(move |a: &P::Alert| {
@@ -238,7 +232,7 @@ impl Desk {
         Desk {
             started: now_s(),
             position_gaps: String::new(),
-            govs,
+            connector,
             alerts: RefCell::new(alerts),
             engines: cfg.engines.iter().map(|e| Rc::new(RefCell::new(EngineScraper::new(e.clone())))).collect(),
             public_feed,
@@ -255,7 +249,7 @@ impl Desk {
             new_acct: HashMap::new(),
             fill_protos: HashMap::new(),
             tracked,
-            muxes: vec![],
+            streams: None,
             betas: cfg.beta.clone().map(|b| Rc::new(RefCell::new(Betas::new(b)))),
             accounts: vec![],
             view: None,
@@ -267,7 +261,6 @@ impl Desk {
             spot_filled,
             fixed_betas: Rc::default(),
             on_fill,
-            http,
             store,
             cfg,
         }
@@ -284,7 +277,7 @@ impl Desk {
     }
 
     pub fn all_feeds(&self) -> Vec<FeedRef> {
-        let mut out: Vec<FeedRef> = self.muxes.iter().flat_map(|m| m.borrow().feeds()).collect();
+        let mut out: Vec<FeedRef> = self.streams.iter().flat_map(|s| s.feeds()).collect();
         out.push(self.public_feed.clone());
         for a in &self.accounts {
             let a = a.borrow();
@@ -300,26 +293,12 @@ impl Desk {
 
     // setup
 
-    fn make_muxes(this: &DeskRef) {
-        let market = this.borrow().market.clone();
-        let (m1, m2, m3) = (market.clone(), market.clone(), market.clone());
-        let spot_book = Rc::new(RefCell::new(StreamMux::new(SPOT_STREAM, "spot bookTicker",
-            move |_, d| m1.borrow_mut().on_book_raw(Venue::SPOT, d), 200)));
-        let usdm_book = Rc::new(RefCell::new(StreamMux::new(USDM_PUBLIC, "usdm bookTicker",
-            move |_, d| m2.borrow_mut().on_book_raw(Venue::USDM, d), 200)));
-        let usdm_mark = Rc::new(RefCell::new(StreamMux::new(USDM_MARKET, "usdm markPrice",
-            move |_, d| m3.borrow_mut().on_mark_raw(d), 200)));
-        let (sb, ub, um) = (spot_book.clone(), usdm_book.clone(), usdm_mark.clone());
-        market.borrow_mut().on_new = Box::new(move |inst: &Inst| {
-            let s = inst.symbol.to_lowercase();
-            if inst.venue.is_spot() {
-                sb.borrow_mut().add([format!("{s}@bookTicker")]);
-            } else {
-                ub.borrow_mut().add([format!("{s}@bookTicker")]);
-                um.borrow_mut().add([format!("{s}@markPrice@1s")]);
-            }
-        });
-        this.borrow_mut().muxes = vec![spot_book, usdm_book, usdm_mark];
+    /// Each instrument the market comes to track is watched by the connector's public feed.
+    fn make_streams(&mut self) {
+        let streams = self.connector.public_feed(self.market.clone());
+        let watch = streams.clone();
+        self.market.borrow_mut().on_new = Box::new(move |inst| watch.watch(inst));
+        self.streams = Some(streams);
     }
 
     fn make_accounts(&mut self) {
@@ -327,11 +306,11 @@ impl Desk {
         if self.cfg.simulate {
             accounts = sim::accounts().into_iter().map(Account::shared).collect();
         } else {
-            let master_ok = self.cfg.master.as_ref().is_some_and(|m| credentials(&m.api_key_env, &m.private_key_env, &m.secret_env).is_ok());
+            let master_ok = self.cfg.master.as_ref().is_some_and(|m| self.connector.credentials(m).is_ok());
             let cfgs: Vec<C::AccountCfg> = self.cfg.master.iter().cloned().chain(self.cfg.accounts.iter().cloned()).collect();
             for ac in cfgs {
-                let (creds, reason) = match credentials(&ac.api_key_env, &ac.private_key_env, &ac.secret_env) {
-                    Ok(c) => (Some(Rc::new(c)), String::new()),
+                let (creds, reason) = match self.connector.credentials(&ac) {
+                    Ok(c) => (Some(c), String::new()),
                     Err(r) => {
                         warn!("account {}: {r}", ac.id);
                         (None, r)
@@ -587,7 +566,7 @@ impl Desk {
             for r in data.dividends.iter().filter(|r| r.id.starts_with(&pre)) {
                 let id = r.id[pre.len()..].to_string();
                 a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone(),
-                                                  rebate: binance_account::is_rebate(&r.info) });
+                                                  rebate: self.connector.is_rebate(&r.info) });
             }
             if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
@@ -1211,26 +1190,16 @@ impl DeskSource for Source {
 
 // tasks
 
-async fn bootstrap(http: &reqwest::Client, govs: &Governors, feed: &FeedRef, cfg: &Config) -> Market {
-    let rest = Rest::new(http.clone(), govs.clone(), None, Some(feed.clone()));
+async fn bootstrap(connector: &dyn Connector, feed: &FeedRef, cfg: &Config) -> Market {
     loop {
-        let r: Result<(Value, Value)> = async {
-            sync_time(&rest).await?;
-            let spot: Value = rest.get("/api/v3/exchangeInfo", &[], 20, false).await?;
-            let usdm: Value = rest.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
-            Ok((spot, usdm))
+        let r: Result<_> = async {
+            connector.sync_clock().await?;
+            connector.instruments().await
         }
         .await;
         match r {
-            Ok((spot, usdm)) => {
+            Ok(info) => {
                 feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", CLOCK.offset_ms())));
-                let mut info: Info = HashMap::new();
-                info.insert(Venue::SPOT, parse_exchange_info(&spot));
-                if let (Some(s10), Some(day)) = parse_order_limits(&spot) {
-                    let _ = ORDER_LIMITS.set((s10, day));
-                    info!("spot order limits from exchangeInfo: {s10} per 10 s, {day} per day");
-                }
-                info.insert(Venue::USDM, parse_exchange_info(&usdm));
                 return Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
             }
             Err(e) => {
@@ -1306,14 +1275,14 @@ async fn prune(desk: DeskRef) {
     }
 }
 
-/// bookTicker streams only send on change: price instruments that have not ticked yet from REST.
-async fn seed_books(market: MarketRef, rest: Rest) {
+/// Book streams may only send on a change: price instruments that have not ticked yet from the exchange's list of tops.
+async fn seed_books(market: MarketRef, connector: Rc<dyn Connector>) {
     loop {
-        for (venue, path, weight) in [(Venue::SPOT, "/api/v3/ticker/bookTicker", 4), (Venue::USDM, "/fapi/v1/ticker/bookTicker", 5)] {
+        for venue in connector.markets() {
             if !market.borrow().insts.iter().any(|i| i.t.is_none() && i.venue == venue) {
                 continue;
             }
-            let rows: Vec<Value> = match rest.get(path, &[], weight, false).await {
+            let rows = match connector.book_tops(venue).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("seed {venue} books: {e:#}");
@@ -1321,32 +1290,17 @@ async fn seed_books(market: MarketRef, rest: Rest) {
                 }
             };
             let mut m = market.borrow_mut();
-            for r in &rows {
-                let num = |k: &str| r.get(k).and_then(Value::as_str).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                let Some(sym) = r.get("symbol").and_then(Value::as_str) else { continue };
-                let (b, a) = (num("bidPrice"), num("askPrice"));
+            for (sym, b, a) in &rows {
                 if let Some(id) = m.find(sym, venue)
                     && m.insts[id].t.is_none()
-                    && b > 0.0
-                    && a > 0.0
+                    && *b > 0.0
+                    && *a > 0.0
                 {
-                    m.on_book(venue, &BookTicker::new(sym, b, a, None));
+                    m.on_book(venue, &Book::new(sym, *b, *a, None));
                 }
             }
         }
         tokio::time::sleep(Duration::from_secs(60)).await;
-    }
-}
-
-async fn resync(rest: Rest) {
-    loop {
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(600)) => {}
-            _ = RESYNC.notified() => {}
-        }
-        if let Err(e) = sync_time(&rest).await {
-            warn!("time sync failed: {e:#}");   // keep the last offset
-        }
     }
 }
 
@@ -1368,21 +1322,21 @@ async fn shutdown_signal() {
 /// Past days kept from before the desk read rebates: each account's rebates of the day, once (the day then
 /// keeps them), and Other less them. A day an account cannot be asked about is left for the next start.
 /// One request at a time, 2 s apart, a minute after the start.
-async fn rebate_days(desk: DeskRef, keyed: Vec<(AccountRef, Rest)>) {
+async fn rebate_days(desk: DeskRef, keyed: Vec<AccountRef>) {
     tokio::time::sleep(Duration::from_secs(60)).await;
-    let (days, start_min) = {
+    let (days, start_min, connector) = {
         let d = desk.borrow();
         let today = crate::pnl::utc_day(d.day_start());
         let days: Vec<String> = d.day_real.iter().filter(|(k, r)| r.rebates.is_none() && **k != today).map(|(k, _)| k.clone()).collect();
-        (days, d.cfg.day_start_min)
+        (days, d.cfg.day_start_min, d.connector.clone())
     };
     for day in days {
         let Ok(date) = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d") else { continue };
         let ds = date.and_hms_opt(0, 0, 0).expect("midnight").and_utc().timestamp_millis() + start_min * 60_000;
         let mut sum = 0.0;
         let mut all = true;
-        for (a, rest) in &keyed {
-            match binance_account::distributions(rest, ds, ds + DAY).await {
+        for a in &keyed {
+            match connector.distributions(a, ds, ds + DAY).await {
                 Ok(rows) => sum += accounts::past_rebates(a, &rows),
                 Err(e) => {
                     warn!("rebates of {day}, {}: {e:#}", a.borrow().id);
@@ -1423,17 +1377,17 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         }
     }
     let mut sig = Box::pin(shutdown_signal());
-    let http = client();
-    let govs = governors();
+    let http = connector::client();
     let public_feed = Feed::shared("public rest", FeedKind::Rest, "");
+    let exchange = connector::open("binance", http.clone(), Some(public_feed.clone()))?;
     let market = tokio::select! {
-        m = bootstrap(&http, &govs, &public_feed, &cfg) => m,
+        m = bootstrap(&*exchange, &public_feed, &cfg) => m,
         _ = &mut sig => return Ok(()),
     };
-    let desk: DeskRef = Rc::new(RefCell::new(Desk::new(cfg, market, govs.clone(), public_feed.clone(), http.clone())));
-    Desk::make_muxes(&desk);
+    let desk: DeskRef = Rc::new(RefCell::new(Desk::new(cfg, market, exchange.clone(), public_feed.clone())));
     {
         let mut d = desk.borrow_mut();
+        d.make_streams();
         d.make_accounts();
         d.reload()?;
         d.store.start().context("store")?;
@@ -1443,7 +1397,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         let d = desk.borrow();
         (d.cfg.simulate, d.cfg.listen.clone())
     };
-    let public = Rest::new(http.clone(), govs.clone(), None, Some(public_feed.clone()));
+    let public = crate::binance::rest::Rest::new(http.clone(), crate::binance::rest::governors(), None, Some(public_feed.clone()));
     {
         let d = desk.borrow();
         if simulate {
@@ -1451,27 +1405,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
             s.setup(&d);
             tasks.push(tokio::task::spawn_local(s.run()));
         } else {
-            let master = d.transfers.borrow().master.clone();
-            let master_creds = master.as_ref().and_then(|m| m.borrow().creds.clone());
-            for (i, a) in d.accounts.iter().enumerate() {
-                let (via, creds, feed) = {
-                    let ab = a.borrow();
-                    (ab.via_master, ab.creds.clone(), ab.rest_feed.clone())
-                };
-                if via && let Some(mc) = &master_creds {
-                    tasks.extend(binance_account::start_via_master(a, Rest::new(http.clone(), govs.clone(), Some(mc.clone()), Some(feed)),
-                                                            i as f64 * 3.0));
-                } else {
-                    tasks.extend(binance_account::start(a, Rest::new(http.clone(), govs.clone(), creds, Some(feed))));
-                }
-            }
-            if let Some(mc) = master_creds {
-                let t = d.transfers.clone();
-                let feed = t.borrow().feed.clone();
-                let ds = d.day_start.clone();
-                let rest = Rest::new(http.clone(), govs.clone(), Some(mc), Some(feed));
-                tasks.push(tokio::task::spawn_local(binance_account::run_transfers(t, rest, move || ds.get())));
-            }
+            tasks.extend(exchange.start_accounts(&d.accounts, &d.transfers, d.day_start.clone()));
         }
         for e in &d.engines {
             tasks.push(tokio::task::spawn_local(engine::run(e.clone(), http.clone())));
@@ -1479,20 +1413,12 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     }
     if !simulate {
         let d = desk.borrow();
-        let keyed: Vec<(AccountRef, Rest)> = d
-            .accounts
-            .iter()
-            .filter(|a| a.borrow().creds.is_some())
-            .map(|a| {
-                let ab = a.borrow();
-                (a.clone(), Rest::new(http.clone(), govs.clone(), ab.creds.clone(), Some(ab.rest_feed.clone())))
-            })
-            .collect();
+        let keyed: Vec<AccountRef> = d.accounts.iter().filter(|a| a.borrow().creds.is_some()).cloned().collect();
         tasks.push(tokio::task::spawn_local(rebate_days(desk.clone(), keyed)));
     }
     tasks.push(tokio::task::spawn_local(ticker(desk.clone())));
-    tasks.push(tokio::task::spawn_local(resync(public.clone())));
-    tasks.push(tokio::task::spawn_local(seed_books(desk.borrow().market.clone(), public.clone())));
+    tasks.push(tokio::task::spawn_local(exchange.keep_clock()));
+    tasks.push(tokio::task::spawn_local(seed_books(desk.borrow().market.clone(), exchange.clone())));
     tasks.push(tokio::task::spawn_local(prune(desk.clone())));
     if !simulate {
         let d = desk.borrow();
@@ -1519,8 +1445,8 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     for t in &tasks {
         t.abort();
     }
-    for m in &desk.borrow().muxes {
-        m.borrow_mut().stop();
+    if let Some(s) = &desk.borrow().streams {
+        s.stop();
     }
     srv.cleanup().await;
     let d = desk.borrow();

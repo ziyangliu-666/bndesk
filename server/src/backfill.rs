@@ -12,7 +12,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::binance::rest::{Rest, RestError};
+use crate::binance::rest::Rest;
+use crate::connector::RestError;
 use crate::fills::{FillBook, HORIZONS};
 use crate::market::Market;
 use crate::params;

@@ -169,7 +169,7 @@ impl Api {
         Arc::new(Api {
             db,
             day_start_min,
-            http: crate::binance::rest::client(),
+            http: crate::connector::client(),
             spot: spot.into(),
             fapi: fapi.into(),
             cache: Mutex::default(),

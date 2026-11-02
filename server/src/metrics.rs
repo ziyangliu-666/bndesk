@@ -615,7 +615,7 @@ mod tests {
     //! Avg cost, day P&L, beta-weighted spot, exposure target / band / pause.
     use super::*;
     use crate::config::{AccountCfg, MarketCfg, load};
-    use crate::market::{BookTicker, Info, SymbolInfo};
+    use crate::market::{Book, Info, SymbolInfo};
     use crate::protocol::Role;
     use crate::sessions::utc;
     use approx::assert_relative_eq;
@@ -649,8 +649,8 @@ mod tests {
         let mut m = Market::new(info, 120.0, 50.0);
         m.ensure("AAAUSDT", Venue::SPOT, None);
         m.ensure("BBBUSDT", Venue::SPOT, None);
-        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 10.0, 10.0, Some(1)));
-        m.on_book(Venue::SPOT, &BookTicker::new("BBBUSDT", 2.0, 2.0, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("AAAUSDT", 10.0, 10.0, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("BBBUSDT", 2.0, 2.0, Some(1)));
         let mut a = Account::new(AccountCfg::new("a", "a", "a@x.io", Role::Sub), None, "");
         a.set_balances([("USDT", 500.0, 0.0), ("AAA", 3.0, 1.0), ("BBB", 10.0, 0.0)], true);
         let accounts = vec![a.shared()];
@@ -717,7 +717,7 @@ mod tests {
         info.insert(Venue::SPOT, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
         let mut m = Market::new(info, 120.0, 50.0);
         m.ensure("AAAUSDT", Venue::SPOT, None);
-        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));   // mid now 12, hours later
+        m.on_book(Venue::SPOT, &Book::new("AAAUSDT", 12.0, 12.0, Some(1)));   // mid now 12, hours later
         let fill = |id: &str, ts: i64| FillRec::new(id, ts, "a", "AAAUSDT", Venue::SPOT, Side::Buy, 10.0, 1.0);
         let now = 10 * 3_600_000;
         let young = fill("young", now - 20_000);                 // 20 s old: the mid now, +2
@@ -750,8 +750,8 @@ mod tests {
         let mut m = Market::new(info, 120.0, 50.0);
         m.ensure("AAAUSDT", Venue::SPOT, None);
         m.asset_inst("USDC");
-        m.on_book(Venue::SPOT, &BookTicker::new("AAAUSDT", 12.0, 12.0, Some(1)));
-        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("AAAUSDT", 12.0, 12.0, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("USDCUSDT", 1.0011, 1.0013, Some(1)));
         let now = 10 * 3_600_000;
         let mut aaa = FillRec::new("a", now - 600_000, "mm", "AAAUSDT", Venue::SPOT, Side::Buy, 10.0, 1.0);
         aaa.mk_raw.0[2] = Some(50.0);

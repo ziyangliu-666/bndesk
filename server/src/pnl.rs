@@ -1573,7 +1573,7 @@ mod tests {
     //! P&L book cases (store round trips stand in with the rows themselves) and alive_spans.
     use super::*;
     use crate::fills::FillBook;
-    use crate::market::{BookTicker, FineRing, Info, SymbolInfo};
+    use crate::market::{Book, FineRing, Info, SymbolInfo};
 
     const DAY0: i64 = 0;
 
@@ -1599,9 +1599,9 @@ mod tests {
     }
 
     fn tick(m: &mut Market, t: i64, x: f64, r: f64, b: f64) {
-        m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", x, x, Some(t)));
-        m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
-        m.on_book(Venue::USDM, &BookTicker::new("BUSDT", b, b, Some(t)));
+        m.on_book(Venue::SPOT, &Book::new("XUSDT", x, x, Some(t)));
+        m.on_book(Venue::USDM, &Book::new("XUSDT", r, r, Some(t)));
+        m.on_book(Venue::USDM, &Book::new("BUSDT", b, b, Some(t)));
     }
 
     fn book(balance: f64) -> PnlBook {
@@ -1703,7 +1703,7 @@ mod tests {
         m.ensure("BUSDT", Venue::USDM, None);
         m.asset_inst("USDC");
         tick(&mut m, 200, 100.0, 50.0, 200.0);
-        m.on_book(Venue::SPOT, &BookTicker::new("USDCUSDT", 1.0011, 1.0013, Some(200)));
+        m.on_book(Venue::SPOT, &Book::new("USDCUSDT", 1.0011, 1.0013, Some(200)));
         let mut pb = book(1.0);
         pb.begin(&mut m, 4000);
         pb.m0.insert("X", 97.0);
@@ -1813,10 +1813,10 @@ mod tests {
         let mut m = Market::new(info, 120.0, 100.0);
         m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         for (t, r) in [(4_000, 50.0), (10_100, 49.95), (10_900, 49.90), (11_500, 49.95)] {
-            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
+            m.on_book(Venue::USDM, &Book::new("XUSDT", r, r, Some(t)));
         }
         for t in [9_000, 11_000, 20_000] {
-            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", 100.0, 100.0, Some(t)));
+            m.on_book(Venue::SPOT, &Book::new("XUSDT", 100.0, 100.0, Some(t)));
         }
         let mut fb = FillBook::new();
         fb.add(&mut m, fill("a", 10_000, Side::Buy, 100.0, 1.0), true);
@@ -2066,7 +2066,7 @@ mod tests {
     }
 
     fn y_tick(m: &mut Market, t: i64, y: f64) {
-        m.on_book(Venue::SPOT, &BookTicker::new("YUSDT", y, y, Some(t)));
+        m.on_book(Venue::SPOT, &Book::new("YUSDT", y, y, Some(t)));
     }
 
     /// What the desk does with its accounts, the transfer history and the P&L book: balances move with fills and

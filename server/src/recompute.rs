@@ -262,7 +262,8 @@ pub const FIRST_FIXED_DAY: &str = "2026-10-17";
 /// `desk recompute-mm --from --to [--dry-run]`: each day in [from, to] (UTC dates) before today and before
 /// FIRST_FIXED_DAY, on the configured db; prints the table.
 pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: bool) -> anyhow::Result<Vec<DayReport>> {
-    use crate::binance::rest::{Rest, client, governors};
+    use crate::binance::rest::{Rest, governors};
+    use crate::connector::client;
     let (a, b) = (day_start_of(from, cfg.day_start_min)?, day_start_of(to, cfg.day_start_min)?);
     let now = crate::clock::now_ms();
     let today = crate::sessions::day_start(now, cfg.day_start_min);

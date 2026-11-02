@@ -457,7 +457,7 @@ impl FillBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::market::{BookTicker, Info};
+    use crate::market::{Book, Info};
     use approx::assert_relative_eq;
 
     #[test]
@@ -491,8 +491,8 @@ mod tests {
         let mut m = market();
         m.ensure("XUSDT", Venue::SPOT, Some(("XUSDT", Venue::USDM)));
         for (t, s, r) in [(0, 100.0, 50.0), (1_000, 100.1, 50.025), (10_000, 100.2, 50.0)] {
-            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t)));
-            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", s, s, Some(t)));
+            m.on_book(Venue::USDM, &Book::new("XUSDT", r, r, Some(t)));
+            m.on_book(Venue::SPOT, &Book::new("XUSDT", s, s, Some(t)));
         }
         let mut fb = FillBook::new();
         fb.add(&mut m, FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 1.0), true);

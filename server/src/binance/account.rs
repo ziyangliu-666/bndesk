@@ -756,7 +756,7 @@ mod tests {
     use super::*;
     use crate::accounts::{Account, MarketRef};
     use crate::config::AccountCfg;
-    use crate::market::{BookTicker, Info, Market, SymbolInfo};
+    use crate::market::{Book, Info, Market, SymbolInfo};
     use approx::assert_relative_eq;
     use serde_json::json;
 
@@ -770,7 +770,7 @@ mod tests {
         i.insert(Venue::USDM, HashMap::new());
         let mut m = Market::new(i, 120.0, 100.0);
         m.ensure("XUSDT", Venue::SPOT, None);
-        m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", 100.0, 100.0, Some(1)));
+        m.on_book(Venue::SPOT, &Book::new("XUSDT", 100.0, 100.0, Some(1)));
         let m = Rc::new(RefCell::new(m));
         let mut c = cfg("a", "");
         c.futures = true;

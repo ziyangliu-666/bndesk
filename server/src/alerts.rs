@@ -291,12 +291,12 @@ impl Alerts {
         }
 
         let now_s = now as f64 / 1000.0;
-        for g in desk.govs.iter() {
-            let banned = g.banned();
-            let last = g.last_ban.get();
+        for g in desk.connector.rest_bans() {
+            let banned = g.banned;
+            let last = g.last;
             if banned || last.is_some_and(|(_, t)| now_s - t < 600.0) {
                 let code = last.map_or_else(|| "None".to_string(), |(c, _)| c.to_string());
-                let tail = if banned { format!(", paused {:.0}s", g.banned_until.get() - now_s) } else { " in the last 10 min".into() };
+                let tail = if banned { format!(", paused {:.0}s", g.until_s - now_s) } else { " in the last 10 min".into() };
                 add("rest_ban", &g.name, if banned { Level::Crit } else { Level::Warn }, format!("{} REST {code}{tail}", g.name));
             }
         }

@@ -1,11 +1,10 @@
 //! Read-only REST client: refuses every write except the USD-M listenKey.
 use std::rc::Rc;
-use std::time::Duration;
 
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 
-pub use crate::clock::{CLOCK, TimeSync};
+use crate::clock::CLOCK;
 use crate::clock::now_s;
 use crate::feeds::FeedRef;
 
@@ -54,15 +53,6 @@ pub struct Rest {
     pub govs: Governors,
     pub creds: Option<Rc<Credentials>>,
     pub feed: Option<FeedRef>,
-}
-
-pub fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_nodelay(true)
-        .build()
-        .expect("reqwest client")
 }
 
 impl Rest {

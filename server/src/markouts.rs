@@ -322,7 +322,7 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
 mod tests {
     use super::*;
     use crate::fills::{FillBook, PATH_OF_H};
-    use crate::market::{BookTicker, Info, Market};
+    use crate::market::{Book, Info, Market};
     use approx::assert_relative_eq;
 
     fn q(pairs: &[(&str, &str)]) -> Result<Query, String> {
@@ -372,8 +372,8 @@ mod tests {
         let mut fb = FillBook::new();
         let t0 = 100_000;
         for (dt, s, r) in [(-20_000, 100.2, 50.0), (-300, 100.1, 50.0), (1_500, 100.0, 50.0), (2_500, 100.0, 50.01)] {
-            m.on_book(Venue::USDM, &BookTicker::new("XUSDT", r, r, Some(t0 + dt)));
-            m.on_book(Venue::SPOT, &BookTicker::new("XUSDT", s, s, Some(t0 + dt)));
+            m.on_book(Venue::USDM, &Book::new("XUSDT", r, r, Some(t0 + dt)));
+            m.on_book(Venue::SPOT, &Book::new("XUSDT", s, s, Some(t0 + dt)));
         }
         fb.add(&mut m, crate::fills::FillRec::new("a", t0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 2.0), true);
         fb.mature(&m, t0 + 302_000);

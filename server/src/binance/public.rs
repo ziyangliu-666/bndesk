@@ -1,7 +1,20 @@
-//! Binance's public market data: what it lists.
+//! Binance's public market data: what it lists, books and marks, as it sends them.
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
+use std::rc::Rc;
 
-use crate::market::SymbolInfo;
+use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
+
+use crate::accounts::MarketRef;
+use crate::connector::PublicFeed;
+use crate::feeds::FeedRef;
+use crate::market::{Book, Inst, Mark, Market, SymbolInfo};
+use crate::protocol::Venue;
+
+use super::ws::{SPOT_STREAM, StreamMux, USDM_MARKET, USDM_PUBLIC};
 
 fn truthy(v: &serde_json::Value) -> bool {
     match v {
@@ -71,6 +84,145 @@ pub fn parse_exchange_info(info: &serde_json::Value) -> HashMap<String, SymbolIn
         out.insert(g("symbol"), SymbolInfo { base: g("baseAsset"), quote: g("quoteAsset"), min_notional: mn });
     }
     out
+}
+
+/// A price as Binance sends it (a decimal string) or as a number.
+fn de_px<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    struct V;
+    impl Visitor<'_> for V {
+        type Value = f64;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a price")
+        }
+        fn visit_str<E: de::Error>(self, s: &str) -> Result<f64, E> {
+            s.parse().map_err(E::custom)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+    }
+    d.deserialize_any(V)
+}
+
+/// Like `de_px`, with null and "" as None.
+fn de_opt_px<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = Option<f64>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a price or null")
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+            d.deserialize_any(V)
+        }
+        fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
+            if s.is_empty() { Ok(None) } else { s.parse().map(Some).map_err(E::custom) }
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+    }
+    d.deserialize_any(V)
+}
+
+/// bookTicker payload: symbol, best bid / ask, event time (absent on spot and REST).
+#[derive(Debug, Deserialize)]
+struct BookTicker<'a> {
+    #[serde(borrow)]
+    s: Cow<'a, str>,
+    #[serde(deserialize_with = "de_px")]
+    b: f64,
+    #[serde(deserialize_with = "de_px")]
+    a: f64,
+    #[serde(rename = "E", default)]
+    e: Option<i64>,
+}
+
+/// markPrice payload: mark price, funding rate ("" between fundings), next funding time.
+#[derive(Debug, Deserialize)]
+struct MarkPrice<'a> {
+    #[serde(borrow)]
+    s: Cow<'a, str>,
+    #[serde(deserialize_with = "de_px")]
+    p: f64,
+    #[serde(default, deserialize_with = "de_opt_px")]
+    r: Option<f64>,
+    #[serde(rename = "T", default)]
+    t: Option<i64>,
+}
+
+/// Hot path: a bookTicker payload as raw JSON (from the stream mux). Malformed payloads are dropped.
+pub fn on_book_raw(m: &mut Market, venue: Venue, data: &str) {
+    if let Ok(d) = sonic_rs::from_str::<BookTicker>(data) {
+        m.on_book(venue, &Book::new(&d.s, d.b, d.a, d.e));
+    }
+}
+
+pub fn on_mark_raw(m: &mut Market, venue: Venue, data: &str) {
+    if let Ok(d) = sonic_rs::from_str::<MarkPrice>(data) {
+        m.on_mark(venue, &Mark { symbol: &d.s, price: d.p, funding: d.r, next_funding: d.t.filter(|t| *t != 0) });
+    }
+}
+
+/// Books and marks: one stream mux per kind of payload.
+pub struct Streams {
+    spot_book: Rc<RefCell<StreamMux>>,
+    usdm_book: Rc<RefCell<StreamMux>>,
+    usdm_mark: Rc<RefCell<StreamMux>>,
+}
+
+impl Streams {
+    pub fn new(market: MarketRef) -> Self {
+        let (m1, m2, m3) = (market.clone(), market.clone(), market);
+        Streams {
+            spot_book: Rc::new(RefCell::new(StreamMux::new(SPOT_STREAM, "spot bookTicker",
+                move |_, d| on_book_raw(&mut m1.borrow_mut(), Venue::SPOT, d), 200))),
+            usdm_book: Rc::new(RefCell::new(StreamMux::new(USDM_PUBLIC, "usdm bookTicker",
+                move |_, d| on_book_raw(&mut m2.borrow_mut(), Venue::USDM, d), 200))),
+            usdm_mark: Rc::new(RefCell::new(StreamMux::new(USDM_MARKET, "usdm markPrice",
+                move |_, d| on_mark_raw(&mut m3.borrow_mut(), Venue::USDM, d), 200))),
+        }
+    }
+}
+
+impl PublicFeed for Streams {
+    fn watch(&self, inst: &Inst) {
+        let s = inst.symbol.to_lowercase();
+        if inst.venue == Venue::SPOT {
+            self.spot_book.borrow_mut().add([format!("{s}@bookTicker")]);
+        } else {
+            self.usdm_book.borrow_mut().add([format!("{s}@bookTicker")]);
+            self.usdm_mark.borrow_mut().add([format!("{s}@markPrice@1s")]);
+        }
+    }
+
+    fn feeds(&self) -> Vec<FeedRef> {
+        [&self.spot_book, &self.usdm_book, &self.usdm_mark].iter().flat_map(|m| m.borrow().feeds()).collect()
+    }
+
+    fn stop(&self) {
+        for m in [&self.spot_book, &self.usdm_book, &self.usdm_mark] {
+            m.borrow_mut().stop();
+        }
+    }
 }
 
 #[cfg(test)]

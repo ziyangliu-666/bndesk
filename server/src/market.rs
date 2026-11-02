@@ -1,11 +1,7 @@
 //! Books, mids, fair values and price rings per instrument.
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt;
 
 use rustc_hash::FxHashMap;
-use serde::de::{self, Deserializer, Visitor};
-use serde::Deserialize;
 
 use crate::clock::{CLOCK, now_ms};
 pub use crate::protocol::Venue;
@@ -216,93 +212,28 @@ pub fn ewma_ratio(prev: Option<f64>, prev_t: i64, x: f64, t: i64, halflife_s: f6
     }
 }
 
-/// A price as Binance sends it (a decimal string) or as a number.
-fn de_px<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    struct V;
-    impl Visitor<'_> for V {
-        type Value = f64;
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("a price")
-        }
-        fn visit_str<E: de::Error>(self, s: &str) -> Result<f64, E> {
-            s.parse().map_err(E::custom)
-        }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
-            Ok(v)
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
-            Ok(v as f64)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
-            Ok(v as f64)
-        }
-    }
-    d.deserialize_any(V)
-}
-
-/// Like `de_px`, with null and "" as None.
-fn de_opt_px<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
-    struct V;
-    impl<'de> Visitor<'de> for V {
-        type Value = Option<f64>;
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("a price or null")
-        }
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
-            d.deserialize_any(V)
-        }
-        fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-            if s.is_empty() { Ok(None) } else { s.parse().map(Some).map_err(E::custom) }
-        }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
-            Ok(Some(v))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
-            Ok(Some(v as f64))
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
-            Ok(Some(v as f64))
-        }
-    }
-    d.deserialize_any(V)
-}
-
-/// bookTicker payload: symbol, best bid / ask, event time (absent on spot and REST).
-#[derive(Debug, Deserialize)]
-pub struct BookTicker<'a> {
-    #[serde(borrow)]
-    pub s: Cow<'a, str>,
-    #[serde(deserialize_with = "de_px")]
-    pub b: f64,
-    #[serde(deserialize_with = "de_px")]
-    pub a: f64,
-    #[serde(rename = "E", default)]
-    pub e: Option<i64>,
-}
-
-impl<'a> BookTicker<'a> {
-    pub fn new(s: &'a str, b: f64, a: f64, e: Option<i64>) -> Self {
-        BookTicker { s: Cow::Borrowed(s), b, a, e }
-    }
-}
-
-/// markPrice payload: mark price, funding rate ("" between fundings), next funding time.
-#[derive(Debug, Deserialize)]
-pub struct MarkPrice<'a> {
-    #[serde(borrow)]
-    pub s: Cow<'a, str>,
-    #[serde(deserialize_with = "de_px")]
-    pub p: f64,
-    #[serde(default, deserialize_with = "de_opt_px")]
-    pub r: Option<f64>,
-    #[serde(rename = "T", default)]
+/// A book's top as a connector reads it: the event time, when the exchange gives one.
+#[derive(Debug, Clone, Copy)]
+pub struct Book<'a> {
+    pub symbol: &'a str,
+    pub bid: f64,
+    pub ask: f64,
     pub t: Option<i64>,
+}
+
+impl<'a> Book<'a> {
+    pub fn new(symbol: &'a str, bid: f64, ask: f64, t: Option<i64>) -> Self {
+        Book { symbol, bid, ask, t }
+    }
+}
+
+/// A perp's mark price, funding rate (none between fundings) and next funding time.
+#[derive(Debug, Clone, Copy)]
+pub struct Mark<'a> {
+    pub symbol: &'a str,
+    pub price: f64,
+    pub funding: Option<f64>,
+    pub next_funding: Option<i64>,
 }
 
 pub struct Market {
@@ -441,20 +372,13 @@ impl Market {
         inst.good.filter(|g| *g != 0.0).or(mid)
     }
 
-    /// Hot path: a bookTicker payload as raw JSON (from the stream mux). Malformed payloads are dropped.
-    pub fn on_book_raw(&mut self, venue: Venue, data: &str) {
-        if let Ok(d) = sonic_rs::from_str::<BookTicker>(data) {
-            self.on_book(venue, &d);
-        }
-    }
-
-    pub fn on_book(&mut self, venue: Venue, d: &BookTicker) {
-        let Some(id) = self.find(&d.s, venue) else { return };
-        let t = d.e.unwrap_or_else(|| CLOCK.now());
+    pub fn on_book(&mut self, venue: Venue, d: &Book) {
+        let Some(id) = self.find(d.symbol, venue) else { return };
+        let t = d.t.unwrap_or_else(|| CLOCK.now());
         let recv = now_ms();
         let (max_spread, halflife) = (self.max_spread_bps, self.halflife_s);
         let inst = &mut self.insts[id];
-        (inst.bid, inst.ask, inst.t, inst.recv) = (d.b, d.a, Some(t), Some(recv));
+        (inst.bid, inst.ask, inst.t, inst.recv) = (d.bid, d.ask, Some(t), Some(recv));
         let Some(mid) = inst.mid() else { return };
         let tight = (inst.ask - inst.bid) / mid * 1e4 <= max_spread;
         if tight {
@@ -473,18 +397,12 @@ impl Market {
         }
     }
 
-    pub fn on_mark_raw(&mut self, data: &str) {
-        if let Ok(d) = sonic_rs::from_str::<MarkPrice>(data) {
-            self.on_mark(&d);
-        }
-    }
-
-    pub fn on_mark(&mut self, d: &MarkPrice) {
-        if let Some(id) = self.find(&d.s, Venue::USDM) {
+    pub fn on_mark(&mut self, venue: Venue, d: &Mark) {
+        if let Some(id) = self.find(d.symbol, venue) {
             let inst = &mut self.insts[id];
-            inst.mark = Some(d.p);
-            inst.funding = d.r;
-            inst.next_funding = d.t.filter(|t| *t != 0);
+            inst.mark = Some(d.price);
+            inst.funding = d.funding;
+            inst.next_funding = d.next_funding;
         }
     }
 
@@ -520,7 +438,7 @@ mod tests {
     }
 
     fn book(m: &mut Market, venue: Venue, json: &str) {
-        m.on_book_raw(venue, json);
+        crate::binance::public::on_book_raw(m, venue, json);
     }
 
     #[test]
@@ -578,13 +496,13 @@ mod tests {
         book(&mut m, Venue::USDM, r#"{"s":"XUSDT","b":50,"a":50.5,"E":7}"#);
         assert_eq!((m.insts[x].bid, m.insts[x].ask, m.insts[x].t), (50.0, 50.5, Some(7)));
         CLOCK.set_fixed(Some(99));
-        m.on_book(Venue::USDM, &BookTicker::new("XUSDT", 1.0, 2.0, None));   // REST shape: no E
+        m.on_book(Venue::USDM, &Book::new("XUSDT", 1.0, 2.0, None));   // REST shape: no E
         CLOCK.set_fixed(None);
         assert_eq!(m.insts[x].t, Some(99));
         book(&mut m, Venue::USDM, r#"{"s":"NOPE","b":"1","a":"2"}"#);
-        m.on_mark_raw(r#"{"e":"markPriceUpdate","E":1,"s":"XUSDT","p":"11.5","i":"11","P":"11","r":"0.0001","T":1700000000000}"#);
+        crate::binance::public::on_mark_raw(&mut m, Venue::USDM, r#"{"e":"markPriceUpdate","E":1,"s":"XUSDT","p":"11.5","i":"11","P":"11","r":"0.0001","T":1700000000000}"#);
         assert_eq!((m.insts[x].mark, m.insts[x].funding, m.insts[x].next_funding), (Some(11.5), Some(0.0001), Some(1_700_000_000_000)));
-        m.on_mark_raw(r#"{"s":"XUSDT","p":"12","r":"","T":0}"#);
+        crate::binance::public::on_mark_raw(&mut m, Venue::USDM, r#"{"s":"XUSDT","p":"12","r":"","T":0}"#);
         assert_eq!((m.insts[x].mark, m.insts[x].funding, m.insts[x].next_funding), (Some(12.0), None, None));
     }
 

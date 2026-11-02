@@ -31,11 +31,13 @@ use serde_json::Value;
 
 use crate::backfill::{interp_at, klines};
 use crate::beta::Betas;
-use crate::binance::rest::{CLOCK, Rest, client, governors, sync_time};
+use crate::binance::rest::{Rest, governors, sync_time};
+use crate::clock::CLOCK;
+use crate::connector::client;
 use crate::sign::credentials;
 use crate::config::Config;
 use crate::fills::FillRec;
-use crate::market::{BookTicker, Market, STABLES};
+use crate::market::{Book, Market, STABLES};
 use crate::pnl::{Gap, PnlBook, PnlState};
 use crate::protocol::{Side, Venue};
 use crate::recompute::{DAY, day_start_of};
@@ -168,7 +170,7 @@ impl<'a> Day<'a> {
             let Some((venue, sym)) = k.split_once(':') else { continue };
             let Ok(venue) = venue.parse::<Venue>() else { continue };
             if let Some(x) = interp_at(bars, t).filter(|x| *x > 0.0) {
-                self.m.on_book(venue, &BookTicker::new(sym, x, x, Some(t)));
+                self.m.on_book(venue, &Book::new(sym, x, x, Some(t)));
             }
         }
     }

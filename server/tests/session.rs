@@ -11,7 +11,7 @@ use desk::accounts::{self as ac, Account, AccountRef, Dividend, Transfer, Transf
 use desk::binance::account::{self as bn, Passes, commissions, dividends, fut_account, fut_today, master_fut, master_spot, open_orders, rate_limits,
                              spot_account, spot_trades};
 use desk::binance::events as ev;
-use desk::binance::public::{parse_exchange_info, parse_order_limits};
+use desk::binance::public::{on_book_raw, on_mark_raw, parse_exchange_info, parse_order_limits};
 use desk::binance::rest::{RestError, RestGet};
 use desk::clock::CLOCK;
 use desk::config::{AccountCfg, Config, MarketCfg, Ref};
@@ -34,11 +34,11 @@ fn fut_event(a: &AccountRef, e: &Value) {
 }
 
 fn book(m: &Rc<RefCell<Market>>, venue: Venue, raw: &str) {
-    m.borrow_mut().on_book_raw(venue, raw);
+    on_book_raw(&mut m.borrow_mut(), venue, raw);
 }
 
 fn mark(m: &Rc<RefCell<Market>>, raw: &str) {
-    m.borrow_mut().on_mark_raw(raw);
+    on_mark_raw(&mut m.borrow_mut(), Venue::USDM, raw);
 }
 
 fn info(spot: &Value, usdm: &Value) -> Info {
