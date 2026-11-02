@@ -12,7 +12,7 @@ use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, Row as SqlRow, params};
 
 use crate::fills::{FillRec, PATH_S, REF_ANCHORS, TK};
-use crate::protocol::Marks;
+use crate::protocol::{Marks, Venue};
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS fills (id TEXT PRIMARY KEY, ts INTEGER, account TEXT, symbol TEXT, venue TEXT,
@@ -268,8 +268,42 @@ fn str_at(r: &SqlRow, i: usize) -> rusqlite::Result<String> {
     Ok(str_opt(r, i)?.unwrap_or_default())
 }
 
+/// A row whose market this desk has never heard of: written by a later version, or on a market since dropped. It is not
+/// spot, whatever else it is.
+#[derive(Debug, thiserror::Error)]
+#[error("a fill on unknown market {0:?}")]
+pub struct UnknownVenue(pub String);
+
+/// A fill's market as stored. Rows from before fills had one say nothing, and were all spot.
+fn row_venue(s: &str) -> rusqlite::Result<Venue> {
+    if s.is_empty() {
+        return Ok(Venue::SPOT);
+    }
+    s.parse().map_err(|_| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(UnknownVenue(s.to_string()))))
+}
+
+/// Rows `row_fill` read, without those on a market this desk does not know (logged once a read, with how many).
+pub fn known_fills(rows: impl Iterator<Item = rusqlite::Result<FillRec>>) -> rusqlite::Result<Vec<FillRec>> {
+    let mut out = vec![];
+    let mut unknown: Option<(usize, String)> = None;
+    for r in rows {
+        match r {
+            Ok(f) => out.push(f),
+            Err(rusqlite::Error::FromSqlConversionFailure(_, _, e)) if e.is::<UnknownVenue>() => {
+                let n = unknown.get_or_insert_with(|| (0, e.to_string()));
+                n.0 += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if let Some((n, first)) = unknown {
+        tracing::warn!("{n} stored fills left out: {first}");
+    }
+    Ok(out)
+}
+
 pub fn row_fill(r: &SqlRow) -> rusqlite::Result<FillRec> {
-    let venue = str_at(r, 4)?.parse().unwrap_or_default();
+    let venue = row_venue(&str_at(r, 4)?)?;
     let side = str_at(r, 5)?.parse().unwrap_or_default();
     let mut f = FillRec::new(str_at(r, 0)?, i64_at(r, 1)?, str_at(r, 2)?, str_at(r, 3)?, venue, side, f64_at(r, 6)?,
                              f64_at(r, 7)?);
@@ -378,7 +412,7 @@ impl Store {
         let c = self.connect()?;
         let mut out = Loaded::default();
         let mut st = c.prepare(&format!("SELECT {FILL_COLS} FROM fills WHERE ts >= ? ORDER BY ts"))?;
-        out.fills = st.query_map([since], row_fill)?.collect::<Result<_, _>>()?;
+        out.fills = known_fills(st.query_map([since], row_fill)?)?;
         let mut st = c.prepare(&format!("SELECT {EQUITY_COLS} FROM equity WHERE t >= ? ORDER BY t"))?;
         out.equity = st
             .query_map([since], |r| {
@@ -645,7 +679,7 @@ fn run(c: Connection, rx: Receiver<Item>, health: &Mutex<StoreHealth>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Side, Venue};
+    use crate::protocol::Side;
 
     fn eq(t: i64) -> Row {
         Row::Equity(EquityRow { t, account: "a".into(), equity: 1.0, trading: Some(0.0), hedged: Some(0.0),
@@ -716,6 +750,25 @@ mod tests {
         s.close();
         let kv = s.load(0, 0).unwrap().kv;
         assert_eq!((kv.get("a").map(String::as_str), kv.get("b")), (Some("1"), None));
+    }
+
+    #[test]
+    fn a_fill_on_a_market_it_does_not_know_is_not_read_as_spot() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::new(dir.path().join("d.db"));
+        s.start().unwrap();
+        for (id, venue) in [("a", Venue::SPOT), ("b", Venue::USDM), ("c", Venue::SPOT), ("d", Venue::SPOT)] {
+            s.put(Row::Fill(Box::new(FillRec::new(id, 1000, "acc", "XUSDT", venue, Side::Buy, 1.0, 1.0))));
+        }
+        s.close();
+        let c = open(&s.path).unwrap();
+        c.execute("UPDATE fills SET venue = 'coinm' WHERE id = 'c'", []).unwrap();
+        c.execute("UPDATE fills SET venue = '' WHERE id = 'd'", []).unwrap();
+        let mut st = c.prepare(&format!("SELECT {FILL_COLS} FROM fills ORDER BY id")).unwrap();
+        let rows = known_fills(st.query_map([], row_fill).unwrap()).unwrap();
+        let got: Vec<(&str, Venue)> = rows.iter().map(|f| (f.id.as_str(), f.venue)).collect();
+        // from before fills had a market: spot, as it was
+        assert_eq!(got, [("a", Venue::SPOT), ("b", Venue::USDM), ("d", Venue::SPOT)]);
     }
 
     #[test]

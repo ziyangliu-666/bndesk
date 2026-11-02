@@ -24,7 +24,7 @@ use crate::backfill::{Prices, backfill_marks_with, interp_at, none_on_400};
 use crate::fills::{FillBook, FillRec, HK, MARK_GRACE_MS};
 use crate::market::{Market, STABLES};
 use crate::protocol::{Roles, Side};
-use crate::store::{FILL_COLS, SQL_FILL, fill_params, row_fill};
+use crate::store::{FILL_COLS, SQL_FILL, fill_params, known_fills, row_fill};
 
 pub const DAY: i64 = 86_400_000;
 
@@ -113,7 +113,7 @@ pub fn day_start_of(day: &str, day_start_min: i64) -> anyhow::Result<i64> {
 
 fn day_fills(c: &Connection, ds: i64) -> rusqlite::Result<Vec<FillRec>> {
     let mut st = c.prepare(&format!("SELECT {FILL_COLS} FROM fills WHERE ts >= ? AND ts < ? ORDER BY ts"))?;
-    st.query_map([ds, ds + DAY], row_fill)?.collect()
+    known_fills(st.query_map([ds, ds + DAY], row_fill)?)
 }
 
 /// Recompute the market making of the day starting at `ds` (a past day: `ds + DAY <= today`'s start, checked by

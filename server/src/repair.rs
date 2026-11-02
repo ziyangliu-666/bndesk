@@ -40,7 +40,7 @@ use crate::market::{Book, Market, STABLES};
 use crate::pnl::{Gap, PnlBook, PnlState};
 use crate::protocol::{Side, Venue};
 use crate::recompute::{DAY, day_start_of};
-use crate::store::{FILL_COLS, row_fill};
+use crate::store::{FILL_COLS, known_fills, row_fill};
 
 const MIN: i64 = 60_000;
 const HOUR: i64 = 3_600_000;
@@ -353,7 +353,7 @@ fn desk_rows(c: &Connection, a: i64, b: i64) -> Result<Vec<DeskRow>> {
 
 fn fills_between(c: &Connection, a: i64, b: i64) -> Result<Vec<FillRec>> {
     let mut st = c.prepare(&format!("SELECT {FILL_COLS} FROM fills WHERE ts >= ? AND ts < ? ORDER BY ts"))?;
-    Ok(st.query_map([a, b], row_fill)?.collect::<Result<_, _>>()?)
+    Ok(known_fills(st.query_map([a, b], row_fill)?)?)
 }
 
 /// `HH:MM` of the day starting at `ds` (24:00 the day's end).
