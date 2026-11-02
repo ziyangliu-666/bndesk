@@ -18,6 +18,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::accounts::{AccountRef, Dividend, MarketRef, TransfersRef};
+use crate::clock::TimeSync;
 use crate::config::AccountCfg;
 use crate::connector::{AccountReader, Connector, KlineSource, PublicFeed, Reply, RestBan};
 use crate::feeds::FeedRef;
@@ -64,6 +65,10 @@ impl Connector for Binance {
 
     fn allowed_writes(&self) -> &'static [(&'static str, &'static str)] {
         &ALLOWED_WRITES
+    }
+
+    fn clock(&self) -> &'static TimeSync {
+        &rest::CLOCK
     }
 
     fn sync_clock(&self) -> Reply<'_, ()> {

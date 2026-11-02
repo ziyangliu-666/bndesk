@@ -1255,7 +1255,7 @@ async fn bootstrap(connector: &dyn Connector, feed: &FeedRef, cfg: &Config) -> M
         .await;
         match r {
             Ok(info) => {
-                feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", CLOCK.offset_ms())));
+                feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", connector.clock().offset_ms())));
                 return Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
             }
             Err(e) => {
@@ -1436,6 +1436,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let http = connector::client();
     let public_feed = Feed::shared("public rest", FeedKind::Rest, "");
     let exchange = connector::open(&cfg.exchange, http.clone(), Some(public_feed.clone()))?;
+    exchange.clock().lead();
     let market = tokio::select! {
         m = bootstrap(&*exchange, &public_feed, &cfg) => m,
         _ = &mut sig => return Ok(()),

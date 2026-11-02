@@ -107,7 +107,7 @@ const READS: [(&str, &[&str]); 4] = [
     ("PublicFeed", &["watch", "feeds", "stop"]),
     ("KlineSource", &["id", "bars"]),
     ("AccountReader", &["balances", "perp_positions", "perp_trades", "perp_funding"]),
-    ("Connector", &["id", "markets", "allowed_writes", "sync_clock", "keep_clock", "instruments", "public_feed", "book_tops", "bars", "trade_at",
+    ("Connector", &["id", "markets", "allowed_writes", "clock", "sync_clock", "keep_clock", "instruments", "public_feed", "book_tops", "bars", "trade_at",
                     "mark_bars", "kline_source", "rest_bans", "credentials", "start_accounts", "reader", "is_rebate", "distributions"]),
 ];
 

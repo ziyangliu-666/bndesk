@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 
 use crate::accounts::{AccountRef, Dividend, MarketRef, TransfersRef};
 use crate::binance::Binance;
+use crate::clock::TimeSync;
 use crate::config::AccountCfg;
 use crate::feeds::FeedRef;
 use crate::market::{Info, Inst};
@@ -108,7 +109,9 @@ pub trait Connector {
     /// The only requests other than GET it makes: (method, path). Nothing that trades or moves money.
     fn allowed_writes(&self) -> &'static [(&'static str, &'static str)];
 
-    /// Sets the desk's clock to the exchange's.
+    /// The exchange's time, as last measured.
+    fn clock(&self) -> &'static TimeSync;
+    /// Measures it.
     fn sync_clock(&self) -> Reply<'_, ()>;
     /// Keeps it there: runs until cancelled.
     fn keep_clock(&self) -> LocalBoxFuture<'static, ()>;

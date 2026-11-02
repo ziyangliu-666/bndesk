@@ -11,7 +11,6 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::accounts::{AccountRef, Dividend, Event, FutDay, Transfer, TransfersRef};
-use crate::clock::CLOCK;
 use crate::connector::RestError;
 use crate::feeds::FeedRef;
 use crate::fills::FillRec;
@@ -22,7 +21,7 @@ use crate::sign::query;
 use super::events::{OPEN_STATES, apply_fut_snapshot, apply_spot_snapshot, on_fut_event, on_spot_event};
 use super::json::{f, f_or0, first, get, id_str, s, side_of, to_f, to_i, truthy};
 use super::public::order_limits;
-use super::rest::{Params, Rest, RestGet};
+use super::rest::{CLOCK, Params, Rest, RestGet};
 use super::ws::{USDM_PRIVATE, WS_API, WsConn, WsHandle, run_ws, ws_api_call};
 
 /// What an account's REST passes remember between runs.

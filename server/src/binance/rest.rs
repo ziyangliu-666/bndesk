@@ -4,12 +4,14 @@ use std::rc::Rc;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 
-use crate::clock::CLOCK;
-use crate::clock::now_s;
+use crate::clock::{TimeSync, now_s};
 use crate::feeds::FeedRef;
 
 use crate::sign::{Credentials, query, quote};
 use super::weight::{Governor, Governors};
+
+/// Binance's time, which what is signed for it carries.
+pub static CLOCK: TimeSync = TimeSync::new();
 
 pub const SPOT: &str = "https://api.binance.com";
 pub const FAPI: &str = "https://fapi.binance.com";

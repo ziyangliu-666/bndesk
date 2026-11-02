@@ -392,6 +392,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let now = crate::clock::now_ms();
     anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min), "{day} is not over yet");
     let public = connector::open(&cfg.exchange, connector::client(), None)?;
+    public.clock().lead();
     public.sync_clock().await.context("time sync")?;
     let t_bal = CLOCK.now();
 
