@@ -269,14 +269,17 @@ const MARKETS: Market[] = [
 ];
 const SECOND: Market = { id: "demo-perp", exchange: "Demo", kind: "perp", name: "Demo" };
 if (params.get("markets") === "2") MARKETS.push(SECOND);
-const on = (k: string) => params.get(k) !== "0";
-const PERP = params.get("perp") === "1";
+// `?exchange=hl` is that desk on Hyperliquid: perps named by their coin, in USDC, no hedge, no order limits
+const HL = params.get("exchange") === "hl";
+if (HL) MARKETS.splice(0, MARKETS.length, { id: "hl", exchange: "Hyperliquid", kind: "perp", name: "HL" }, { id: "hlspot", exchange: "Hyperliquid", kind: "spot", name: "HL Spot" });
+const on = (k: string) => (HL && k === "hedge" ? false : params.get(k) !== "0");
+const PERP = HL || params.get("perp") === "1";
 const hedgeSymbol = (s: string) => s.replace(/USDT$/, "USDC");
 const DESK: Desk = {
-  currency: params.get("currency") ?? "USDT",
-  quote: "USDT",
+  currency: params.get("currency") ?? (HL ? "USDC" : "USDT"),
+  quote: HL ? "USDC" : "USDT",
   markets: MARKETS,
-  roles: PERP ? { markets: { usdm: "traded" }, instruments: on("hedge") ? { "usdm:BTCUSDC": "hedge", "usdm:ETHUSDC": "hedge" } : {} } : { markets: {}, instruments: {} },
+  roles: HL ? { markets: { hl: "traded" }, instruments: {} } : PERP ? { markets: { usdm: "traded" }, instruments: on("hedge") ? { "usdm:BTCUSDC": "hedge", "usdm:ETHUSDC": "hedge" } : {} } : { markets: {}, instruments: {} },
   perps: on("hedge") || PERP,
   hedge: on("hedge"),
   rebates: on("rebates"),
@@ -329,6 +332,32 @@ function perpDesk<T extends Partial<Snapshot>>(m: T): T {
   return m;
 }
 
+/** The perp desk's rows as Hyperliquid names them. */
+function onHl<R extends { symbol: string; venue: string }>(r: R): R {
+  return { ...r, venue: r.venue === "usdm" ? "hl" : r.venue, symbol: r.symbol.replace(/USDT$/, "") };
+}
+
+function hlDesk<T extends Partial<Snapshot>>(m: T): T {
+  if (m.symbols) m.symbols = m.symbols.map(onHl);
+  if (m.orders) m.orders = m.orders.map(onHl);
+  if (m.fills) m.fills = m.fills.map(onHl);
+  if (m.accounts) {
+    m.accounts = m.accounts.map((a) => ({
+      ...a,
+      positions: a.positions.map(onHl),
+      fees: a.fees.filter((f) => f.venue === "usdm").map((f) => ({ ...f, venue: "hl" })),
+      orders_10s: 0,
+      orders_10s_limit: 0,
+      orders_1d: 0,
+      orders_1d_limit: 0,
+      no_order_limits: true,
+    }));
+  }
+  if (m.feeds) m.feeds = m.feeds.filter((f) => !f.name.startsWith("spot")).map((f) => ({ ...f, name: f.name.replace(/usdm/g, "hl") }));
+  if (m.alerts) m.alerts = m.alerts.filter((a) => !a.rule.startsWith("orders_")).map((a) => ({ ...a, text: a.text.replace(/usdm/g, "hl") }));
+  return m;
+}
+
 /** What a message says on a desk without the parts `DESK` leaves out. */
 function shaped<T extends Partial<Snapshot>>(m: T): T {
   if (PERP) perpDesk(m);
@@ -355,6 +384,7 @@ function shaped<T extends Partial<Snapshot>>(m: T): T {
   if (!DESK.rebates && m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, rebates: 0 }));
   if (!on("engines") && m.engines) m.engines = [];
   if (!on("engines") && m.feeds) m.feeds = m.feeds.filter((f) => f.kind !== "engine");
+  if (HL) hlDesk(m);
   return m;
 }
 

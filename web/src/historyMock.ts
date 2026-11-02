@@ -431,13 +431,18 @@ export function mockTicker24h(symbol_: string, venue: string): { last: number; o
 }
 
 const ACCTS = ["sub-a", "sub-b", "sub-c", "sub-d"];
-/** `?perp=1`'s hedges are BTCUSDC and ETHUSDC: the same paths as their USDT markets. */
+/** `?perp=1`'s hedges are BTCUSDC and ETHUSDC, and `?exchange=hl` names a perp by its coin: the same paths as their USDT
+ *  markets. */
 function pathSymbol(symbol: string): string {
   const usdt = symbol.replace(/USDC$/, "USDT");
-  return tracked(usdt) ? usdt : symbol;
+  if (tracked(usdt)) return usdt;
+  return tracked(`${symbol}USDT`) ? `${symbol}USDT` : symbol;
 }
 /** Where what the desk quotes is: spot, or USD-M on a desk that trades perps. */
-const quotedVenue = () => (useStore.getState().snap?.desk?.roles?.markets.usdm === "traded" ? "usdm" : "spot");
+const quotedVenue = () => {
+  const m = useStore.getState().snap?.desk?.roles?.markets;
+  return m?.hl === "traded" ? "hl" : m?.usdm === "traded" ? "usdm" : "spot";
+};
 
 function fills(symbol: string, venue: string | undefined, from: number, to: number): HistFill[] {
   if (!tracked(pathSymbol(symbol))) return [];
