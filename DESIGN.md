@@ -38,14 +38,22 @@ reference, fair = reference mid × EWMA(own mid / reference mid) (half-life conf
 
 ### Connectors
 
-What the desk asks of an exchange is the trait in `server/src/connector.rs`; `server/src/binance/` implements it and is
-the only code that knows an endpoint, a field name or a URL. A connector reports an account's news as
-`accounts::Event`s, applied where they are read: `Account::apply` holds the rules below about which of a REST read and a
-stream event is newer. The markets are the table `protocol::MARKETS`: a market's id is what stored rows, instrument keys
-and links say, it has no ':', and its aliases are accepted going in and never written. A market with 1 s bars has
-backfilled prices from those, one without from trades. An account's `exchange` (default `binance`) names its connector
-and a desk has one; `markets` (`["spot", "usdm"]`, or `futures = true` as ever) are the ones it is read on, and must
-include its spot market. `server/tests/readonly.rs` holds a connector to reading.
+What the desk asks of an exchange is the trait in `server/src/connector.rs`. `server/src/binance/` and
+`server/src/hyperliquid/` implement it and are the only code that knows an endpoint, a field name or a URL. A connector
+reports an account's news as `accounts::Event`s, applied where they are read: `Account::apply` holds the rules below about
+which of a REST read and a stream event is newer. The markets are the table `protocol::MARKETS`: a market's id is what
+stored rows, instrument keys and links say, it has no ':', and its aliases are accepted going in and never written. A
+market with 1 s bars has backfilled prices from those, one without from trades, and one whose trades cannot be asked for by
+time from one read of 1 min bars, which price horizons of a minute and more.
+
+A desk reads every exchange its accounts name, in their order, then those of the `[[markets]]` it watches, and with none
+of these Binance. `Exchanges` holds one connector each, and a market's `exchange` picks it. An account's `exchange`
+(default `binance`) names its connector, and `markets` the ones it is read on: on Binance `["spot", "usdm"]`, or
+`futures = true` as ever, and they must include spot, where its balances are read; on Hyperliquid every market by default,
+with its balances read whichever are named. Each connector keeps its exchange's clock, for what it asks and signs; `CLOCK`,
+the desk's grid, reads the first exchange's. An exchange down at the start holds the desk up for a minute at most, once
+another has answered, and its listing joins the market when it comes back. `server/tests/readonly.rs` holds a connector to
+reading.
 
 ### Sources (Binance)
 
@@ -96,6 +104,38 @@ include its spot market. `server/tests/readonly.rs` holds a connector to reading
 
 Weight governor: track `X-MBX-USED-WEIGHT-1M`, stay under 50 % of the limit, and stop REST for
 `Retry-After` on 429/418.
+
+### Sources (Hyperliquid)
+
+An account is an address, from `address_env`. Reading it takes no key, the desk refuses one at load, and nothing in the
+connector can sign. Every read is a `POST /info` with a `type` from `rest::READS`, unsigned, and the client refuses any
+other path or type, or a body with `action`, `signature` or `nonce`, before it leaves the process. Trading is `POST /exchange`
+with a wallet signature; that path is not in the source. The socket sends `subscribe` and `ping` only, never `post`.
+
+- Listing: `metaAndAssetCtxs`, `spotMetaAndAssetCtxs`. `names.rs` turns the exchange's names into the desk's: a perp is its
+  coin in capitals (`BTC`, `KPEPE` for `kPEPE`) on `hl`, a spot pair base and quote (`HYPEUSDC` for `@107`) on `hlspot`.
+  Builder-deployed perps (`xyz:NVDA`) and outcome tokens are not read: a fill on one is left out, and shows in Other.
+- Public socket `wss://api.hyperliquid.xyz/ws`: `bbo` per coin, `activeAssetCtx` per perp for mark and funding, at most 400
+  subscriptions a connection, `ping` every 30 s (it closes a connection silent for 60 s). A subscription to a coin it does
+  not list closes the connection, so one is sent for listed coins only. Funding is hourly, and the rate is per hour.
+- Books not yet ticked: `l2Book` per symbol, as it has no list of tops.
+- Bars: `candleSnapshot`, 1 min and up, the last 5000 of an interval. It has no 1 s bars, no trades by time and no mark
+  candles, so a day's opening mark, `mark_bars` and a backfill read trade candles. 24 h figures for `/api/ticker` come from
+  the two listings, cached 5 s, with the high and low from hourly candles, cached 5 min.
+- User socket, one per address, at most 10 addresses an IP: `userFills`, `orderUpdates`, `userFundings`,
+  `userNonFundingLedgerUpdates`, `clearinghouseState`, `spotState`.
+- Reads per account: `clearinghouseState` and `spotClearinghouseState` every 10 s, `frontendOpenOrders`, `userFillsByTime`,
+  `userFunding` and `userNonFundingLedgerUpdates` each minute, `userFees` and `userAbstraction` every 5 min. Weight stays
+  under half of 1200 a minute per IP, counted here since it sends no count of its own; a 429 pauses a minute.
+- One margin account: `clearinghouseState` is a `PerpSnapshot`, with wallet = accountValue − unrealized. An account in
+  `unifiedAccount` or `portfolioMargin` keeps its whole balance on the spot side, so its wallet there is 0.
+- Transfers: each address's own ledger confirms them, so there is no master, no email and no hold. `email` holds the
+  address, which is what a record's `from_email` and `to_email` then say. Deposits, withdrawals, transfers, sends and vault
+  flows are records; a move between its own spot and perp sides has the same address at both ends and nets; a liquidation,
+  reward or leader's commission is not money moved and stays in P&L. The day opens once every address's ledger is in.
+- Fees and rebates: `userFees`. A maker rebate is a negative fee on the fill, in Π, so there are no distributions and no
+  Rebates line. There are no order windows, so `no_order_limits` is set and no meter is drawn.
+- Valuation: USDC at 1 where no `USDCUSDT` is read, and an asset at its pair on `hlspot` in USDC, else a stablecoin.
 
 ### Derived state
 
@@ -286,8 +326,11 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: the market's connector's klines
   (Binance: spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 40 000 (the latest).
   `venue` a market's id or alias, spot by default; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
-  Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
-  400, a 429 / 418 a 503 until its Retry-After.
+  Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. An exchange's refusal is a
+  400, a 429 / 418 a 503 until its Retry-After, for that exchange's markets alone. A market of an exchange this desk does
+  not read is a 400.
+- `GET /api/ticker?symbol&venue` -> `{last, open, high, low, volume, quote_volume, t}`: an instrument's 24 h, for a market the
+  page has no socket to. `high` and `low` may be null. 204 where its connector leaves that to the page (Binance's markets).
 
 Markouts, answered on the desk's thread from today's fills in memory:
 - `GET /api/markouts?account&venue&side&ref&weight&h` -> `MarkoutReport`. Optional filters `account`, `venue`
@@ -341,7 +384,7 @@ interface Snapshot {
 // and Other are computed the same way whatever it says.
 interface Desk {
   currency: string;   // [desk] currency: the name money figures carry, USD or a USD stablecoin; not a conversion
-  quote: string;      // the asset accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
+  quote: string;      // the desk's first exchange's: what accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
   markets: { id: string; exchange: string; kind: "spot" | "perp"; name: string }[];   // what every venue field can say: id is the venue, name the interface's word for it
   roles: {            // what instruments are for, as configured: an instrument's own, else its market's, else spot is traded and a perp hedges. Empty on a desk that sets none
     markets: Record<string, "traded" | "hedge">;       // [roles]: by market id
@@ -399,6 +442,7 @@ interface Account {
                pnl_day: number | null }[];   // pnl_day: today's price P&L, fees and funding on the symbol
   orders_10s: number; orders_10s_limit: number; orders_1d: number; orders_1d_limit: number;
   orders_source: string;                    // "binance" (rateLimit/order) or "stream" (user stream, no rejects)
+  no_order_limits?: boolean;                // its exchange has no order windows: no meters. Absent where it has them
   open_orders: number; bids_notional: number; asks_notional: number;
   utilization: number;              // resting bids / (quote_free + resting bids)
   fees: { venue: string; maker_bps: number; taker_bps: number; changed: boolean }[];

@@ -2,7 +2,7 @@
 
 **[Online Demo](https://ziy.bio/bndesk/)**
 
-A real-time, read-only dashboard for high-frequency market making on Binance, written in Rust and React and designed for [FastMM](https://github.com/ziyangliu-666/FastMM). It looks like an exchange's trade page, on a pure-black ground.
+A real-time, read-only dashboard for high-frequency market making on Binance and Hyperliquid, alone or together, written in Rust and React and designed for [FastMM](https://github.com/ziyangliu-666/FastMM). It looks like an exchange's trade page, on a pure-black ground.
 
 ![Desk](docs/screenshots/desk.gif)
 

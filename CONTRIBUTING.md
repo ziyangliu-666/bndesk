@@ -10,6 +10,6 @@
    - nothing moves on its own (no marquee, no ticker scroll);
    - green and red only for whether we made money (Day PnL, per-instrument and per-account P&L) and for buy and sell; everything else in ink, the sign in the text;
    - a figure once per view: chart legends name their lines at rest and give values on hover where the head has the figures;
-   - no count badges on tabs (a count only where it asks for something: active alerts, engines down), no pills or plates (a perp reads `Perp` in muted text, spot needs no tag), no dotted underlines (definitions in tooltips or the phone's sheets);
+   - no count badges on tabs (a count only where it asks for something: active alerts, engines down), no pills or plates (a perp reads `Perp` in muted text, spot needs no tag; with two markets of a kind each reads its name), no dotted underlines (definitions in tooltips or the phone's sheets);
    - hierarchy over strips: one figure large, its parts in a line, secondary facts grouped and quieter; related things close, groups apart.
 7. Commit subjects describe the change in the present tense (`History page: ...`, `server: ...`).

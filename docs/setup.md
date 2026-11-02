@@ -11,13 +11,52 @@ It serves the desk on <http://127.0.0.1:8710>. With `--config ../desk.example.to
 
 Copy [desk.example.toml](../desk.example.toml) to `desk.toml` and fill in the accounts, the markets you care about and the alert thresholds. The desk needs read-only API keys: one on the master account for the sub-account list and transfers, and one per sub-account. Ed25519 and HMAC keys both work. `desk.toml` only names the environment variables that hold them.
 
-`[desk]` describes the desk to the pages and changes no figure. `currency` is the name on money figures (default USDT), USD or a USD stablecoin since nothing is converted, and `market_making = false` shows Trading PnL without its two parts. A desk with no futures, no rebates or no `[[engines]]` shows no empty columns or panels for them, without any setting.
+`[desk]` describes the desk to the pages and changes no figure. `currency` is the name on money figures (by default the first exchange's quote, USDT on Binance), USD or a USD stablecoin since nothing is converted, and `market_making = false` shows Trading PnL without its two parts. A desk with no futures, no rebates or no `[[engines]]` shows no empty columns or panels for them, without any setting.
 
 Binance counts request weight per IP address. Run the desk from a machine your trading processes do not share, or it will spend their weight.
 
 If the server listens on anything other than localhost it asks for a password. `cargo run --release -- --new-password` prints one along with the hash to put in `DESK_PASSWORD_HASH`.
 
 The manifest and icons sit behind the login too, so add the desk to a phone's home screen after logging in.
+
+## On Hyperliquid
+
+An account there is an address. Put it in the environment and name the variable, and give the desk no key: it reads with the address alone and refuses `api_key_env`, `secret_env` and `private_key_env` on such an account, as it does `[master]`.
+
+```toml
+[[accounts]]
+id = "hl-a"
+exchange = "hyperliquid"
+address_env = "DESK_HL_A_ADDRESS"   # the account's own, or a sub-account's: an agent wallet's reads as empty
+
+[roles]
+hl = "traded"                       # without this a perp counts as a hedge, as on any exchange
+
+[[markets]]
+symbol = "BTC"                      # a perp is its coin in capitals: BTC, KPEPE
+venue = "hl"
+
+[[markets]]
+symbol = "HYPEUSDC"                 # spot is base and quote
+venue = "hlspot"
+```
+
+The same entries beside Binance's make a desk on both, with Binance first if its `[[accounts]]` come first: the first account's exchange gives the desk its clock, its quote and the default `currency`. Rows then name their market (`USD-M`, `HL`). USDC counts as worth 1 on a desk with no `USDCUSDT` to price it, and a perp's price and wallet count as dollars on any desk, so beside Binance Hyperliquid's figures are off by USDC's price against USDT.
+
+It allows ten addresses per IP on its sockets. It keeps each address's last 10 000 fills and an instrument's last 5000 candles, so a desk that was down through a busier day than that has lost what fell off. Builder-deployed perps and outcome tokens are not read, and what they make shows in Other.
+
+To see it with no address at all, set `simulate = true` under `[server]` and name a market, with no accounts:
+
+```toml
+[server]
+simulate = true
+
+[[markets]]
+symbol = "BTC"
+venue = "hl"
+```
+
+The desk then runs on Hyperliquid's real books with made-up accounts. A `[[markets]]` entry on another exchange's market adds its real books beside them.
 
 ## Keeping history
 
