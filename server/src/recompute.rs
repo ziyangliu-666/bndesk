@@ -1,7 +1,7 @@
 //! `desk recompute-mm`: past days' market making as if the kline backfill of missed marks had always been
 //! there.
 //!
-//! Before it, a spot fill whose mark at t + h (h = `mm_horizon_s`) was never taken (the desk was down then, or
+//! Before it, a traded instrument's fill whose mark at t + h (h = `mm_horizon_s`) was never taken (the desk was down then, or
 //! its 1 s ring had a hole) was valued at the mid now for the rest of its day, so the stored market making
 //! drifted with the inventory. Per past day this backfills the fills' missing marks the way the live backfill
 //! does (`backfill::backfill_marks`: same klines, same pacing) and stores them, then corrects what was stored
@@ -23,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::backfill::{Prices, backfill_marks_with, interp_at, none_on_400};
 use crate::fills::{FillBook, FillRec, HK, MARK_GRACE_MS};
 use crate::market::{Market, STABLES};
-use crate::protocol::Side;
+use crate::protocol::{Roles, Side};
 use crate::store::{FILL_COLS, SQL_FILL, fill_params, row_fill};
 
 pub const DAY: i64 = 86_400_000;
@@ -38,7 +38,7 @@ pub struct DayReport {
     /// The day's kept split (`dayreal:<day>`, the day tables' row), before and after.
     pub old_kept: Option<f64>,
     pub new_kept: Option<f64>,
-    /// Spot fills past h + grace with no mark at h, before the backfill, and their notional.
+    /// Fills of what the desk trades past h + grace with no mark at h, before the backfill, and their notional.
     pub unmarked: usize,
     pub unmarked_notional: f64,
     /// Of those, the ones klines priced, and the ones they could not (left out of market making).
@@ -119,7 +119,8 @@ fn day_fills(c: &Connection, ds: i64) -> rusqlite::Result<Vec<FillRec>> {
 /// Recompute the market making of the day starting at `ds` (a past day: `ds + DAY <= today`'s start, checked by
 /// the caller), backfilling its fills' marks from `src` on `market` (the configured markets and their
 /// references `ensure`d). `now`: the clock the marks are due by. Writes in one transaction unless `dry_run`.
-pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src: &impl Prices, ds: i64,
+#[allow(clippy::too_many_arguments)]
+pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src: &impl Prices, roles: &Roles, ds: i64,
                            horizon_s: i64, now: i64, dry_run: bool) -> anyhow::Result<DayReport> {
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let hms = horizon_s * 1000;
@@ -140,7 +141,7 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
     let unmarked: Vec<String> = book
         .fills
         .iter()
-        .filter(|f| f.venue.is_spot() && f.mk_raw.0[h].is_none() && !f.unpriceable(h) && f.ts + hms + MARK_GRACE_MS < end)
+        .filter(|f| roles.traded(&f.symbol, f.venue) && f.mk_raw.0[h].is_none() && !f.unpriceable(h) && f.ts + hms + MARK_GRACE_MS < end)
         .map(|f| f.id.clone())
         .collect();
 
@@ -283,7 +284,7 @@ pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: boo
         if ds + DAY > today || ds >= fixed {
             eprintln!("{day}: skipped (today, or valued with the fix live)");
         } else {
-            let r = recompute_day(&mut c, &market, &rest, ds, cfg.mm_horizon_s, now, dry_run).await?;
+            let r = recompute_day(&mut c, &market, &rest, &cfg.roles, ds, cfg.mm_horizon_s, now, dry_run).await?;
             eprintln!("{day}: rows {} -> {}, kept {} -> {}{}", fmt(r.old_mm), fmt(r.new_mm), fmt(r.old_kept), fmt(r.new_kept),
                       if dry_run { " (dry run)" } else { " (written)" });
             reps.push(r);
@@ -404,7 +405,7 @@ mod tests {
         let mut c = crate::store::open(&p).unwrap();
         let m = market();
         let now = DS + 2 * DAY;
-        let dry = recompute_day(&mut c, &m, &src, DS, 60, now, true).await.unwrap();
+        let dry = recompute_day(&mut c, &m, &src, &Roles::default(), DS, 60, now, true).await.unwrap();
         // new: 0.1 + (11 − 10) = 1.1, BBB out (it was at 0: no mid)
         assert_relative_eq!(dry.new_mm.unwrap(), 1.1, epsilon = 1e-9);
         assert_eq!(dry.old_mm, Some(2.1));
@@ -420,7 +421,7 @@ mod tests {
         assert_eq!(bf, 0);
 
         let m = market();
-        let rep = recompute_day(&mut c, &m, &src, DS, 60, now, false).await.unwrap();
+        let rep = recompute_day(&mut c, &m, &src, &Roles::default(), DS, 60, now, false).await.unwrap();
         assert_eq!(rep.new_mm, dry.new_mm);
         let rows: Vec<(i64, f64)> = c
             .prepare("SELECT t, mm FROM equity WHERE account = '*' ORDER BY t").unwrap()
@@ -447,7 +448,7 @@ mod tests {
         // run again: nothing left to do, nothing changes
         let m = market();
         src.log.borrow_mut().clear();
-        let again = recompute_day(&mut c, &m, &src, DS, 60, now, false).await.unwrap();
+        let again = recompute_day(&mut c, &m, &src, &Roles::default(), DS, 60, now, false).await.unwrap();
         assert_eq!((again.unmarked, again.rows, again.marks, again.fills_written), (0, 0, 0, 0));
         assert_relative_eq!(again.new_mm.unwrap(), 1.1, epsilon = 1e-9);
     }

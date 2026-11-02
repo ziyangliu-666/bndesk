@@ -340,6 +340,7 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             a.positions.iter().filter(|(_, (amt, _))| *amt != 0.0).map(|(s, _)| s.clone()).collect();
         syms.extend(a.traded.iter().filter_map(|k| k.strip_prefix("usdm:")).map(String::from));
         syms.extend(a.fut_day.keys().cloned());
+        syms.extend(a.perp_symbols.iter().cloned());
         (ds, syms, a.market.clone(), a.id.clone(), a.on_fill.clone())
     };
     if syms.is_empty() {

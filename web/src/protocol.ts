@@ -13,12 +13,22 @@ export type Msg =
  *  row as [index, the fields that changed] (the list kept its length). Unchanged rows keep their objects. */
 export type Diff = { [K in keyof Snapshot]?: Snapshot[K] extends unknown[] ? [number, Record<string, unknown>][] : Record<string, unknown> };
 
+export type InstRole = "traded" | "hedge";
+
+/** An instrument's role: its own, else its market's, else its market's kind's. Keys: market id; "usdm:BTCUSDT", on spot "spot:BTC". */
+export interface Roles {
+  markets: Record<string, InstRole>;
+  instruments: Record<string, InstRole>;
+}
+
 /** How this desk is set up, so the pages draw only what applies (DESIGN.md). Nothing here changes a figure. */
 export interface Desk {
   currency: string; // the name money figures carry: not a conversion
   quote: string; // the asset quote_free and quote_locked are balances of
   markets: Market[]; // what every venue field can say
-  hedge: boolean; // futures are part of the desk
+  roles?: Roles; // what instruments are for; absent or empty: spot is traded, a perp hedges
+  perps?: boolean; // an account has a perp market or a position: the futures columns and tabs
+  hedge: boolean; // something hedges: the Hedge figure
   rebates: boolean; // a rebate has been credited, today or on a kept day
   mm: boolean; // Trading PnL is split into market making and inventory
 }
@@ -131,6 +141,7 @@ export interface PnlSummary {
   mm: number; // market making: Σ s q (M(t+60s) − p) − fee, own mid
   mm_spread: number; // the same at h = 0 against the fair at the fill
   inventory: number; // trading − mm
+  funding_day: number; // of inventory: the funding of the perps traded
   mm_unmarked_fills: number; // fills past 60 s with no price 60 s after them (not even from klines): left out of mm
   mm_unmarked_notional: number; // their notional, USD
 }
@@ -203,6 +214,7 @@ export interface Account {
   quote_free: number;
   quote_locked: number;
   inventory_value: number;
+  hedge_value: number; // of inventory_value: the spot assets that hedge
   fut_wallet: number;
   fut_upnl: number;
   fut_available: number;

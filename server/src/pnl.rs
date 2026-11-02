@@ -1,7 +1,12 @@
-//! Trading P&L of the spot inventory: closed form for the day, decomposed on a live 1 s grid of exchange-clock
+//! Trading P&L of what the desk trades: closed form for the day, decomposed on a live 1 s grid of exchange-clock
 //! seconds, with the grid's gaps (monitor start after the day start, restarts, stalls) backfilled on a 1 min grid.
 //!
-//! Per instrument k (keyed by base asset): M_k(t) valuation price, R_k(t) mid of its reference, r_k(t) =
+//! A position is what an instrument's role (`Roles`) and market make it. Spot is keyed by base asset, since balances
+//! are; a traded perp by its instrument key (`usdm:BTCUSDT`), since one base can have several, and its Q is the
+//! accounts' position, M_k its mark, and funding adds to its Π. A spot asset that hedges is kept like any other, so
+//! its leg can be told (`hedge_legs`), and adds nothing to Π, H or the blocks. A perp that hedges is not here.
+//!
+//! Per instrument k: M_k(t) valuation price, R_k(t) mid of its reference, r_k(t) =
 //! R_k(t) / R_k(t-1) - 1 (0 without a reference), r_b(t) the beta instrument's return, beta_k its beta.
 //! Q0_k = inventory at the day start D: the current balance minus today's fills and flows; then Q changes by
 //! fills (s q, before fees) and by flows: transfers of the asset into (+) or out of (-) the desk, each at the
@@ -33,8 +38,8 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::fills::{FillRec, sign};
-use crate::market::{Inst, InstId, Market, Venue};
-use crate::protocol::{self as P, Side};
+use crate::market::{Inst, InstId, Market, QUOTE, Venue};
+use crate::protocol::{self as P, InstRole, Roles, Side};
 
 pub const HOUR: i64 = 3_600_000;
 pub const DAY: i64 = 86_400_000;
@@ -263,11 +268,13 @@ pub struct Pos {
     pub h: f64,                 // today's H_k
     pub m_start: Option<f64>,   // M when booking began: stands in for M_k(D) until that is known
     pub t0: i64,                // ms the opening quantity was taken from the balance at
+    pub hedge: bool,            // a spot asset that hedges: a leg, not part of Π
+    pub perp: bool,             // a traded perp
 }
 
 impl Pos {
     pub fn new(base: &str, inst: InstId, key: &str, q: f64, q0: f64) -> Self {
-        Pos { base: base.into(), inst, key: key.into(), q, q0, m: None, r: None, h: 0.0, m_start: None, t0: 0 }
+        Pos { base: base.into(), inst, key: key.into(), q, q0, m: None, r: None, h: 0.0, m_start: None, t0: 0, hedge: false, perp: false }
     }
 }
 
@@ -407,11 +414,22 @@ pub type BalanceFn = Box<dyn Fn(&str) -> f64>;
 pub type ScopeFn = Box<dyn Fn() -> Vec<String>>;
 pub type BetaFn = Box<dyn Fn(&str) -> f64>;
 pub type TakerFn = Box<dyn Fn(&Inst) -> f64>;
+/// What the accounts know of a traded perp's day (by instrument key): `PerpDay` with funding up to the time asked.
+pub type PerpDayFn = Box<dyn Fn(&str, i64) -> PerpDay>;
 
-/// balance(base): current total base balance across the desk's accounts; scope(): spot instrument
+/// Funding received since the day start, USD, and the mark there, as the accounts' sweep of the day has them.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PerpDay {
+    pub funding: f64,
+    pub m0: Option<f64>,
+}
+
+/// balance(k): current total balance of base k, or position of perp k, across the desk's accounts; scope(): instrument
 /// keys in scope besides those filled today; beta(inst key): its beta; taker_bps(inst): taker fee.
 pub struct PnlBook {
     pub day_start: i64,
+    pub roles: Roles,
+    pub perp_day: PerpDayFn,
     pub balance: BalanceFn,
     pub scope: ScopeFn,
     pub beta: BetaFn,
@@ -443,6 +461,8 @@ impl PnlBook {
                taker_bps: Option<TakerFn>) -> Self {
         PnlBook {
             day_start,
+            roles: Roles::default(),
+            perp_day: Box::new(|_, _| PerpDay::default()),
             balance,
             scope,
             beta,
@@ -476,16 +496,36 @@ impl PnlBook {
 
     // inputs
 
-    /// (base asset, the asset's own instrument, the fill's instrument) of a spot fill; None for a conversion
-    /// between two stablecoins (`market::is_conversion`), which Π leaves out.
-    fn base_of(m: &mut Market, f: &PFill) -> Option<(String, InstId, InstId)> {
-        if !f.venue.is_spot() || crate::market::is_conversion(&f.symbol) {
+    /// (what its position is kept under, that position's instrument, the fill's instrument) of a fill the book takes;
+    /// None for a perp that hedges and for a conversion between two stablecoins (`market::is_conversion`), which Π
+    /// leaves out.
+    fn base_of(roles: &Roles, m: &mut Market, f: &PFill) -> Option<(String, InstId, InstId)> {
+        if !roles.booked(&f.symbol, f.venue) || crate::market::is_conversion(&f.symbol) {
             return None;
         }
-        let inst = m.ensure(&f.symbol, Venue::SPOT, None);
+        let inst = m.ensure(&f.symbol, f.venue, None);
+        let (k, own) = Self::position_of(m, inst);
+        Some((k, own, inst))
+    }
+
+    /// What a position in the instrument is kept under, and the position's instrument: on spot its base asset and that
+    /// asset's own market, a perp itself.
+    fn position_of(m: &mut Market, inst: InstId) -> (String, InstId) {
+        if !m.insts[inst].venue.is_spot() {
+            return (m.insts[inst].key.clone(), inst);
+        }
         let base = m.insts[inst].base.clone();
         let own = m.asset_inst(&base).unwrap_or(inst);
-        Some((base, own, inst))
+        (base, own)
+    }
+
+    /// USD per unit of a fill's quote: a perp's price is USD, as its wallet is.
+    fn quote_px(m: &mut Market, f: &PFill) -> f64 {
+        if !f.venue.is_spot() {
+            return 1.0;
+        }
+        let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
+        quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0)
     }
 
     fn seen(&mut self, m: &Market, base: &str, inst: InstId, idx: i64, f: &Rc<PFill>) {
@@ -496,9 +536,9 @@ impl PnlBook {
         if f.flow.is_some() {
             s.usd += sq * f.price;
         } else {
-            let quote = &m.insts[inst].quote;
+            let quote = if f.venue.is_spot() { m.insts[inst].quote.as_str() } else { QUOTE };
             let c = s.cash.get(quote).copied().unwrap_or(0.0) + sq * f.price;
-            s.cash.insert(quote.clone(), c);
+            s.cash.insert(quote, c);
         }
         if f.fee != 0.0 && !f.fee_asset.is_empty() {
             let v = s.fees.get(&f.fee_asset).copied().unwrap_or(0.0) + f.fee;
@@ -515,7 +555,7 @@ impl PnlBook {
     pub fn load_fills<'a>(&mut self, m: &mut Market, fills: impl IntoIterator<Item = &'a FillRec>) {
         for f in fills {
             let f = Rc::new(PFill::from(f));
-            if let Some((base, _, inst)) = Self::base_of(m, &f) {
+            if let Some((base, _, inst)) = Self::base_of(&self.roles, m, &f) {
                 self.seen(m, &base, inst, ceil_div(f.ts, 1000), &f);
                 self.add_applied(&base, sign(f.side) * f.qty);
             }
@@ -532,7 +572,7 @@ impl PnlBook {
     /// live: off the user stream as it happened; else swept from REST later.
     pub fn on_fill_at(&mut self, m: &mut Market, f: &FillRec, live: bool) {
         let f = Rc::new(PFill::from(f));
-        let Some((base, _, inst)) = Self::base_of(m, &f) else { return };
+        let Some((base, _, inst)) = Self::base_of(&self.roles, m, &f) else { return };
         if !live
             && let Some(t0) = self.pos.get(&base).map(|p| p.t0)
             && f.ts < t0
@@ -703,7 +743,7 @@ impl PnlBook {
     pub fn position_gaps(&self, m: &mut Market, bal: &HashMap<String, f64>, usd: f64) -> Vec<(String, f64, f64)> {
         let mut q: HashMap<String, f64> = self.pos.iter().map(|(b, p)| (b.to_string(), p.q)).collect();
         for (_, f) in &self.pending {
-            if let Some((base, _, _)) = Self::base_of(m, f) {
+            if let Some((base, _, _)) = Self::base_of(&self.roles, m, f) {
                 *q.entry(base).or_insert(0.0) += sign(f.side) * f.qty;
             }
         }
@@ -711,7 +751,7 @@ impl PnlBook {
             .into_iter()
             .filter_map(|(base, q)| {
                 let b = bal.get(&base).copied().unwrap_or(0.0);
-                let px = m.asset_price(&base)?;
+                let px = if base.contains(':') { m.id(&base).and_then(|i| m.value(i)) } else { m.asset_price(&base) }?;
                 ((q - b).abs() * px > usd).then_some((base, q, b))
             })
             .collect();
@@ -731,7 +771,7 @@ impl PnlBook {
         let mut keep = vec![];
         for (idx, f) in std::mem::take(&mut self.pending) {
             if idx <= t {
-                let b = Self::base_of(m, &f).expect("spot").0;
+                let b = Self::base_of(&self.roles, m, &f).expect("booked").0;
                 self.add_applied(&b, sign(f.side) * f.qty);
             } else {
                 keep.push((idx, f));
@@ -789,12 +829,15 @@ impl PnlBook {
         let mut p = Pos::new(base, inst, &m.insts[inst].key, q0 + self.applied_sq.get(base).copied().unwrap_or(0.0), q0);
         p.h = self.saved.get(base).copied().unwrap_or(0.0);
         p.t0 = t * 1000;
+        p.perp = !m.insts[inst].venue.is_spot();
+        p.hedge = self.roles.of(&m.insts[inst].symbol, m.insts[inst].venue) == InstRole::Hedge;
         // just started, the rings may not reach back to t yet: the current price stands in
-        p.m = nz(m.insts[inst].ring.at(t * 1000 - 1)).or(m.px(inst));
+        p.m = nz(m.value_at(inst, t * 1000 - 1)).or(m.value(inst));
         p.m_start = p.m;
         p.r = Self::ref_mid(m, inst, t, true);
         self.pos.insert(base, p);
-        if self.live.is_some() && q0 != 0.0 {
+        let gaps = !self.pos[base].hedge;
+        if self.live.is_some() && q0 != 0.0 && gaps {
             // joined the scope after booking began: its inventory over what is already booked needs backfill
             let d_s = self.d_s();
             let spans = self.spans.clone();
@@ -811,7 +854,7 @@ impl PnlBook {
     fn sync_scope(&mut self, m: &mut Market, t: i64) {
         // Python iterates a set (arbitrary order); here scope order, then the pending fills' order
         let mut keys = (self.scope)();
-        keys.extend(self.pending.iter().map(|(_, f)| format!("spot:{}", f.symbol)));
+        keys.extend(self.pending.iter().map(|(_, f)| crate::market::key(&f.symbol, f.venue)));
         keys.extend(self.flow_keys.iter().cloned());
         let mut seen = HashSet::new();
         for k in keys {
@@ -819,11 +862,10 @@ impl PnlBook {
                 continue;
             }
             let Some(inst) = m.id(&k) else { continue };
-            if !m.insts[inst].venue.is_spot() || crate::market::is_conversion(&m.insts[inst].symbol) {
+            if !self.roles.booked(&m.insts[inst].symbol, m.insts[inst].venue) || crate::market::is_conversion(&m.insts[inst].symbol) {
                 continue;
             }
-            let base = m.insts[inst].base.clone();
-            let own = m.asset_inst(&base).unwrap_or(inst);
+            let (base, own) = Self::position_of(m, inst);
             if !self.pos.contains_key(&base) {
                 self.add(m, &base, own, t);
             }
@@ -857,7 +899,7 @@ impl PnlBook {
             let mut keep = vec![];
             for (idx, f) in std::mem::take(&mut self.pending) {   // fills inside the gap go into Q; the backfill books them
                 if idx <= last {
-                    let base = Self::base_of(m, &f).expect("spot").0;
+                    let base = Self::base_of(&self.roles, m, &f).expect("booked").0;
                     let sq = sign(f.side) * f.qty;
                     if let Some(p) = self.pos.get_mut(&base) {
                         p.q += sq;
@@ -870,7 +912,7 @@ impl PnlBook {
             self.pending = keep;
             self.rb = None;
             for p in self.pos.values_mut() {
-                let mm = nz(m.insts[p.inst].ring.at(last * 1000 - 1)).or(p.m);
+                let mm = nz(m.value_at(p.inst, last * 1000 - 1)).or(p.m);
                 let rr = nz(Self::ref_mid(m, p.inst, last, false)).or(p.r);
                 (p.m, p.r) = (mm, rr);
             }
@@ -904,12 +946,11 @@ impl PnlBook {
     }
 
     /// (price, fee) of a fill in USDT, at today's conversion prices.
-    fn usd(m: &mut Market, f: &PFill, inst: InstId) -> (f64, f64) {
+    fn usd(m: &mut Market, f: &PFill) -> (f64, f64) {
         if f.flow.is_some() {
             return (f.price, 0.0);
         }
-        let quote = m.insts[inst].quote.clone();
-        let px = f.price * nz(m.asset_price(&quote)).unwrap_or(1.0);
+        let px = f.price * Self::quote_px(m, f);
         let fee = if f.fee != 0.0 && !f.fee_asset.is_empty() {
             f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0)
         } else {
@@ -926,10 +967,9 @@ impl PnlBook {
         let hour = self.block(tm);
         let (mut d_pi, mut d_h, mut expo) = (0.0, 0.0, 0.0);
         for p in self.pos.values_mut() {
-            let inst = &m.insts[p.inst];
-            let mid = nz(inst.ring.at(tm)).or(p.m);
+            let mid = nz(m.value_at(p.inst, tm)).or(p.m);
             let rf = Self::ref_mid(m, p.inst, t, false);
-            if let (Some(pm), Some(mid)) = (p.m, mid) {
+            if let (Some(pm), Some(mid), false) = (p.m, mid, p.hedge) {
                 let dp = p.q * (mid - pm);
                 let dh = match (nz(rf), nz(p.r)) {
                     (Some(rf), Some(pr)) => p.q * pm * (rf / pr - 1.0),
@@ -964,11 +1004,16 @@ impl PnlBook {
                     keep.push((idx, f));
                     continue;
                 }
-                let (base, own, inst) = Self::base_of(m, &f).expect("spot");
+                let (base, own, _) = Self::base_of(&self.roles, m, &f).expect("booked");
                 if !self.pos.contains_key(&base) {
                     self.add(m, &base, own, t - 1);
                 }
-                let (px, fee) = Self::usd(m, &f, inst);
+                if self.pos[&base].hedge {
+                    self.pos.get_mut(&base).expect("pos").q += sign(f.side) * f.qty;
+                    self.add_applied(&base, sign(f.side) * f.qty);
+                    continue;
+                }
+                let (px, fee) = Self::usd(m, &f);
                 let p = self.pos.get_mut(&base).expect("pos");
                 if p.m.is_none() {
                     p.m = Some(px);
@@ -1001,7 +1046,7 @@ impl PnlBook {
         self.sums.clear();
         self.day_fills.clear();
         for (idx, f) in self.pending.clone() {
-            let (base, _, inst) = Self::base_of(m, &f).expect("spot");
+            let (base, _, inst) = Self::base_of(&self.roles, m, &f).expect("booked");
             self.seen(m, &base, inst, idx, &f);
         }
         self.saved.clear();
@@ -1106,6 +1151,7 @@ impl PnlBook {
             r: Option<f64>,
             fl: Vec<(i64, f64, Rc<PFill>)>,
             i: usize,
+            hedge: bool,
         }
         let none = (None, None);
         let mut st: Vec<St> = vec![];
@@ -1120,11 +1166,11 @@ impl PnlBook {
             }
             let m0 = nz(m0).or(px(Some(&key), g.a));
             let r0 = nz(r0).or(px(rkey.as_deref(), g.a));
-            if g.a == self.d_s() && !self.m0.contains_key(base) && let Some(v) = nz(m0) {
+            if g.a == self.d_s() && !self.m0.contains_key(base) && !self.pos[base].perp && let Some(v) = nz(m0) {
                 self.m0.insert(base.clone(), v);
             }
             let fl = self.gap_fills(base, g);
-            st.push(St { base: base.clone(), key, rkey, q: self.q_at(base, g.a), m: m0, r: r0, fl, i: 0 });
+            st.push(St { base: base.clone(), key, rkey, q: self.q_at(base, g.a), m: m0, r: r0, fl, i: 0, hedge: self.pos[base].hedge });
         }
         let bv = self.beta_vs.clone();
         let mut rb_prev = nz(g.rb0).or(px(bv.as_deref(), g.a));
@@ -1137,7 +1183,7 @@ impl PnlBook {
                 let (m_prev, r_prev) = (s.m, s.r);
                 let mm = nz(e.0).or(nz(px(Some(&s.key), t))).or(m_prev);
                 let r = nz(e.1).or(nz(px(s.rkey.as_deref(), t))).or(r_prev);
-                if let (Some(mp), Some(mv)) = (m_prev, mm) {
+                if let (Some(mp), Some(mv), false) = (m_prev, mm, s.hedge) {
                     d_pi += s.q * (mv - mp);
                     let dh = match (nz(r), nz(r_prev)) {
                         (Some(r), Some(rp)) => s.q * mp * (r / rp - 1.0),
@@ -1151,9 +1197,9 @@ impl PnlBook {
                 }
                 while s.i < s.fl.len() && s.fl[s.i].0 <= t {
                     let (_, sq, f) = s.fl[s.i].clone();
-                    if full {
-                        let fi = m.ensure(&f.symbol, Venue::SPOT, None);
-                        let (fpx, fee) = Self::usd(m, &f, fi);
+                    if full && !s.hedge {
+                        m.ensure(&f.symbol, f.venue, None);
+                        let (fpx, fee) = Self::usd(m, &f);
                         d_pi += sq * (nz(mm).unwrap_or(fpx) - fpx) - fee;
                         if f.flow.is_none() {
                             let blk = self.hours.get_mut(&hour).expect("block");
@@ -1191,7 +1237,8 @@ impl PnlBook {
         let from_gaps = self.gaps.iter().any(|g| g.a == self.d_s());
         let mut out = vec![];
         for (base, p) in self.pos.iter() {
-            if self.m0.contains_key(base) || p.q0 == 0.0 || from_gaps {
+            // (a perp's M_k(D) is the accounts': `PerpDay`)
+            if self.m0.contains_key(base) || p.q0 == 0.0 || from_gaps || p.perp {
                 continue;
             }
             let px = nz(m.px(p.inst)).or(p.m);
@@ -1211,7 +1258,7 @@ impl PnlBook {
     /// Cost of closing the inventory now: |Q M| x (half spread + taker fee).
     pub fn liquidation(&self, m: &Market) -> f64 {
         let mut out = 0.0;
-        for p in self.pos.values() {
+        for p in self.pos.values().filter(|p| !p.hedge) {
             let inst = &m.insts[p.inst];
             if let Some(mid) = nz(inst.mid())
                 && p.q != 0.0
@@ -1225,9 +1272,10 @@ impl PnlBook {
 
     /// Closed-form trading P&L of one base today: Q_T M(T) - Q0 M(D) - cash paid - fees.
     pub fn pi_k(&self, m: &mut Market, p: &Pos) -> f64 {
-        let Some(mt) = nz(m.px(p.inst)).or(p.m) else { return 0.0 };
-        let m0 = nz(self.m0.get(&p.base).copied()).or(nz(p.m_start)).unwrap_or(mt);
-        let Some(s) = self.sums.get(&p.base) else { return p.q0 * (mt - m0) };
+        let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return 0.0 };
+        let m0 = self.m0_of(p).unwrap_or(mt);
+        let funding = self.perp_of(p, i64::MAX).funding;
+        let Some(s) = self.sums.get(&p.base) else { return p.q0 * (mt - m0) + funding };
         let mut out = (p.q0 + s.sq) * mt - p.q0 * m0;
         for (a, v) in s.cash.iter() {
             out -= v * nz(m.asset_price(a)).unwrap_or(1.0);
@@ -1235,7 +1283,16 @@ impl PnlBook {
         for (a, v) in s.fees.iter() {
             out -= v * nz(m.asset_price(a)).unwrap_or(0.0);
         }
-        out - s.usd
+        out - s.usd + funding
+    }
+
+    fn perp_of(&self, p: &Pos, upto: i64) -> PerpDay {
+        if p.perp { (self.perp_day)(&p.key, upto) } else { PerpDay::default() }
+    }
+
+    /// M_k(D): the day's kept one, a perp's from the accounts, else M when booking began.
+    fn m0_of(&self, p: &Pos) -> Option<f64> {
+        nz(self.m0.get(&p.base).copied()).or_else(|| nz(self.perp_of(p, i64::MAX).m0)).or(nz(p.m_start))
     }
 
     /// Π_k split over today's fills in time order, in USD: (realized, realized_old, floating). Sells take
@@ -1249,8 +1306,11 @@ impl PnlBook {
     /// `fifo` over the fills and flows at or before `upto` (ms), at the market's prices now: the split as it
     /// stood at `upto` when the market is set to that time's prices (`desk repair-day`).
     pub fn fifo_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> (f64, f64, f64) {
-        let Some(mt) = nz(m.px(p.inst)).or(p.m) else { return (0.0, 0.0, 0.0) };
-        let m0 = nz(self.m0.get(&p.base).copied()).or(nz(p.m_start)).unwrap_or(mt);
+        let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return (0.0, 0.0, 0.0) };
+        let m0 = self.m0_of(p).unwrap_or(mt);
+        if p.perp {
+            return self.fifo_perp(m, p, upto, mt, m0);
+        }
         let mut lots: std::collections::VecDeque<(f64, f64)> = std::collections::VecDeque::new();   // today's buys
         // the inventory at the day start as Π takes it (balance minus today's fills: negative when a fill went unseen)
         let mut opening = p.q0;
@@ -1267,12 +1327,7 @@ impl PnlBook {
         let (mut realized, mut old, mut fees) = (0.0, 0.0, 0.0);
         for f in fills {
             // a flow out leaves at its transfer price, a flow in comes at it
-            let px = if f.flow.is_some() {
-                f.price
-            } else {
-                let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
-                f.price * quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0)
-            };
+            let px = if f.flow.is_some() { f.price } else { f.price * Self::quote_px(m, f) };
             if f.fee != 0.0 {
                 fees += f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
             }
@@ -1301,10 +1356,48 @@ impl PnlBook {
         (realized - fees, old, floating)
     }
 
+    /// `fifo_upto` of a perp, which goes short as readily as long: a fill closes today's opposite lots first, oldest
+    /// first, then the opening position (at M_k(D)), and what is left opens a lot. realized has the funding.
+    fn fifo_perp(&self, m: &mut Market, p: &Pos, upto: i64, mt: f64, m0: f64) -> (f64, f64, f64) {
+        let mut lots: std::collections::VecDeque<(f64, f64)> = std::collections::VecDeque::new();   // signed qty, price
+        let mut opening = p.q0;
+        let mut fills: Vec<&Rc<PFill>> = self.day_fills.get(&p.base).map(|v| v.iter().map(|x| &x.2).filter(|f| f.ts <= upto).collect()).unwrap_or_default();
+        fills.sort_by_key(|f| f.ts);
+        let (mut realized, mut old, mut fees) = (self.perp_of(p, upto).funding, 0.0, 0.0);
+        for f in fills {
+            if f.fee != 0.0 && !f.fee_asset.is_empty() {
+                fees += f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
+            }
+            let s = sign(f.side);
+            let mut left = f.qty;
+            while left > 1e-15 {
+                let Some(lot) = lots.front_mut().filter(|l| l.0 * s < 0.0) else { break };
+                let take = lot.0.abs().min(left);
+                realized += take * -s * (f.price - lot.1);
+                lot.0 += s * take;
+                left -= take;
+                if lot.0.abs() <= 1e-15 {
+                    lots.pop_front();
+                }
+            }
+            if left > 1e-15 && opening * s < 0.0 {
+                let take = opening.abs().min(left);
+                old += take * -s * (f.price - m0);
+                opening += s * take;
+                left -= take;
+            }
+            if left > 1e-15 {
+                lots.push_back((s * left, f.price));
+            }
+        }
+        let floating = lots.iter().map(|(q, c)| q * (mt - c)).sum::<f64>() + opening * (mt - m0);
+        (realized - fees, old, floating)
+    }
+
     /// `pi_k` over the fills and flows at or before `upto` (ms), at the market's prices now.
     pub fn pi_k_upto(&self, m: &mut Market, p: &Pos, upto: i64) -> f64 {
-        let Some(mt) = nz(m.px(p.inst)).or(p.m) else { return 0.0 };
-        let m0 = nz(self.m0.get(&p.base).copied()).or(nz(p.m_start)).unwrap_or(mt);
+        let Some(mt) = nz(m.value(p.inst)).or(p.m) else { return 0.0 };
+        let m0 = self.m0_of(p).unwrap_or(mt);
         let mut out = -p.q0 * m0;
         let mut q = p.q0;
         for (_, sq, f) in self.day_fills.get(&p.base).map(Vec::as_slice).unwrap_or(&[]) {
@@ -1315,21 +1408,20 @@ impl PnlBook {
             if f.flow.is_some() {
                 out -= sq * f.price;
             } else {
-                let quote = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| i.quote.clone());
-                out -= sq * f.price * quote.as_deref().and_then(|q| nz(m.asset_price(q))).unwrap_or(1.0);
+                out -= sq * f.price * Self::quote_px(m, f);
             }
             if f.fee != 0.0 && !f.fee_asset.is_empty() {
                 out -= f.fee * nz(m.asset_price(&f.fee_asset)).unwrap_or(0.0);
             }
         }
-        out + q * mt
+        out + q * mt + self.perp_of(p, upto).funding
     }
 
     /// (Π, realized, realized_old, floating) over the fills and flows at or before `upto`, at the market's
     /// prices now, with Q at `upto`: the trading P&L as it stood then when the market holds that time's prices.
     pub fn split_upto(&self, m: &mut Market, upto: i64) -> (f64, f64, f64, f64) {
         let mut out = (0.0, 0.0, 0.0, 0.0);
-        for p in self.pos.values() {
+        for p in self.pos.values().filter(|p| !p.hedge) {
             let (a, b, c) = self.fifo_upto(m, p, upto);
             out = (out.0 + self.pi_k_upto(m, p, upto), out.1 + a, out.2 + b, out.3 + c);
         }
@@ -1350,7 +1442,7 @@ impl PnlBook {
 
     pub fn fifo_total(&self, m: &mut Market) -> (f64, f64, f64) {
         let mut t = (0.0, 0.0, 0.0);
-        for p in self.pos.values() {
+        for p in self.pos.values().filter(|p| !p.hedge) {
             let (a, b, c) = self.fifo(m, p);
             t = (t.0 + a, t.1 + b, t.2 + c);
         }
@@ -1358,7 +1450,37 @@ impl PnlBook {
     }
 
     pub fn trading(&self, m: &mut Market) -> f64 {
-        self.pos.values().map(|p| self.pi_k(m, p)).sum()
+        self.pos.values().filter(|p| !p.hedge).map(|p| self.pi_k(m, p)).sum()
+    }
+
+    /// The funding in Π today.
+    pub fn funding(&self) -> f64 {
+        self.pos.values().filter(|p| !p.hedge).map(|p| self.perp_of(p, i64::MAX).funding).sum()
+    }
+
+    /// The spot assets that hedge, as legs at `upto` (ms): what a perp's leg is (`Account::fut_leg`), from Π's closed form.
+    pub fn hedge_legs(&self, m: &mut Market, upto: i64) -> Vec<P::HedgeLeg> {
+        let mut out = vec![];
+        for p in self.pos.values().filter(|p| p.hedge) {
+            let mark = nz(m.value(p.inst)).or(p.m);
+            let fills = self.day_fills.get(&p.base).map(Vec::as_slice).unwrap_or(&[]);
+            let fees: f64 = fills.iter().filter(|x| x.2.fee != 0.0 && x.2.ts <= upto).map(|x| x.2.fee * nz(m.asset_price(&x.2.fee_asset)).unwrap_or(0.0)).sum();
+            let pnl = mark.map(|_| self.pi_k_upto(m, p, upto));
+            out.push(P::HedgeLeg {
+                symbol: m.insts[p.inst].symbol.clone(),
+                venue: m.insts[p.inst].venue,
+                qty0: p.q0,
+                qty: self.q_upto(&p.base, upto),
+                mark0: self.m0_of(p),
+                mark,
+                fills: fills.iter().filter(|x| x.2.flow.is_none() && x.2.ts <= upto).count() as i64,
+                price_pnl: pnl.map(|x| x + fees),
+                fees,
+                funding: 0.0,
+                pnl,
+            });
+        }
+        out
     }
 
     /// Booked (live or backfilled) over the whole span, so H covers what the closed-form Π covers.
@@ -1409,6 +1531,7 @@ impl PnlBook {
             mm_unmarked_fills: 0,
             mm_unmarked_notional: 0.0,
             inventory: pi,
+            funding_day: self.funding(),
         }
     }
 
@@ -1424,7 +1547,7 @@ impl PnlBook {
             let mut expo = 0.0;
             for (base, &(m0, r0)) in start.iter() {
                 let r1 = end.get(base).and_then(|e| e.1);
-                let Some(p) = self.pos.get(base) else { continue };
+                let Some(p) = self.pos.get(base).filter(|p| !p.hedge) else { continue };
                 let Some(m0) = nz(m0) else { continue };
                 let q = self.q_at(base, g.a);
                 if let (Some(r0), Some(r1)) = (nz(r0), nz(r1)) {
@@ -1501,7 +1624,7 @@ impl PnlBook {
     /// Today by base: (Π_k, S_k, realized incl. sales of the opening lot, floating).
     pub fn by_base(&self, m: &mut Market) -> OMap<(f64, f64, f64, f64)> {
         let mut out = OMap::new();
-        for (b, p) in self.pos.iter() {
+        for (b, p) in self.pos.iter().filter(|(_, p)| !p.hedge) {
             let pi = self.pi_k(m, p);
             let (r, o, f) = self.fifo(m, p);
             out.insert(b, (pi, pi - p.h, r + o, f));

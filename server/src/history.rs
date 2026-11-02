@@ -69,6 +69,7 @@ pub struct Api {
     /// The store's retention (`keep_fine_days`, `keep_days`), ms: the in-memory rows are thinned alike.
     keep_fine_ms: i64,
     keep_ms: i64,
+    roles: P::Roles,
 }
 
 /// What `/api/history` reads, kept in memory: the desk rows (account "*") by time, thinned as the store
@@ -92,22 +93,25 @@ const MIN: i64 = 60_000;
 
 impl Mem {
     /// Reads what was written since the last call (everything, the first time).
-    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64) -> rusqlite::Result<()> {
+    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64, roles: &P::Roles) -> rusqlite::Result<()> {
         let from = self.rows.last().map_or(i64::MIN, |r| r.t - REREAD_MS);
         let new = desk_rows(c, from, i64::MAX)?;
         let keep = self.rows.partition_point(|r| r.t < from);
         self.rows.truncate(keep);
         self.rows.extend(new);
-        // the desk's volume is its spot fills' (the perps' hedge fills are not market making), as the ticker's
+        // the desk's volume is what it trades (the hedge's fills are not market making), as the ticker's; by the roles
+        // set now, whichever they were when the fill was stored
         let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty, symbol, venue FROM fills WHERE rowid > ? ORDER BY rowid")?;
         let mut q = st.query([self.fill_rowid])?;
         while let Some(r) = q.next()? {
             self.fill_rowid = r.get(0)?;
             let (id, ts, n): (String, Option<i64>, Option<f64>) = (r.get(1)?, r.get(2)?, r.get(3)?);
             let Some(ts) = ts else { continue };
-            // a conversion between stablecoins is not desk volume, nor a perp fill
-            if r.get::<_, Option<String>>(4)?.is_some_and(|s| crate::market::is_conversion(&s))
-                || r.get::<_, Option<String>>(5)?.is_some_and(|v| v != "spot")
+            // a conversion between stablecoins is not desk volume, nor a fill of what hedges
+            let symbol: Option<String> = r.get(4)?;
+            let symbol = symbol.as_deref().unwrap_or("");
+            if crate::market::is_conversion(symbol)
+                || r.get::<_, Option<String>>(5)?.is_some_and(|v| !v.parse::<P::Venue>().is_ok_and(|v| roles.traded(symbol, v)))
             {
                 continue;
             }
@@ -165,7 +169,15 @@ impl Api {
             mem: Arc::default(),
             keep_fine_ms: 7 * DAY,
             keep_ms: 365 * DAY,
+            roles: P::Roles::default(),
         })
+    }
+
+    pub fn roles(mut self: Arc<Self>, roles: P::Roles) -> Arc<Self> {
+        if let Some(a) = Arc::get_mut(&mut self) {
+            a.roles = roles;
+        }
+        self
     }
 
     pub fn retention(mut self: Arc<Self>, keep_fine_days: f64, keep_days: f64) -> Arc<Self> {
@@ -190,10 +202,10 @@ impl Api {
 
     /// `f` on the in-memory history, brought up to date first.
     async fn with_mem<R: Send + 'static>(&self, f: impl FnOnce(&Mem) -> R + Send + 'static) -> Result<R, ApiError> {
-        let (mem, fine, keep) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms);
+        let (mem, fine, keep, roles) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms, self.roles.clone());
         blocking(self, move |c| {
             let mut m = mem.lock().unwrap();
-            m.refresh(c, now_ms(), fine, keep)?;
+            m.refresh(c, now_ms(), fine, keep, &roles)?;
             Ok(f(&m))
         })
         .await
@@ -689,13 +701,13 @@ mod tests {
         eq(now - 60_000, 2.0);
         fill("f1", now - 290_000, 5.0);
         let mut m = Mem::default();
-        m.refresh(&c, now, 7 * DAY, 365 * DAY).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default()).unwrap();
         assert_eq!(m.rows.len(), 2);
         eq(now - 60_000, 3.0); // rewritten
         eq(now, 4.0);
         fill("f1", now - 290_000, 7.0); // written again
         fill("f2", now - 10_000, 1.0);
-        m.refresh(&c, now, 7 * DAY, 365 * DAY).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default()).unwrap();
         assert_eq!(m.rows.iter().map(|r| r.pnl_day).collect::<Vec<_>>(), [1.0, 3.0, 4.0]);
         let f = m.flows(now - DAY, now + 1, 3_600_000, 0);
         assert_eq!(f.values().map(|v| v.1).sum::<i64>(), 2);

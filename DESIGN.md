@@ -102,8 +102,23 @@ Weight governor: track `X-MBX-USED-WEIGHT-1M`, stay under 50 % of the limit, and
 All times are exchange event times (ms).
 - mid = (bid + ask) / 2 from bookTicker.
 - Edge at fill (bps) = s × (fair − price) / fair × 1e4, s = +1 buy, −1 sell.
+- Roles. An instrument is traded or hedges: its own `[[markets]] role` (or being in `[exposure] hedge_symbols`, for a
+  perp), else its market's `[roles]`, else spot is traded and a perp hedges. A spot role is its base asset's, since a
+  balance cannot be split between pairs. What is traded makes Trading P&L, market making, inventory, the desk's fills and
+  volume; what hedges makes Hedge. A figure's meaning follows the role, not the market's kind, and this section says
+  "spot" and "futures legs" for a desk with none set. Past rows keep what they were written as; a new role applies from
+  the next start, to today's figures rebuilt then (`History` volume and the repairs take the roles set now).
+- A traded perp is booked by Π like an asset, with these differences: its position is kept under its instrument key
+  (`usdm:BTCUSDT`), since a base can have several; Q_k is the position across the accounts, M_k its mark (the mid until
+  the first one), as equity has it, so Π moves with equity; held with no fill today it is in scope; M_k(D) is the day's
+  kept mark, else the mark kline the accounts' sweep read; its price is USD. Π_k adds its funding today (in inventory,
+  `funding_day`; realized in the split, not on the hour blocks, which are fills and marks). In the split a fill closes
+  today's opposite lots first, then the opening position; what is left opens a lot, long or short. Market making is at
+  its own mid. A spot asset that hedges is kept the same way as a traded one, and adds to Hedge: Π_k's closed form is
+  its leg (`PnlBook::hedge_legs`), with nothing in Π, H, Hm, the blocks or the fill counts. A perp that hedges stays
+  the account's `FutLeg`, as below.
 - Trading P&L. Scope: the configured spot markets plus every spot symbol filled today, one position
-  per base asset. M_k(t) = valuation price (mid, or fair while the book gapes), R_k(t) = mid of its
+  per base asset, and the traded perps. M_k(t) = valuation price (mid, or fair while the book gapes), R_k(t) = mid of its
   reference, r_k(t) = R_k(t) / R_k(t−1) − 1 (0 without a reference), r_b(t) = return of the beta
   instrument (`beta_vs`, else the first hedge symbol), β_k = the estimated or configured beta.
   Inventory Q_k is rebuilt, not read: Q0_k at the day start D is the current balance across the desk's
@@ -208,7 +223,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   at startup counts from then), then the new value is the baseline; another change restarts the 24 h.
   `fee_expiry` within 7 days if configured.
 - `drawdown`: day PnL below `day_drawdown_usd`, or a drop over 15 min larger than `drop_15m_usd`.
-- `inventory`: total inventory value > `inventory_cap_usd` (clears under 95 % of it), or one spot asset > `asset_cap_usd` (only when set; no per-asset cap by default).
+- `inventory`: total inventory value > `inventory_cap_usd` (clears under 95 % of it), or one traded instrument > `asset_cap_usd` (only when set; no per-asset cap by default).
 - `exposure_gap`: |gap| > band for > `gap_hold_s` (60), or > `gap_wide_bands` bands for > 60 s (when set; when configured): a hedge that rebalances slowly is still at work before that; inside a hedge pause, info: hedge left to close.
 - `reconcile`: |day PnL − Π − hedge legs − rebates| > `reconcile_usd` (1) for > 5 min: a fill, transfer or asset the desk does not see.
 - `markout`: rolling 30-min volume-weighted 10 s net markout < `markout_floor_bps` with >= 30 fills.
@@ -328,7 +343,12 @@ interface Desk {
   currency: string;   // [desk] currency: the name money figures carry, USD or a USD stablecoin; not a conversion
   quote: string;      // the asset accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
   markets: { id: string; exchange: string; kind: "spot" | "perp"; name: string }[];   // what every venue field can say: id is the venue, name the interface's word for it
-  hedge: boolean;     // futures are part of the desk: an account with futures = true, [exposure] target_ratio, a position or futures wallet now, or a kept day's hedge P&L
+  roles: {            // what instruments are for, as configured: an instrument's own, else its market's, else spot is traded and a perp hedges. Empty on a desk that sets none
+    markets: Record<string, "traded" | "hedge">;       // [roles]: by market id
+    instruments: Record<string, "traded" | "hedge">;   // [[markets]] role and hedge_symbols: "usdm:BTCUSDT"; on spot its base asset, "spot:BTC"
+  };
+  perps: boolean;     // the futures columns and tabs show (an account with a perp market, a position, a futures wallet)
+  hedge: boolean;     // the Hedge figure shows (a perp account whose market hedges, an instrument with that role, [exposure] target_ratio, a position or spot asset in the role now, a kept day's hedge P&L)
   rebates: boolean;   // a rebate has been credited: today, or on a kept day (so it can turn true during a run)
   mm: boolean;        // [desk] market_making: split Trading PnL into market making and inventory on the pages
 }
@@ -357,7 +377,7 @@ interface Summary {
          ref_hedge: number; factor_hedge: number;                                                // H, Hm
          liquidation: number; covered_s: number; backfilled_s: number;                           // haircut now; seconds booked live / from klines
          realized: number; realized_old: number; floating: number;                               // Π split FIFO, see below
-         mm: number; mm_spread: number; inventory: number;                                       // Π = mm + inventory, see below
+         mm: number; mm_spread: number; inventory: number; funding_day: number;                                    // Π = mm + inventory, see below
          mm_unmarked_fills: number; mm_unmarked_notional: number };                              // fills past h without a price at t + h: out of mm
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
@@ -373,7 +393,7 @@ interface Summary {
 interface Account {
   id: string; label: string; email: string; role: "master" | "sub";
   equity: number; equity_open: number; pnl_day: number; transfers_day: number;
-  quote_free: number; quote_locked: number; inventory_value: number;
+  quote_free: number; quote_locked: number; inventory_value: number; hedge_value: number;
   fut_wallet: number; fut_upnl: number; fut_available: number;
   positions: { symbol: string; venue: string; amt: number; entry: number; mark: number; upnl: number; notional: number;
                pnl_day: number | null }[];   // pnl_day: today's price P&L, fees and funding on the symbol

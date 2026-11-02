@@ -71,13 +71,22 @@ pub struct View {
 /// out, and Other goes on holding whatever the parts do not explain.
 pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> P::Desk {
     let moved = |v: Option<f64>| v.is_some_and(|x| x != 0.0);
+    let perp_cfg = cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures());
+    let perps = perp_cfg || accounts.iter().any(|a| !a.positions.is_empty() || a.fut_wallet != 0.0);
+    // something hedges: a perp account whose market hedges unless told otherwise, an instrument named as a hedge, a
+    // position in one. A desk whose every perp is traded has the columns and tabs of futures, and no Hedge figure.
+    let venues: Vec<Venue> = cfg.accounts.iter().chain(&cfg.master).flat_map(|a| a.markets.iter().copied().filter(|v| !v.is_spot())).collect();
+    let wallet_hedges = accounts.iter().any(|a| a.fut_wallet != 0.0) && Venue::all().any(|v| !v.is_spot() && cfg.roles.market(v) == P::InstRole::Hedge);
     P::Desk {
         currency: cfg.currency.clone(),
         quote: crate::market::QUOTE.into(),
         markets: P::MARKETS.iter().filter(|m| m.exchange.eq_ignore_ascii_case(&cfg.exchange)).collect(),
-        hedge: cfg.accounts.iter().chain(&cfg.master).any(|a| a.futures())
+        roles: cfg.roles.clone(),
+        perps,
+        hedge: cfg.roles.any_hedge(&venues)
+            || wallet_hedges
             || cfg.target_ratio.is_some()
-            || accounts.iter().any(|a| !a.positions.is_empty() || a.fut_wallet != 0.0)
+            || accounts.iter().any(|a| a.hedge_value != 0.0 || a.positions.iter().any(|p| !cfg.roles.traded(&p.symbol, p.venue)))
             || days.iter().any(|d| moved(d.hedge)),
         rebates: accounts.iter().any(|a| a.rebates != 0.0) || days.iter().any(|d| moved(d.rebates)),
         mm: cfg.market_making,
@@ -86,6 +95,57 @@ pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> 
 
 pub type DeskRef = Rc<RefCell<Desk>>;
 type Series3 = (Vec<i64>, Vec<f64>, Vec<f64>);
+
+/// The P&L book over these accounts: a position is a balance or a perp's position across them, its scope the configured
+/// instruments the book keeps, those filled today (`filled`) and the traded perps held, and what it knows of a perp's day
+/// the accounts' sweep of it.
+pub fn pnl_book(cfg: &Config, accounts: &[AccountRef], filled: Rc<RefCell<Vec<String>>>, day_start: i64, beta: pnl::BetaFn) -> PnlBook {
+    let accts = accounts.to_vec();
+    let balance = move |k: &str| -> f64 {
+        match k.split_once(':') {
+            None => accts.iter().map(|a| a.borrow().balances.get(k).map_or(0.0, |(f, l)| f + l)).sum(),
+            // an account's positions are on its one perp market
+            Some((venue, symbol)) => accts.iter().map(|a| a.borrow()).filter(|a| a.perp.as_str() == venue).map(|a| a.positions.get(symbol).map_or(0.0, |p| p.0)).sum(),
+        }
+    };
+    let keys: Vec<String> = cfg.markets.iter().filter(|m| cfg.roles.booked(&m.symbol, m.venue)).map(|m| crate::market::key(&m.symbol, m.venue)).collect();
+    let (accts, roles) = (accounts.to_vec(), cfg.roles.clone());
+    // a traded perp held with no fill today is in scope, as equity has it: its move would otherwise read as Other
+    let scope = move || -> Vec<String> {
+        let mut out: Vec<String> = keys.iter().cloned().chain(filled.borrow().iter().cloned()).collect();
+        for a in &accts {
+            let a = a.borrow();
+            out.extend(a.positions.iter().filter(|(s, p)| p.0 != 0.0 && roles.traded(s, a.perp)).map(|(s, _)| crate::market::key(s, a.perp)));
+        }
+        out
+    };
+    let accts = accounts.to_vec();
+    let perp_day = move |k: &str, _upto: i64| -> pnl::PerpDay {
+        let (venue, symbol) = k.split_once(':').unwrap_or(("", k));
+        let mut out = pnl::PerpDay::default();
+        for a in accts.iter().filter(|a| a.borrow().perp.as_str() == venue) {
+            let d = a.borrow().perp_day(symbol);
+            out.funding += d.funding;
+            out.m0 = out.m0.or(d.m0);
+        }
+        out
+    };
+    let accts = accounts.to_vec();
+    let taker = move |inst: &Inst| -> f64 {
+        accts
+            .iter()
+            .map(|a| {
+                let a = a.borrow();
+                a.fee(inst.venue, &inst.symbol).or_else(|| a.fee(inst.venue, "*")).unwrap_or((0.0, 0.0)).1
+            })
+            .fold(0.0, f64::max)
+            * 1e4
+    };
+    let mut book = PnlBook::new(day_start, Box::new(balance), Box::new(scope), beta, cfg.beta_vs.clone(), Some(Box::new(taker)));
+    book.roles = cfg.roles.clone();
+    book.perp_day = Box::new(perp_day);
+    book
+}
 
 /// A day's real-money split: day PnL, Π split FIFO, the hedge legs, the rebates and what they leave unexplained.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -150,7 +210,7 @@ pub struct Desk {
     pub fills: Rc<RefCell<FillBook>>,
     pub transfers: TransfersRef,
     pub pnl: Rc<RefCell<PnlBook>>,
-    pub spot_filled: Rc<RefCell<Vec<String>>>,   // spot instruments filled today: in the P&L scope (a set, insertion order)
+    pub book_filled: Rc<RefCell<Vec<String>>>,   // instruments the P&L book keeps filled today: in its scope (a set, insertion order)
     pub fixed_betas: Rc<HashMap<String, f64>>,
     pub on_fill: OnFill,
 }
@@ -206,21 +266,22 @@ impl Desk {
         let fills = Rc::new(RefCell::new(FillBook::new()));
         let pnl = Rc::new(RefCell::new(dummy_pnl(day_start)));
         let tracked: Rc<RefCell<HashSet<String>>> = Rc::default();
-        let spot_filled: Rc<RefCell<Vec<String>>> = Rc::default();
+        let book_filled: Rc<RefCell<Vec<String>>> = Rc::default();
+        let roles = cfg.roles.clone();
         let on_fill: OnFill = {
-            let (fills, market, tracked, spot_filled, pnl) =
-                (fills.clone(), market.clone(), tracked.clone(), spot_filled.clone(), pnl.clone());
+            let (fills, market, tracked, book_filled, pnl) =
+                (fills.clone(), market.clone(), tracked.clone(), book_filled.clone(), pnl.clone());
             Rc::new(move |f: FillRec| {
                 let key = f.key();
                 // a conversion between stablecoins is kept on the tape, out of the P&L scope and Π
-                let spot = (f.venue.is_spot() && !f.conversion()).then(|| f.clone());
+                let booked = (roles.booked(&f.symbol, f.venue) && !f.conversion()).then(|| f.clone());
                 let mut m = market.borrow_mut();
                 // a fill that arrives late (a REST sweep) is not marked against today's fair
                 let fresh = CLOCK.now() - f.ts < 5_000;
                 if fills.borrow_mut().add(&mut m, f, fresh) {
                     tracked.borrow_mut().insert(key.clone());
-                    if let Some(f) = spot {
-                        let mut sf = spot_filled.borrow_mut();
+                    if let Some(f) = booked {
+                        let mut sf = book_filled.borrow_mut();
                         if !sf.contains(&key) {
                             sf.push(key);
                         }
@@ -258,7 +319,7 @@ impl Desk {
             fills,
             transfers: Rc::new(RefCell::new(Transfers::new(None, vec![]))),
             pnl,
-            spot_filled,
+            book_filled,
             fixed_betas: Rc::default(),
             on_fill,
             store,
@@ -346,8 +407,14 @@ impl Desk {
         });
         let spot_symbols: Vec<String> =
             self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| m.symbol.clone()).collect();
+        let roles = Rc::new(self.cfg.roles.clone());
+        let perp_symbols: Vec<String> = self.cfg.markets.iter().filter(|m| !m.venue.is_spot() && self.cfg.roles.traded(&m.symbol, m.venue)).map(|m| m.symbol.clone()).collect();
         for a in &accounts {
             let mut a = a.borrow_mut();
+            a.roles = roles.clone();
+            if a.cfg.futures() {
+                a.perp_symbols = perp_symbols.clone();
+            }
             a.market = Some(self.market.clone());
             a.on_fill = self.on_fill.clone();
             a.on_fee = on_fee.clone();
@@ -401,14 +468,6 @@ impl Desk {
     }
 
     fn new_pnl_book(&self) -> PnlBook {
-        let accts = self.accounts.clone();
-        let balance = move |base: &str| -> f64 {
-            accts.iter().map(|a| a.borrow().balances.get(base).map_or(0.0, |(f, l)| f + l)).sum()
-        };
-        let spot_keys: Vec<String> =
-            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| crate::market::key(&m.symbol, m.venue)).collect();
-        let sf = self.spot_filled.clone();
-        let scope = move || -> Vec<String> { spot_keys.iter().cloned().chain(sf.borrow().iter().cloned()).collect() };
         let (betas, fixed) = (self.betas.clone(), self.fixed_betas.clone());
         let beta = move |k: &str| -> f64 {
             match &betas {
@@ -416,19 +475,7 @@ impl Desk {
                 None => fixed.get(k).copied().unwrap_or(1.0),
             }
         };
-        let accts = self.accounts.clone();
-        let taker = move |inst: &Inst| -> f64 {
-            accts
-                .iter()
-                .map(|a| {
-                    let a = a.borrow();
-                    a.fee(Venue::SPOT, &inst.symbol).or_else(|| a.fee(Venue::SPOT, "*")).unwrap_or((0.0, 0.0)).1
-                })
-                .fold(0.0, f64::max)
-                * 1e4
-        };
-        PnlBook::new(self.day_start(), Box::new(balance), Box::new(scope), Box::new(beta), self.cfg.beta_vs.clone(),
-                     Some(Box::new(taker)))
+        pnl_book(&self.cfg, &self.accounts, self.book_filled.clone(), self.day_start(), Box::new(beta))
     }
 
     fn reload(&mut self) -> Result<()> {
@@ -453,13 +500,19 @@ impl Desk {
             let mut m = self.market.borrow_mut();
             let mut fills = self.fills.borrow_mut();
             let mut tracked = self.tracked.borrow_mut();
-            let mut sf = self.spot_filled.borrow_mut();
+            let mut sf = self.book_filled.borrow_mut();
             for f in data.fills {
                 let key = f.key();
-                let spot = f.venue.is_spot() && !f.conversion();
+                let booked = self.cfg.roles.booked(&f.symbol, f.venue) && !f.conversion();
+                // a traded perp filled today, flat now: its day is still swept, for fills the stream did not give
+                if !f.venue.is_spot() && booked
+                    && let Some(a) = self.accounts.iter().find(|a| a.borrow().id == f.account)
+                {
+                    a.borrow_mut().traded.insert(key.clone());
+                }
                 fills.add(&mut m, f, false);
                 tracked.insert(key.clone());
-                if spot && !sf.contains(&key) {
+                if booked && !sf.contains(&key) {
                     sf.push(key);
                 }
             }
@@ -587,10 +640,10 @@ impl Desk {
         let now = CLOCK.now();
         // the fill aggregate walks every fill of the day: redone on new or matured fills, else once a second
         if fills_changed || self.agg.as_ref().is_none_or(|a| now - a.0 >= 1000) {
-            self.agg = Some((now, Rc::new(aggregate(&self.fills.borrow().fills, now))));
+            self.agg = Some((now, Rc::new(aggregate(&self.fills.borrow().fills, now, &self.cfg.roles))));
             let pnl = self.pnl.borrow();
             let mut m = self.market.borrow_mut();
-            self.mm = Rc::new(mm_split(&mut m, &self.fills.borrow().fills, self.cfg.mm_horizon_s, now, |b| pnl.pos.contains_key(b)));
+            self.mm = Rc::new(mm_split(&mut m, &self.fills.borrow().fills, self.cfg.mm_horizon_s, now, &self.cfg.roles, |b| pnl.pos.contains_key(b)));
         }
         let agg = self.agg.as_ref().expect("agg").1.clone();
         let mm = self.mm.clone();
@@ -616,7 +669,8 @@ impl Desk {
         ps.mm_unmarked_fills = mm.unmarked;
         ps.mm_unmarked_notional = mm.unmarked_notional;
         ps.inventory = ps.trading - mm.total;
-        expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge));
+        let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
+        expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs));
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
         let rebates: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.rebates).sum();
         let equity: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.equity).sum();
@@ -636,7 +690,7 @@ impl Desk {
             volume_day: agg.volume_day,
             fills_24h,
             volume_24h,
-            inventory_value: accounts.iter().map(|r| r.inventory_value).sum(),
+            inventory_value: expo.spot_value,
             inventory_assets: inventory_assets(&mut m, &self.accounts),
             fee_expiry: self.cfg.fee_expiry.clone(),
             day_start: ds,
@@ -950,9 +1004,9 @@ impl Desk {
         let mut rows = vec![];
         {
             let mut m = self.market.borrow_mut();
-            for (r, a) in v.accounts.iter().zip(&self.accounts) {
+            for ((r, e), a) in v.accounts.iter().zip(&v.exposure.by_account).zip(&self.accounts) {
                 if a.borrow().valued(&mut m) {
-                    rows.push((r.id.clone(), r.equity, r.pnl_day, r.inventory_value, r.positions.iter().map(|x| x.notional).sum::<f64>()));
+                    rows.push((r.id.clone(), r.equity, r.pnl_day, e.spot_value, e.futures_notional));
                 }
             }
         }
@@ -1075,8 +1129,12 @@ impl Desk {
     fn check_positions(&mut self) {
         let mut bal: HashMap<String, f64> = HashMap::new();
         for a in &self.accounts {
-            for (asset, (f, l)) in &a.borrow().balances {
+            let a = a.borrow();
+            for (asset, (f, l)) in &a.balances {
                 *bal.entry(asset.clone()).or_insert(0.0) += f + l;
+            }
+            for (s, (amt, _)) in &a.positions {
+                *bal.entry(crate::market::key(s, a.perp)).or_insert(0.0) += amt;
             }
         }
         let gaps = {
@@ -1433,6 +1491,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         let d = desk.borrow();
         crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min, d.connector.kline_source())
             .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
+            .roles(d.cfg.roles.clone())
     };
     history.warm();
     let app = server::make_app(&handle, auth, server::web_dist(), history);
@@ -1623,7 +1682,7 @@ mod tests {
         let mut cfg = Config::default();
         let mut acct = P::Account::default();
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
-        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS.iter().collect(), hedge: false, rebates: false, mm: true });
+        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS.iter().collect(), roles: P::Roles::default(), perps: false, hedge: false, rebates: false, mm: true });
         // a day kept with zeros is not a hedge or a rebate
         let zero = P::DayPnl { hedge: Some(0.0), rebates: Some(0.0), ..Default::default() };
         assert!(!desk_shape(&cfg, &[], std::slice::from_ref(&zero)).hedge);
@@ -1631,6 +1690,19 @@ mod tests {
         let kept = P::DayPnl { hedge: Some(-1.0), rebates: Some(0.5), ..Default::default() };
         let d = desk_shape(&cfg, &[], std::slice::from_ref(&kept));
         assert!(d.hedge && d.rebates);
+        // a desk whose perps are all traded has futures and no hedge, unless one instrument hedges
+        cfg.roles.set_market(P::Venue::USDM, P::InstRole::Traded);
+        let mut held = P::Account { fut_wallet: 5.0, ..Default::default() };
+        held.positions.push(P::Position { symbol: "AUSDT".into(), venue: P::Venue::USDM, amt: 1.0, ..Default::default() });
+        let mut c2 = cfg.clone();
+        let mut b = crate::config::AccountCfg::new("b", "b", "", P::Role::Sub);
+        b.markets.push(P::Venue::USDM);
+        c2.accounts.push(b);
+        let d = desk_shape(&c2, std::slice::from_ref(&held), &[]);
+        assert!(d.perps && !d.hedge);
+        c2.roles.set("HUSDT", P::Venue::USDM, P::InstRole::Hedge);
+        assert!(desk_shape(&c2, std::slice::from_ref(&held), &[]).hedge);
+        cfg.roles = P::Roles::default();
         acct.fut_wallet = 5.0;
         acct.rebates = 0.1;
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);

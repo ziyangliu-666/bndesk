@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::fills::{FillRec, HK, MarkAt, TK, TOX_HORIZONS};
 use crate::market::{Market, STABLES};
 use crate::pnl::OMap;
-use crate::protocol::{self as P, Side, Venue};
+use crate::protocol::{self as P, InstRole, Roles, Side, Venue};
 use crate::sessions::pause;
 
 pub const HOUR: i64 = 3_600_000;
@@ -91,18 +91,17 @@ const H300: usize = 3;
 
 #[allow(clippy::needless_range_loop)]
 /// Over today's fills less the conversions between stablecoins (`FillRec::conversion`); the day's and the last
-/// hour's counts and volume over the spot fills only.
-pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
+/// hour's counts and volume over the traded instruments' fills only.
+pub fn aggregate(fills: &[FillRec], now: i64, roles: &Roles) -> FillAgg {
     let mut g = FillAgg::default();
     for f in fills.iter().filter(|f| !f.conversion()) {
         let a = g.by_inst.entry(f.key()).or_default();
         let n = f.notional();
         a.fills += 1;
         a.volume += n;
-        // the desk's day figures are its spot market making (the ticker's Spot volume); the perps' hedge fills
-        // are counted on their own rows
-        let spot = f.venue.is_spot();
-        if spot {
+        // the desk's day figures are what it trades (the ticker's volume); the hedge's fills are counted on their own rows
+        let traded = roles.traded(&f.symbol, f.venue);
+        if traded {
             g.fills_day += 1;
             g.volume_day += n;
         }
@@ -137,7 +136,7 @@ pub fn aggregate(fills: &[FillRec], now: i64) -> FillAgg {
         hs.1.add(f.mk.0[H10], n);
         hs.2.add(f.mk.0[H60], n);
         hs.3 += p;
-        if f.ts >= now - HOUR && spot {
+        if f.ts >= now - HOUR && traded {
             g.fills_1h += 1;
             g.mk10_1h.add(f.mk.0[H10], n);
         }
@@ -193,12 +192,12 @@ struct Quotes {
     ask: Option<f64>,
 }
 
-/// Market making over today's spot fills of the bases `tracked` takes, in USD at the instrument's own mid:
+/// Market making over today's fills of the traded instruments whose positions `tracked` takes, in USD at the instrument's own mid:
 /// Σ s q (M(t + h) − p) − fee, the mid now for a fill younger than h (plus MARK_GRACE_MS); `spread`: the same
 /// at h = 0 against the fair at the fill. By base and by UTC hour (start ms) too. A fill past h with no price
 /// at t + h (taken live or backfilled from klines) is left out of all of them, counted in `unmarked` with its
 /// notional (USD): valuing it at the mid now would book hours of inventory moves as market making. A conversion
-/// between stablecoins is not market making: left out.
+/// between stablecoins is not market making: left out. `by_base` is by what the P&L book keeps the position under.
 #[derive(Debug, Default)]
 pub struct MmSplit {
     pub total: f64,
@@ -209,11 +208,12 @@ pub struct MmSplit {
     pub unmarked_notional: f64,
 }
 
-pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, tracked: impl Fn(&str) -> bool) -> MmSplit {
+pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, roles: &Roles, tracked: impl Fn(&str) -> bool) -> MmSplit {
     let h = HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
     let mut out = MmSplit::default();
-    for f in fills.iter().filter(|f| f.venue.is_spot() && !f.conversion()) {
-        let Some((base, quote, mid)) = m.get(&crate::market::key(&f.symbol, Venue::SPOT)).map(|i| (i.base.clone(), i.quote.clone(), i.mid()))
+    for f in fills.iter().filter(|f| roles.traded(&f.symbol, f.venue) && !f.conversion()) {
+        let spot = f.venue.is_spot();
+        let Some((base, quote, mid)) = m.get(&crate::market::key(&f.symbol, f.venue)).map(|i| (if spot { i.base.clone() } else { i.key.clone() }, i.quote.clone(), i.mid()))
         else {
             continue;
         };
@@ -306,8 +306,10 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
         };
         let q = quotes.get(&key).copied().unwrap_or_default();
         let cost = (a.pos != 0.0).then_some(a.cost);
-        let (tp, hp, rp, fp) =
-            if venue.is_spot() && own { by_base.get(&base).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)) } else { (0.0, 0.0, 0.0, 0.0) };
+        // what the P&L book keeps it under: a base on its own market, a traded perp itself (by_base has no other perp)
+        let booked: Option<&str> = if venue.is_spot() { own.then_some(base.as_str()) } else { Some(key.as_str()) };
+        let (tp, hp, rp, fp) = booked.and_then(|b| by_base.get(b).copied()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let mm_pnl = booked.and_then(|b| mm.by_base.get(b).copied()).unwrap_or(0.0);
         let px = truthy(m.px(id));
         let fair_t = truthy(fair);
         rows.push(P::SymbolRow {
@@ -337,8 +339,8 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
             hedged_pnl: hp,
             realized_pnl: rp,
             float_pnl: fp,
-            mm_pnl: if venue.is_spot() && own { mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
-            inv_pnl: if venue.is_spot() && own { tp - mm.by_base.get(&base).copied().unwrap_or(0.0) } else { 0.0 },
+            mm_pnl,
+            inv_pnl: tp - mm_pnl,
             open_bids: q.bids,
             open_asks: q.asks,
             bid_dist_bps: match (truthy(q.bid), fair_t) {
@@ -392,6 +394,7 @@ pub fn account_row(m: &mut Market, acct: &mut Account, now: i64) -> P::Account {
         quote_free: qf,
         quote_locked: ql,
         inventory_value: inv,
+        hedge_value: acct.hedge_value(m),
         fut_wallet: acct.fut_wallet,
         fut_upnl: acct.fut_upnl(m),
         fut_available: acct.fut_available,
@@ -423,8 +426,11 @@ pub fn exposure(cfg: &Config, m: &Market, accounts: &[P::Account], beta_value: f
     let by: Vec<P::AccountExposure> = accounts
         .iter()
         .map(|a| {
-            let fut: f64 = a.positions.iter().map(|p| p.notional).sum();
-            P::AccountExposure { account: a.id.clone(), spot_value: a.inventory_value, futures_notional: fut, net: a.inventory_value + fut }
+            // what it trades and what hedges it, whichever markets they are on
+            let traded: f64 = a.positions.iter().filter(|p| cfg.roles.traded(&p.symbol, p.venue)).map(|p| p.notional).sum();
+            let hedge: f64 = a.positions.iter().filter(|p| !cfg.roles.traded(&p.symbol, p.venue)).map(|p| p.notional).sum();
+            let (spot, fut) = (a.inventory_value - a.hedge_value + traded, hedge + a.hedge_value);
+            P::AccountExposure { account: a.id.clone(), spot_value: spot, futures_notional: fut, net: spot + fut }
         })
         .collect();
     let spot: f64 = by.iter().map(|b| b.spot_value).sum();
@@ -433,9 +439,10 @@ pub fn exposure(cfg: &Config, m: &Market, accounts: &[P::Account], beta_value: f
     let hedge: f64 = accounts
         .iter()
         .flat_map(|a| a.positions.iter())
-        .filter(|p| hedges.is_empty() || hedges.contains(p.symbol.as_str()))
+        .filter(|p| !cfg.roles.traded(&p.symbol, p.venue) && (hedges.is_empty() || hedges.contains(p.symbol.as_str())))
         .map(|p| p.notional)
-        .sum();
+        .sum::<f64>()
+        + accounts.iter().map(|a| a.hedge_value).sum::<f64>();
     let (mut target, mut band, mut gap) = (None, None, None);
     let off = cfg.target_ratio.and_then(|_| pause(&cfg.hedge_pauses, now));
     if let Some(ratio) = cfg.target_ratio {
@@ -478,9 +485,9 @@ pub fn exposure(cfg: &Config, m: &Market, accounts: &[P::Account], beta_value: f
     }
 }
 
-/// The inventory's drift today against what the futures legs made: the hedge symbols, or every futures
-/// symbol held or traded today when none are configured.
-pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f64, factor_hedge: f64) -> P::HedgeDay {
+/// The inventory's drift today against what the hedge made: the hedge symbols, or every perp that hedges held or traded
+/// today when none are configured, and `spot_legs`, the spot assets that hedge (`PnlBook::hedge_legs`).
+pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f64, factor_hedge: f64, spot_legs: Vec<P::HedgeLeg>) -> P::HedgeDay {
     let hedges: HashSet<&str> = cfg.hedge_symbols.iter().map(String::as_str).collect();
     let mut by: BTreeMap<String, P::HedgeLeg> = BTreeMap::new();
     for a in accounts {
@@ -488,7 +495,7 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
         let mut syms: HashSet<&str> = a.fut_day.keys().map(String::as_str).collect();
         syms.extend(a.positions.iter().filter(|(_, (q, _))| *q != 0.0).map(|(s, _)| s.as_str()));
         for s in syms {
-            if !hedges.is_empty() && !hedges.contains(s) {
+            if !hedges.is_empty() && !hedges.contains(s) || cfg.roles.traded(s, a.perp) {
                 continue;
             }
             let l = a.fut_leg(m, s);
@@ -513,13 +520,14 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
             b.funding += l.funding;
         }
     }
-    let legs: Vec<P::HedgeLeg> = by
+    let mut legs: Vec<P::HedgeLeg> = by
         .into_values()
         .map(|mut b| {
             b.pnl = b.price_pnl.map(|p| p - b.fees + b.funding);
             b
         })
         .collect();
+    legs.extend(spot_legs);
     let price = legs.iter().map(|x| x.price_pnl).sum::<Option<f64>>();
     let fees: f64 = legs.iter().map(|x| x.fees).sum();
     let funding: f64 = legs.iter().map(|x| x.funding).sum();
@@ -540,15 +548,20 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
     }
 }
 
-/// Spot inventory value weighted by each market's beta (configured, or estimated against the
-/// beta instrument); with markets_only, assets outside the configured spot markets are left out.
+/// What the desk trades, valued and weighted by each market's beta (configured, or estimated against the beta
+/// instrument): its spot assets and its traded perps' notional; with markets_only, those outside the configured
+/// markets are left out.
 pub fn beta_weighted_spot(cfg: &Config, m: &mut Market, accounts: &[AccountRef], est: Option<&Betas>) -> f64 {
     let mut betas: HashMap<String, f64> = HashMap::new();
+    let mut perp_betas: HashMap<(&str, Venue), f64> = HashMap::new();
     for mc in &cfg.markets {
+        let k = format!("{}:{}", mc.venue, mc.symbol);
         if !mc.venue.is_spot() {
+            if cfg.roles.traded(&mc.symbol, mc.venue) {
+                perp_betas.insert((mc.symbol.as_str(), mc.venue), est.map_or(mc.beta, |e| e.beta(&k)));
+            }
             continue;
         }
-        let k = format!("{}:{}", mc.venue, mc.symbol);
         let base = m.get(&k).map_or_else(|| mc.symbol.strip_suffix("USDT").unwrap_or(&mc.symbol).to_string(), |i| i.base.clone());
         betas.insert(base, est.map_or(mc.beta, |e| e.beta(&k)));
     }
@@ -556,29 +569,40 @@ pub fn beta_weighted_spot(cfg: &Config, m: &mut Market, accounts: &[AccountRef],
     for acct in accounts {
         let acct = acct.borrow();
         for (a, &(f, l)) in &acct.balances {
-            if STABLES.contains(&a.as_str()) || (cfg.markets_only && !betas.contains_key(a)) {
+            if STABLES.contains(&a.as_str()) || (cfg.markets_only && !betas.contains_key(a)) || cfg.roles.asset(a) == InstRole::Hedge {
                 continue;
             }
             if let Some(p) = truthy(m.asset_price(a)) {
                 total += (f + l) * p * betas.get(a).copied().unwrap_or(1.0);
             }
         }
+        for p in acct.live_positions(m).iter().filter(|p| cfg.roles.traded(&p.symbol, p.venue)) {
+            let beta = perp_betas.get(&(p.symbol.as_str(), p.venue)).copied();
+            if !cfg.markets_only || beta.is_some() {
+                total += p.notional * beta.unwrap_or(1.0);
+            }
+        }
     }
     total
 }
 
+/// The assets and traded perps that make up the inventory.
 pub fn inventory_assets(m: &mut Market, accounts: &[AccountRef]) -> i64 {
     let mut held: HashMap<String, f64> = HashMap::new();
+    let mut perps: HashMap<(String, Venue), f64> = HashMap::new();
     for acct in accounts {
-        for (a, &(f, l)) in &acct.borrow().balances {
-            if !STABLES.contains(&a.as_str()) {
+        let acct = acct.borrow();
+        for (a, &(f, l)) in &acct.balances {
+            if !STABLES.contains(&a.as_str()) && acct.roles.asset(a) != InstRole::Hedge {
                 *held.entry(a.clone()).or_insert(0.0) += f + l;
             }
         }
+        for p in acct.live_positions(m).into_iter().filter(|p| acct.roles.traded(&p.symbol, p.venue)) {
+            *perps.entry((p.symbol, p.venue)).or_insert(0.0) += p.notional;
+        }
     }
-    held.iter()
-        .filter(|(a, q)| **q > 0.0 && truthy(m.asset_price(a)).is_some_and(|p| **q * p >= 1.0))
-        .count() as i64
+    let assets = held.iter().filter(|(a, q)| **q > 0.0 && truthy(m.asset_price(a)).is_some_and(|p| **q * p >= 1.0)).count();
+    (assets + perps.values().filter(|n| n.abs() >= 1.0).count()) as i64
 }
 
 /// Every resting order with its distance from fair: positive = passive (bid below, ask above).
@@ -676,7 +700,7 @@ mod tests {
         let acct = P::Account {
             id: "a".into(),
             inventory_value: 1000.0,
-            positions: vec![P::Position { symbol: "HUSDT".into(), notional: -700.0, amt: -1.0, ..Default::default() }],
+            positions: vec![P::Position { symbol: "HUSDT".into(), venue: Venue::USDM, notional: -700.0, amt: -1.0, ..Default::default() }],
             ..Default::default()
         };
         let m = Market::new(HashMap::new(), 120.0, 50.0);
@@ -705,7 +729,7 @@ mod tests {
     fn hedge_day_sums_legs() {
         let m = Market::new(HashMap::new(), 120.0, 50.0);
         let cfg = Config::default();
-        let h = hedge_day(&cfg, &m, &[], 10.0, 4.0);
+        let h = hedge_day(&cfg, &m, &[], 10.0, 4.0, vec![]);
         assert_eq!((h.residual_drift, h.hedge_pnl, h.price_pnl, h.net), (6.0, Some(0.0), Some(0.0), Some(10.0)));
         assert_eq!((h.offset_factor, h.offset_total), (Some(-0.0), Some(-0.0)));
         assert!(h.legs.is_empty());
@@ -725,14 +749,14 @@ mod tests {
         marked.mk_raw.0[2] = Some(50.0);                         // +0.05 on 10 notional (live or backfilled)
         let unmarked = fill("unmarked", 3_600_000);              // the desk was down at t + 60 s
         let fills = vec![marked.clone(), unmarked.clone(), young];
-        let s = mm_split(&mut m, &fills, 60, now, |_| true);
+        let s = mm_split(&mut m, &fills, 60, now, &Roles::default(), |_| true);
         assert_relative_eq!(s.total, 2.0 + 0.05, epsilon = 1e-9);
         assert_eq!((s.unmarked, s.unmarked_notional), (1, 10.0));
         assert_eq!(s.by_hour.get(&3_600_000), None);
         // the backfill brings its price: it counts, and nothing is left out
         let mut back = unmarked;
         back.mk_raw.0[2] = Some(-20.0);
-        let s = mm_split(&mut m, &[marked, back], 60, now, |_| true);
+        let s = mm_split(&mut m, &[marked, back], 60, now, &Roles::default(), |_| true);
         assert_relative_eq!(s.total, 0.05 - 0.02, epsilon = 1e-9);
         assert_eq!((s.unmarked, s.unmarked_notional), (0, 0.0));
     }
@@ -763,15 +787,15 @@ mod tests {
         assert!(conv.conversion() && !aaa.conversion());
         assert!(conv.proto().conversion && !aaa.proto().conversion);
         let fills = vec![aaa.clone(), conv.clone()];
-        let s = mm_split(&mut m, &fills, 60, now, |_| true);
+        let s = mm_split(&mut m, &fills, 60, now, &Roles::default(), |_| true);
         assert_relative_eq!(s.total, 0.05, epsilon = 1e-9);
         assert!(!s.by_base.contains_key("USDC"));
-        let g = aggregate(&fills, now);
-        let only = aggregate(&[aaa.clone()], now);
+        let g = aggregate(&fills, now, &Roles::default());
+        let only = aggregate(&[aaa.clone()], now, &Roles::default());
         assert_eq!((g.fills_day, g.volume_day), (1, 10.0));
         // a perp hedge fill has its own row, out of the day's spot count and volume
         let hedge = FillRec::new("h", now - 500_000, "mm", "AAAUSDT", Venue::USDM, Side::Sell, 10.0, 3.0);
-        let gh = aggregate(&[aaa.clone(), hedge], now);
+        let gh = aggregate(&[aaa.clone(), hedge], now, &Roles::default());
         assert_eq!((gh.fills_day, gh.volume_day, gh.fills_1h), (1, 10.0, 1));
         assert_eq!(gh.by_inst["usdm:AAAUSDT"].volume, 30.0);
         assert_eq!(g.all, only.all);

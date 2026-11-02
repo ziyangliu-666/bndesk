@@ -199,14 +199,15 @@ impl Session {
         } else {
             pnl.begin(&mut m, now);
         }
-        let agg = me::aggregate(&fb.fills, now);
-        let mm = me::mm_split(&mut m, &fb.fills, 60, now, |b| pnl.pos.contains_key(b));
+        let agg = me::aggregate(&fb.fills, now, &self.cfg.roles);
+        let mm = me::mm_split(&mut m, &fb.fills, 60, now, &self.cfg.roles, |b| pnl.pos.contains_key(b));
         let by_base = pnl.by_base(&mut m);
         let symbols = me::symbol_rows(&mut m, &self.accounts, &by_base, &agg, &mm);
         let summary = pnl.summary(&mut m);
         let bv = me::beta_weighted_spot(&self.cfg, &mut m, &self.accounts, None);
         let expo = me::exposure(&self.cfg, &m, &rows, bv, false, now);
-        let hedge = me::hedge_day(&self.cfg, &m, &self.accounts, summary.ref_hedge, summary.factor_hedge);
+        let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
+        let hedge = me::hedge_day(&self.cfg, &m, &self.accounts, summary.ref_hedge, summary.factor_hedge, spot_legs);
         let orders = me::open_orders(&m, &self.accounts);
         let mut orders = serde_json::to_value(&orders).unwrap();
         orders.as_array_mut().unwrap().sort_by_key(|x| x["id"].as_str().unwrap_or("").to_string());
@@ -224,6 +225,12 @@ impl Session {
 fn canon(v: &mut Value) {
     match v {
         Value::Object(o) => {
+            // what a desk with no role has at 0 by definition, added after the file
+            for k in ["hedge_value", "funding_day"] {
+                if o.get(k).is_some_and(|v| v == 0.0) {
+                    o.remove(k);
+                }
+            }
             for k in ["positions", "legs"] {
                 // their `venue` came after the file: what they say is checked by the session's symbols and marks
                 if let Some(Value::Array(rows)) = o.get_mut(k) {
@@ -291,12 +298,11 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
         let (fills, m, pnl, kept) = (fills.clone(), m.clone(), pnl.clone(), kept.clone());
         Rc::new(move |f: FillRec| {
             kept.borrow_mut().push(json!(["fill", f.id, f.ts, f.fee, f.fee_asset, f.maker]));
-            let spot = (f.venue.is_spot() && !f.conversion()).then(|| f.clone());
+            // as the desk does: every fill is offered to the book, which takes what the (default) roles give it
+            let g = f.clone();
             let mut mk = m.borrow_mut();
-            if fills.borrow_mut().add(&mut mk, f, true)
-                && let Some(f) = spot
-            {
-                pnl.borrow_mut().on_fill_at(&mut mk, &f, true);
+            if fills.borrow_mut().add(&mut mk, f, true) {
+                pnl.borrow_mut().on_fill_at(&mut mk, &g, true);
             }
         })
     };

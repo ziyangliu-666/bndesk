@@ -270,6 +270,8 @@ pub struct PnlSummary {
     pub mm_spread: f64,
     /// trading − mm: the opening inventory and each fill's position from h on, at the instrument's mid
     pub inventory: f64,
+    /// of trading (in inventory): the funding of the perps it has
+    pub funding_day: f64,
     /// fills past h with no price at t + h (live or from klines), left out of mm and mm_spread: count, USD notional
     pub mm_unmarked_fills: i64,
     pub mm_unmarked_notional: f64,
@@ -334,6 +336,8 @@ pub struct Account {
     pub quote_free: f64,
     pub quote_locked: f64,
     pub inventory_value: f64,
+    /// of inventory_value: the spot assets that hedge
+    pub hedge_value: f64,
     pub fut_wallet: f64,
     pub fut_upnl: f64,
     pub fut_available: f64,
@@ -685,6 +689,9 @@ pub struct Desk {
     pub currency: String,
     pub quote: String,
     pub markets: Vec<&'static Market>,
+    pub roles: Roles,
+    /// An account has a perp market, or holds a position: the pages' futures columns and tabs.
+    pub perps: bool,
     pub hedge: bool,
     pub rebates: bool,
     pub mm: bool,

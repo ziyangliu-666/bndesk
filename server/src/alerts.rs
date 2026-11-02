@@ -341,7 +341,7 @@ impl Alerts {
         let mine: Vec<&P::SymbolRow> = v.symbols.iter().filter(|r| watched(r)).collect();
         let big: Vec<String> = mine
             .iter()
-            .filter(|r| r.venue.is_spot() && ac.asset_cap_usd.is_some_and(|cap| r.inv_value.abs() > cap))
+            .filter(|r| cfg.roles.traded(&r.symbol, r.venue) && ac.asset_cap_usd.is_some_and(|cap| r.inv_value.abs() > cap))
             .map(|r| format!("{} {}", r.symbol, fmt_num(r.inv_value, 0, false)))
             .collect();
         if !big.is_empty() {

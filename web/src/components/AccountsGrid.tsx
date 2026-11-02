@@ -98,6 +98,7 @@ function total(rows: Account[]): Row {
     label: "Total",
     email: "",
     role: "sub",
+    hedge_value: sum("hedge_value"),
     equity: sum("equity"),
     equity_open: sum("equity_open"),
     pnl_day: sum("pnl_day"),

@@ -8,7 +8,7 @@ use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::FillRec;
 use crate::market::{Market, QUOTE, STABLES};
 use crate::pnl::Flow;
-use crate::protocol::{self as P, Role, Side, UserStream, Venue};
+use crate::protocol::{self as P, InstRole, Role, Roles, Side, UserStream, Venue};
 use crate::sign::Credentials;
 
 pub const MOVE_HOLD_MS: i64 = 180_000;
@@ -206,6 +206,10 @@ pub struct Account {
     pub fut_day: HashMap<String, FutDay>,
     /// spot symbols whose fills the desk tracks (set by the desk): a connector's sweep of the day's fills reads these
     pub spot_symbols: Vec<String>,
+    /// perp symbols the desk trades and configures: their day is swept even with no fill or position seen since a start
+    pub perp_symbols: Vec<String>,
+    /// what the desk's instruments are for (set by the desk)
+    pub roles: Rc<Roles>,
     // symbol -> today's futures fills, funding and opening mark
     pub transfers_day: f64,
     pub updated: i64,
@@ -267,6 +271,8 @@ impl Account {
             day_start: 0,
             fut_day: HashMap::new(),
             spot_symbols: vec![],
+            perp_symbols: vec![],
+            roles: Rc::default(),
             transfers_day: 0.0,
             updated: 0,
             feeds,
@@ -461,10 +467,29 @@ impl Account {
             ),
             _ => None,
         };
-        // REST's funding as of its pass, and what the stream reported after it (REST picks that up within a minute)
+        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: self.day_funding(d, s) }
+    }
+
+    /// REST's funding as of its pass, and what the stream reported after it (REST picks that up within a minute).
+    fn day_funding(&self, d: &FutDay, s: &str) -> f64 {
         let streamed: f64 =
             self.funding_stream.iter().filter(|(t, sym, _)| sym == s && *t >= d.ds && *t >= d.rest_t).map(|x| x.2).sum();
-        FutLeg { q0, q, m0: d.m0, mark, fills: d.trades.len() as i64, price, fees, funding: d.funding + streamed }
+        d.funding + streamed
+    }
+
+    /// Today's funding and opening mark on perp symbol s, where the market cannot be asked (the P&L book holds it).
+    pub fn perp_day(&self, s: &str) -> crate::pnl::PerpDay {
+        self.fut_day.get(s).filter(|d| d.ds == self.day_start).map_or_else(Default::default, |d| crate::pnl::PerpDay { funding: self.day_funding(d, s), m0: d.m0 })
+    }
+
+    /// The value of the spot assets that hedge (of `inventory_value`).
+    pub fn hedge_value(&self, m: &mut Market) -> f64 {
+        self.balances
+            .iter()
+            .filter(|(a, _)| !STABLES.contains(&a.as_str()) && self.roles.asset(a) == InstRole::Hedge)
+            .filter(|(_, b)| b.0 + b.1 > 0.0)
+            .map(|(a, b)| (b.0 + b.1) * m.asset_price(a).unwrap_or(0.0))
+            .sum()
     }
 
     pub fn fut_upnl(&self, m: &Market) -> f64 {

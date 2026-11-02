@@ -4,12 +4,14 @@
 //! The rows are the desk's own figures recomputed at each time t from what the db holds once the day is
 //! complete, with the desk's own code: Π and its realized / floating split (`PnlBook`, closed form over the
 //! fills at or before t), the reference and factor hedge on a 1 min grid (`PnlBook::book_gap`, as the live
-//! backfill books a gap), market making (`metrics::mm_split` at t), the futures legs (`FutLeg`'s formula over
-//! the legs' trades and funding at or before t, at the 1 min mark price) and the rebates credited by t. Prices
-//! are 1 min klines (open → close of the minute, `backfill::interp_at`); M_k(D) is the day's kept one.
+//! backfill books a gap), market making (`metrics::mm_split` at t), the hedge's legs (`FutLeg`'s formula over
+//! the legs' trades and funding at or before t, at the 1 min mark price; a spot asset that hedges from `PnlBook`) and
+//! the rebates credited by t. Which instrument is which goes by the roles set now. Prices are 1 min klines (open →
+//! close of the minute, `backfill::interp_at`), a traded perp's its mark price klines, as equity marks it; M_k(D) is
+//! the day's kept one.
 //!
-//! The opening quantities come from the balances now, less the fills since the day's end (signed REST reads with
-//! the configured keys, read-only), so the run needs the desk's keys. Day PnL is real money only where a row
+//! The opening quantities come from the balances and positions now, less the fills since the day's end (signed REST
+//! reads with the configured keys, read-only), so the run needs the desk's keys. Day PnL is real money only where a row
 //! has it: in a gap, Other (Day PnL less Π, hedge and rebates: what the split does not explain) is taken
 //! linearly between the live rows on either side, and Day PnL is the split plus it; equity, inventory and the
 //! futures notional are the recomputed figures plus the offset between them and the live rows, also linear.
@@ -81,7 +83,7 @@ pub struct At {
     pub mm: f64,
     pub hedge: f64,
     pub rebates: f64,
-    /// Σ Q_k M_k over the bases in Π's scope, and the legs' Σ q mark
+    /// Σ Q_k M_k over what Π has, and the hedge's Σ q mark
     pub inventory: f64,
     pub futures: f64,
 }
@@ -117,8 +119,11 @@ pub struct Inputs {
     pub horizon_s: i64,
     /// the day's fills (all venues), by time
     pub fills: Vec<FillRec>,
-    /// Q_k at the day's end, by base
+    /// Q_k at the day's end, by what the book keeps it under
     pub q_end: HashMap<String, f64>,
+    pub roles: crate::protocol::Roles,
+    /// a traded perp's funding (t, USD) by instrument key
+    pub perp_funding: HashMap<String, Vec<(i64, f64)>>,
     pub m0: crate::pnl::OMap<f64>,
     /// 1 min bars (open time, open, close) by instrument key
     pub bars: HashMap<String, Vec<(i64, f64, f64)>>,
@@ -143,6 +148,12 @@ impl<'a> Day<'a> {
         let q_end = inp.q_end.clone();
         let mut book = PnlBook::new(inp.ds, Box::new(move |b| q_end.get(b).copied().unwrap_or(0.0)), Box::new(move || scope.clone()),
                                     beta, beta_vs, None);
+        book.roles = inp.roles.clone();
+        let funding = inp.perp_funding.clone();
+        book.perp_day = Box::new(move |k, upto| crate::pnl::PerpDay {
+            funding: funding.get(k).map_or(0.0, |v| v.iter().filter(|x| x.0 <= upto).map(|x| x.1).sum()),
+            m0: None,
+        });
         book.load_fills(&mut m, inp.fills.iter());
         book.m0 = inp.m0.clone();
         book.open_scope(&mut m, inp.ds.div_euclid(1000));
@@ -211,14 +222,15 @@ impl<'a> Day<'a> {
         let (pi, re, re_old, fl) = self.book.split_upto(&mut self.m, t);
         let n = self.inp.fills.partition_point(|f| f.ts <= t);
         let pos = &self.book.pos;
-        let mm = crate::metrics::mm_split(&mut self.m, &self.inp.fills[..n], self.inp.horizon_s, t, |b| pos.contains_key(b)).total;
-        let mut inv = 0.0;
+        let mm = crate::metrics::mm_split(&mut self.m, &self.inp.fills[..n], self.inp.horizon_s, t, &self.inp.roles, |b| pos.contains_key(b)).total;
+        let (mut inv, mut spot_hedge) = (0.0, 0.0);
         for (b, p) in self.book.pos.iter() {
-            if let Some(px) = self.m.px(p.inst) {
-                inv += self.book.q_upto(b, t) * px;
+            if let Some(px) = self.m.value(p.inst) {
+                *(if p.hedge { &mut spot_hedge } else { &mut inv }) += self.book.q_upto(b, t) * px;
             }
         }
-        let (mut hedge, mut fut) = (0.0, 0.0);
+        let (mut hedge, mut fut) = (0.0, spot_hedge);
+        hedge += self.book.hedge_legs(&mut self.m, t).iter().filter_map(|l| l.pnl).sum::<f64>();
         for l in &self.inp.legs {
             let (p, n) = l.at(t);
             hedge += p;
@@ -352,17 +364,24 @@ fn hhmm(ds: i64, s: &str) -> Result<i64> {
     Ok(ds + h * HOUR + m * MIN)
 }
 
-/// The legs of an account's futures: the configured hedge symbols, or as the live desk counts them with none
-/// configured, every symbol it holds now or has traded since the day start.
-fn leg_symbols(c: &Connection, cfg: &Config, account: &str, ds: i64, held: &[String]) -> Result<Vec<String>> {
-    if !cfg.hedge_symbols.is_empty() {
-        return Ok(cfg.hedge_symbols.clone());
-    }
-    let mut st = c.prepare("SELECT DISTINCT symbol FROM fills WHERE venue = 'usdm' AND account = ? AND ts >= ?")?;
-    let mut syms = st.query_map(params![account, ds], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+/// Every perp symbol an account holds now or has traded since the day start.
+fn perp_symbols(c: &Connection, venue: Venue, account: &str, ds: i64, held: &[String]) -> Result<Vec<String>> {
+    let mut st = c.prepare("SELECT DISTINCT symbol FROM fills WHERE venue = ? AND account = ? AND ts >= ?")?;
+    let mut syms = st.query_map(params![venue.as_str(), account, ds], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     syms.extend_from_slice(held);
     syms.sort();
     syms.dedup();
+    Ok(syms)
+}
+
+/// The legs of an account's futures: the configured hedge symbols, or as the live desk counts them with none
+/// configured, every symbol that hedges it holds now or has traded since the day start.
+fn leg_symbols(c: &Connection, cfg: &Config, venue: Venue, account: &str, ds: i64, held: &[String]) -> Result<Vec<String>> {
+    if !cfg.hedge_symbols.is_empty() {
+        return Ok(cfg.hedge_symbols.clone());
+    }
+    let mut syms = perp_symbols(c, venue, account, ds, held)?;
+    syms.retain(|s| !cfg.roles.traded(s, venue));
     Ok(syms)
 }
 
@@ -383,6 +402,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     // symbol -> (trades, funding (t, amount))
     type Raw = (Vec<PerpTrade>, Vec<(i64, f64)>);
     let mut legs_raw: HashMap<String, Raw> = HashMap::new();
+    let mut perp_funding: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
+    let mut traded_perps: Vec<(String, Venue)> = vec![];
     let c = crate::store::open(&cfg.db)?;
     for ac in &cfg.accounts {
         let reader = public.reader(ac).map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
@@ -402,12 +423,22 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
             }
             *pos.entry(s).or_default() += q;
         }
-        for sym in &leg_symbols(&c, cfg, &ac.id, ds, &held)? {
+        let venue = ac.perp();
+        for sym in &leg_symbols(&c, cfg, venue, &ac.id, ds, &held)? {
             let e = legs_raw.entry(sym.clone()).or_default();
             for t in reader.perp_trades(sym, ds).await? {
                 e.0.push(t);
             }
             e.1.extend(reader.perp_funding(sym, ds, ds + DAY - 1).await?);
+        }
+        // a traded perp's fills are in the db, as a spot market's; of the exchange it needs the funding
+        let mut syms = perp_symbols(&c, venue, &ac.id, ds, &held)?;
+        syms.retain(|s| cfg.roles.traded(s, venue));
+        for sym in syms {
+            perp_funding.entry(crate::market::key(&sym, venue)).or_default().extend(reader.perp_funding(&sym, ds, ds + DAY - 1).await?);
+            if !traded_perps.iter().any(|(s, v)| *s == sym && *v == venue) {
+                traded_perps.push((sym, venue));
+            }
         }
     }
     let fills = fills_between(&c, ds, ds + DAY)?;
@@ -434,13 +465,23 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     for f in fills.iter().chain(&after) {
         m.ensure(&f.symbol, f.venue, None);
     }
-    // Q at the day's end: the balance now less the spot fills since (a fee taken in the base asset came out of it)
+    for (sym, venue) in &traded_perps {
+        m.ensure(sym, *venue, None);
+    }
+    // Q at the day's end: the balance or position now less the fills since (a fee taken in the base asset came out of it)
     let mut q_end = bal.clone();
-    for f in after.iter().filter(|f| f.venue.is_spot() && !f.conversion()) {
+    for (sym, venue) in &traded_perps {
+        q_end.insert(crate::market::key(sym, *venue), pos.get(sym).copied().unwrap_or(0.0));
+    }
+    for f in after.iter().filter(|f| cfg.roles.booked(&f.symbol, f.venue) && !f.conversion()) {
         if let Some(i) = m.get(&f.key()) {
             let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
-            let fee = if f.fee_asset == i.base { f.fee } else { 0.0 };
-            *q_end.entry(i.base.clone()).or_default() -= s * f.qty - fee;
+            if f.venue.is_spot() {
+                let fee = if f.fee_asset == i.base { f.fee } else { 0.0 };
+                *q_end.entry(i.base.clone()).or_default() -= s * f.qty - fee;
+            } else {
+                *q_end.entry(i.key.clone()).or_default() -= s * f.qty;
+            }
         }
     }
 
@@ -465,8 +506,9 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
 
     // klines: each instrument in scope, its reference, the beta instrument, the fee and rebate assets
-    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| mc.venue.is_spot()).map(|mc| crate::market::key(&mc.symbol, mc.venue)).collect();
-    keys.extend(fills.iter().filter(|f| f.venue.is_spot() && !f.conversion()).map(|f| f.key()));
+    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| cfg.roles.booked(&mc.symbol, mc.venue)).map(|mc| crate::market::key(&mc.symbol, mc.venue)).collect();
+    keys.extend(fills.iter().filter(|f| cfg.roles.booked(&f.symbol, f.venue) && !f.conversion()).map(|f| f.key()));
+    keys.extend(traded_perps.iter().map(|(s, v)| crate::market::key(s, *v)));
     keys.sort();
     keys.dedup();
     let scope = keys.clone();
@@ -492,7 +534,12 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     want.dedup();
     let mut bars = HashMap::new();
     for k in &want {
-        let v = crate::backfill::none_on_400(public.bars(k, "1m", ds - MIN, ds + DAY).await)?;
+        // a traded perp at its mark, as equity has it
+        let perp = k.split_once(':').filter(|(v, _)| keys.contains(k) && v.parse::<Venue>().is_ok_and(|v| !v.is_spot())).map(|x| x.1);
+        let v = match perp {
+            Some(sym) => public.mark_bars(sym, ds - MIN, ds + DAY).await?,
+            None => crate::backfill::none_on_400(public.bars(k, "1m", ds - MIN, ds + DAY).await)?,
+        };
         bars.insert(k.clone(), v);
     }
     eprintln!("{} kline series", bars.len());
@@ -529,6 +576,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         horizon_s: cfg.mm_horizon_s,
         fills,
         q_end,
+        roles: cfg.roles.clone(),
+        perp_funding,
         m0: state.map(|s| s.m0).unwrap_or_default(),
         bars,
         legs,
@@ -674,9 +723,13 @@ mod tests {
         c.execute_batch("CREATE TABLE fills (symbol TEXT, venue TEXT, account TEXT, ts INTEGER);
             INSERT INTO fills VALUES ('AUSDT', 'usdm', 'a', 2000), ('BUSDT', 'usdm', 'b', 2000), ('CUSDT', 'spot', 'a', 2000), ('DUSDT', 'usdm', 'a', 500);").unwrap();
         let mut cfg = Config::default();
-        assert_eq!(leg_symbols(&c, &cfg, "a", 1000, &["EUSDT".into()]).unwrap(), ["AUSDT", "EUSDT"]);
+        assert_eq!(leg_symbols(&c, &cfg, Venue::USDM, "a", 1000, &["EUSDT".into()]).unwrap(), ["AUSDT", "EUSDT"]);
+        // a traded perp is not a leg
+        cfg.roles.set("AUSDT", Venue::USDM, crate::protocol::InstRole::Traded);
+        assert_eq!(leg_symbols(&c, &cfg, Venue::USDM, "a", 1000, &["EUSDT".into()]).unwrap(), ["EUSDT"]);
+        assert_eq!(perp_symbols(&c, Venue::USDM, "a", 1000, &[]).unwrap(), ["AUSDT"]);
         cfg.hedge_symbols = vec!["HUSDT".into()];
-        assert_eq!(leg_symbols(&c, &cfg, "a", 1000, &["EUSDT".into()]).unwrap(), ["HUSDT"]);
+        assert_eq!(leg_symbols(&c, &cfg, Venue::USDM, "a", 1000, &["EUSDT".into()]).unwrap(), ["HUSDT"]);
     }
 
     fn market() -> Market {
@@ -712,6 +765,8 @@ mod tests {
             horizon_s: 60,
             fills: vec![f],
             q_end: HashMap::from([("AAA".to_string(), 2.0)]),
+            roles: Default::default(),
+            perp_funding: HashMap::new(),
             m0: [("AAA".to_string(), 10.0)].into_iter().collect(),
             bars: HashMap::from([("spot:AAAUSDT".to_string(), bars)]),
             legs: vec![leg],
@@ -756,6 +811,65 @@ mod tests {
         assert_relative_eq!(last.trading.unwrap(), xb.trading, epsilon = 1e-9);
         assert_relative_eq!(last.pnl_day, live.last().unwrap().pnl_day);
         assert_relative_eq!(last.other().unwrap(), 1.5, epsilon = 1e-9);
+    }
+
+    /// A desk that makes markets on a perp: its Π, funding, market making and inventory are the book's, nothing is a leg;
+    /// a spot asset that hedges is a leg with its fills in the same db.
+    #[test]
+    fn a_day_with_a_traded_perp_and_a_spot_hedge_is_rebuilt_in_its_parts() {
+        use crate::protocol::{InstRole, Roles};
+        let mut info: Info = HashMap::new();
+        info.insert(Venue::SPOT, HashMap::from([("BBBUSDT".to_string(), SymbolInfo::new("BBB", "USDT", 0.0))]));
+        info.insert(Venue::USDM, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
+        let mut m = Market::new(info, 120.0, 50.0);
+        m.ensure("AAAUSDT", Venue::USDM, None);
+        m.ensure("BBBUSDT", Venue::SPOT, None);
+        let px = |t: i64| 100.0 + 2.0 * (t - DS) as f64 / DAY as f64;
+        let flat = |x: f64| (-1..1441).map(|k| (DS + k * MIN, x, x)).collect::<Vec<_>>();
+        let marks: Vec<(i64, f64, f64)> = (-1..1441).map(|k| (DS + k * MIN, px(DS + k * MIN), px(DS + (k + 1) * MIN))).collect();
+        let t_f = DS + 6 * HOUR;
+        // short 1 from long 1 at 6:00, at 100.5
+        let mut f = FillRec::new("f", t_f, "a", "AAAUSDT", Venue::USDM, Side::Sell, 100.5, 2.0);
+        f.fee = 0.1;
+        f.fee_asset = "USDT".into();
+        f.mk_raw.0 = [Some(1.0), Some(5.0), Some(10.0), Some(10.0)];
+        f.mk.0 = f.mk_raw.0;
+        let mut g = FillRec::new("g", t_f, "a", "BBBUSDT", Venue::SPOT, Side::Buy, 11.0, 1.0);
+        g.mk_raw.0 = [Some(9.0); 4];
+        g.mk.0 = g.mk_raw.0;
+        let mut roles = Roles::default();
+        roles.set_market(Venue::USDM, InstRole::Traded);
+        roles.set("BBBUSDT", Venue::SPOT, InstRole::Hedge);
+        let inp = Inputs {
+            ds: DS,
+            horizon_s: 60,
+            fills: vec![f, g],
+            q_end: HashMap::from([("usdm:AAAUSDT".to_string(), -1.0), ("BBB".to_string(), 3.0)]),
+            roles,
+            perp_funding: HashMap::from([("usdm:AAAUSDT".to_string(), vec![(DS + 8 * HOUR, 0.25), (DS + 16 * HOUR, 0.25)])]),
+            m0: Default::default(),
+            bars: HashMap::from([("usdm:AAAUSDT".to_string(), marks), ("spot:BBBUSDT".to_string(), flat(12.0))]),
+            legs: vec![],
+            rebates: vec![],
+            h_before: 0.0,
+        };
+        let mut d = Day::new(&inp, m, vec!["spot:BBBUSDT".into(), "usdm:AAAUSDT".into()], Box::new(|_| 1.0), None);
+        d.book_hedge(DS);
+        let t = DS + 12 * HOUR;
+        let x = d.at(t);
+        // Π: long 1 from 100, sold 2 at 100.5, marked at M(t); the funding so far
+        assert_relative_eq!(x.trading, px(t) - 100.0 - 2.0 * (px(t) - 100.5) - 0.1 + 0.25, epsilon = 1e-9);
+        assert_relative_eq!(x.realized + x.realized_old + x.floating, x.trading, epsilon = 1e-9);
+        assert_relative_eq!(x.realized_old, 0.5, epsilon = 1e-9);
+        assert_relative_eq!(x.mm, 2.0 * 100.5 * 10.0 / 1e4 - 0.1, epsilon = 1e-9);
+        // the spot asset's whole day, in Hedge: flat since its M_k(D), its fill bought at 11
+        assert_relative_eq!(x.hedge, 12.0 - 11.0, epsilon = 1e-9);
+        assert_relative_eq!(x.inventory, -px(t), epsilon = 1e-9);
+        assert_relative_eq!(x.futures, 3.0 * 12.0, epsilon = 1e-9);
+        // before its fill the book holds the opening quantities
+        let e = d.at(DS + 3 * HOUR);
+        assert_relative_eq!(e.inventory, px(DS + 3 * HOUR), epsilon = 1e-9);
+        assert_relative_eq!(e.futures, 2.0 * 12.0, epsilon = 1e-9);
     }
 
     #[test]
