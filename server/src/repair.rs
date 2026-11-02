@@ -465,7 +465,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
 
     // klines: each instrument in scope, its reference, the beta instrument, the fee and rebate assets
-    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| mc.venue.is_spot()).map(|mc| format!("spot:{}", mc.symbol)).collect();
+    let mut keys: Vec<String> = cfg.markets.iter().filter(|mc| mc.venue.is_spot()).map(|mc| crate::market::key(&mc.symbol, mc.venue)).collect();
     keys.extend(fills.iter().filter(|f| f.venue.is_spot() && !f.conversion()).map(|f| f.key()));
     keys.sort();
     keys.dedup();

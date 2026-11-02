@@ -163,7 +163,7 @@ fn same_fee(a: (f64, f64), b: (f64, f64)) -> bool {
     (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9
 }
 
-/// One Binance account as the monitor sees it: balances, futures, orders, fees.
+/// One account as the monitor sees it: balances, futures, orders, fees.
 pub struct Account {
     pub cfg: AccountCfg,
     pub id: String,

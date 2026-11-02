@@ -406,7 +406,7 @@ impl Desk {
             accts.iter().map(|a| a.borrow().balances.get(base).map_or(0.0, |(f, l)| f + l)).sum()
         };
         let spot_keys: Vec<String> =
-            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| format!("spot:{}", m.symbol)).collect();
+            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| crate::market::key(&m.symbol, m.venue)).collect();
         let sf = self.spot_filled.clone();
         let scope = move || -> Vec<String> { spot_keys.iter().cloned().chain(sf.borrow().iter().cloned()).collect() };
         let (betas, fixed) = (self.betas.clone(), self.fixed_betas.clone());

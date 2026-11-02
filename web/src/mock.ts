@@ -258,12 +258,15 @@ let curMin = minuteOf(now);
 const activityNow = () => minuteActivity(minuteOf(now));
 
 // ---- how the desk is set up: `?currency=USD` names the figures otherwise; `?hedge=0&rebates=0&mm=0&engines=0` is a
-// desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures) ----
+// desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures);
+// `?markets=2` adds a second perp market, its instruments and positions copies of USD-M's: no page should care which ----
 const params = new URLSearchParams(location.search);
 const MARKETS: Market[] = [
   { id: "spot", exchange: "Binance", kind: "spot", name: "Spot" },
   { id: "usdm", exchange: "Binance", kind: "perp", name: "USD-M" },
 ];
+const SECOND: Market = { id: "demo-perp", exchange: "Demo", kind: "perp", name: "Demo" };
+if (params.get("markets") === "2") MARKETS.push(SECOND);
 const on = (k: string) => params.get(k) !== "0";
 const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", markets: MARKETS, hedge: on("hedge"), rebates: on("rebates"), mm: on("mm") };
 
@@ -279,6 +282,13 @@ function shaped<T extends Partial<Snapshot>>(m: T): T {
   if (!DESK.hedge) {
     if (m.feeds) m.feeds = m.feeds.filter((f) => !f.name.includes("usdm"));
     if (m.alerts) m.alerts = m.alerts.filter((a) => !a.text.includes("usdm"));
+  }
+  if (MARKETS.includes(SECOND)) {
+    const again = <R extends { venue: string }>(r: R, extra?: Partial<R>): R[] => (r.venue === "usdm" ? [r, { ...r, venue: SECOND.id, ...extra }] : [r]);
+    if (m.symbols) m.symbols = m.symbols.flatMap((r) => again(r));
+    if (m.fills) m.fills = m.fills.flatMap((f) => again(f, { id: `${f.id}-2` }));
+    if (m.orders) m.orders = m.orders.flatMap((o) => again(o, { id: `${o.id}-2` }));
+    if (m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, positions: a.positions.flatMap((p) => again(p)), fees: a.fees.flatMap((f) => again(f)) }));
   }
   if (!DESK.rebates && m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, rebates: 0 }));
   if (!on("engines") && m.engines) m.engines = [];
