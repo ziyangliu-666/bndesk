@@ -27,7 +27,8 @@ import {
 import "./history.css";
 import { MASK } from "../../mask";
 
-// ---- History: the desk's days (Daily | Cumulative over 7D 30D 90D All, then the list), or the instruments ----
+// ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
+// kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
 
 type Tab = "desk" | "inst";
 type Range = "7" | "30" | "90" | "all";
@@ -79,14 +80,30 @@ function DeskHistory() {
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? null);
   const from = dayStart == null ? null : rangeFrom(RANGE_OF[range], dayStart);
   const { rows, todayDay: todayKey } = useRangeDays(from);
+  const all = useRangeDays(dayStart == null ? null : rangeFrom("all", dayStart));
   // oldest first
   const days = useMemo(() => rows.slice().reverse(), [rows]);
+  const allDays = useMemo(() => all.rows.slice().reverse(), [all.rows]);
+  const inRange = useMemo(() => (from == null ? 0 : allDays.filter((d) => d.start >= from).length), [allDays, from]);
   const sum = useMemo(() => daySummary(rows, todayKey), [rows, todayKey]);
 
   const chart = useMemo(() => {
     const cum = view === "cum";
     const acc = { pnl: 0, pi: 0, mm: 0, inv: 0, hedge: 0, reb: 0, other: 0 };
-    const pts = days.map((d) => {
+    // running figures read 0 where the range starts and go on either side of it
+    const keys = Object.keys(acc) as (keyof typeof acc)[];
+    const first = allDays.length - inRange;
+    if (cum)
+      for (const d of allDays.slice(0, first)) {
+        acc.pnl -= d.pnl ?? 0;
+        acc.pi -= d.pi ?? 0;
+        acc.mm -= d.mm ?? 0;
+        acc.inv -= d.inv ?? 0;
+        acc.hedge -= d.hedge ?? 0;
+        acc.reb -= d.reb ?? 0;
+        acc.other -= d.other ?? 0;
+      }
+    const pts = allDays.map((d) => {
       const v: Record<keyof typeof acc, number | null> = {
         pnl: d.pnl,
         pi: d.pi,
@@ -96,13 +113,11 @@ function DeskHistory() {
         reb: d.reb,
         other: d.other,
       };
-      if (cum)
-        for (const k of Object.keys(acc) as (keyof typeof acc)[])
-          acc[k] += v[k] ?? 0;
+      if (cum) for (const k of keys) acc[k] += v[k] ?? 0;
       return { time: d.start, d, v: cum ? { ...acc } : v };
     });
     return { pts, by: new Map(pts.map((p) => [p.time, p])) };
-  }, [days, view]);
+  }, [allDays, inRange, view]);
 
   const series = useMemo<ExSeries[]>(() => {
     const fmt = hide ? () => MASK : (x: number) => amt(x, "pnl");
@@ -125,7 +140,7 @@ function DeskHistory() {
       width: 1.5,
       hiddenByDefault: true,
       options:
-        view === "daily" && days.length <= 31
+        view === "daily" && inRange <= 31
           ? { pointMarkersVisible: true, pointMarkersRadius: 2 }
           : undefined,
       ...more,
@@ -162,7 +177,7 @@ function DeskHistory() {
       line("reb", "Rebates", P.reb, { lineStyle: S.reb }),
       line("other", "Other", P.other, { lineStyle: S.other }),
     ];
-  }, [chart, hide, view, days.length]);
+  }, [chart, hide, view, inRange]);
   const boxRows = (t: number): ExBoxRow[] => {
     const p = chart.by.get(t);
     if (!p) return [];
@@ -229,8 +244,11 @@ function DeskHistory() {
           title="Desk PnL"
           series={series}
           height={280}
+          loading={all.loading}
+          initialBars={Math.max(2, inRange)}
           resetKey={range + view}
           rightOffset={0.6}
+          fixEdges
           fullscreen
           legendRest="names"
           intervals={RANGES}

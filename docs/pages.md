@@ -50,7 +50,7 @@ A phone gets a layout of its own, made for checking on the desk rather than watc
 
 ![On a phone](screenshots/phone.webp)
 
-The Desk leads with Day P&L and its chart, then the split, a small quote map of the busiest instruments, risk against its limits, the day's top movers and the latest fills. Markets lists every instrument with its mid, 24 h change and our P&L, or shows the full quote map. An instrument has its price, our figures, a live band of our quotes, klines with our fills and quotes on them, and tabs for quotes, fills, markouts and Binance's own figures. History shows the desk or one instrument by day.
+The Desk leads with Day P&L and its chart, then the split, a small quote map of the busiest instruments, risk against its limits, the day's top movers and the latest fills. Markets lists every instrument with its mid, 24 h change and our P&L, or shows the full quote map. An instrument has its price, our figures, a live band of our quotes, klines with our fills and quotes on them, and tabs for quotes, fills, markouts and Binance's own figures. History shows the desk or one instrument by day: the chart holds every day kept, and 7D, 30D, 90D or All is what it opens on and what the list under it covers.
 
 ![A walk through the phone layout](screenshots/phone.gif)
 
