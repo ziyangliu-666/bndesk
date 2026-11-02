@@ -1,8 +1,8 @@
-//! The monitor is read-only: no order, cancel or transfer endpoint anywhere; the only non-GET REST
-//! calls are USD-M listenKey creation and keepalive. The source scans read src/**/*.rs without their
-//! unit-test modules. A connector is a read-only thing or it does not ship: what the desk can ask one is listed here
-//! method by method, only a connector's own directory speaks to its exchange, and each connector's requests are
-//! watched on a stand-in server.
+//! The monitor is read-only: no order, cancel or transfer endpoint anywhere. On Binance the only non-GET REST calls are
+//! USD-M listenKey creation and keepalive; on Hyperliquid a read is itself a POST, so there the guarantee is one path, a
+//! list of types and no way to sign. The source scans read src/**/*.rs without their unit-test modules. A connector is a
+//! read-only thing or it does not ship: what the desk can ask one is listed here method by method, only a connector's own
+//! directory speaks to its exchange, and each connector's requests are watched on a stand-in server.
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,9 @@ use desk::binance::account::{self as bn, Passes};
 use desk::binance::rest::{ALLOWED_WRITES, Rest, check_method, governors};
 use desk::binance::ws::WS_API_METHODS;
 use desk::config::{AccountCfg, DEFAULT_EXCHANGE};
+use desk::hyperliquid::public as hl_ws;
+use desk::hyperliquid::rest::{self as hl, Reads};
+
 use desk::connector::{self, Connector};
 use desk::protocol::{MARKETS, Role, Venue};
 use desk::sign::{Credentials, Signer};
@@ -69,15 +72,71 @@ fn no_write_calls_in_source() {
     let write_call = Regex::new(r"\b(client|http|session)\s*\.(post|delete|put|patch)\(").unwrap();
     let request = Regex::new(r"\.request\(").unwrap();
     let verb = Regex::new(r#""(POST|DELETE|PUT|PATCH)"|Method::(POST|DELETE|PUT|PATCH)"#).unwrap();
+    // what a connector's client is made of: each exchange's rest.rs, and nothing else
+    let client = |p: &Path| name(p) == "rest.rs" && ["binance", "hyperliquid"].iter().any(|d| p.parent().unwrap().ends_with(d));
     for (path, text) in sources() {
         assert!(!write_call.is_match(&text), "{}", path.display());
-        assert!(name(&path) == "rest.rs" || !request.is_match(&text), "{}", path.display());
+        assert!(client(&path) || !request.is_match(&text), "{}", path.display());
         for line in text.lines() {
             if verb.is_match(line) {
-                assert!(name(&path) == "rest.rs" || line.contains("listen_key("), "{}: {line}", path.display());
+                assert!(client(&path) || line.contains("listen_key("), "{}: {line}", path.display());
             }
         }
     }
+}
+
+/// Everything in Hyperliquid's directory: an address reads an account there, so nothing in it holds or uses a key, and
+/// the path that trades is never named. The directory names a key only to refuse one.
+fn hyperliquid_sources() -> Vec<(PathBuf, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hyperliquid");
+    sources().into_iter().filter(|(p, _)| p.starts_with(&dir)).collect()
+}
+
+#[test]
+fn hyperliquid_has_one_path_and_cannot_sign() {
+    let src = hyperliquid_sources();
+    assert!(src.len() >= 4);
+    let signs = Regex::new(r"\bSigner\b|\.sign\(|ed25519|hmac|secp256k1|keccak|private_key|crate::sign::credentials").unwrap();
+    let trades = Regex::new(r#""/exchange"|"post"|"action""#).unwrap();
+    for (path, text) in &src {
+        for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!signs.is_match(line), "{}: {line}", path.display());
+            // refused by name in the gate, sent by nothing
+            assert!(name(path) == "rest.rs" && line.contains("[\"action\", \"signature\", \"nonce\"]") || !trades.is_match(line), "{}: {line}", path.display());
+        }
+    }
+    // the path of `/info` is the only one in the source; a method other than POST is not there either
+    let quoted = Regex::new(r#""(/[a-zA-Z]\w*)""#).unwrap();
+    let paths: Vec<String> = src.iter().flat_map(|(_, t)| quoted.captures_iter(t).map(|c| c[1].to_string()).collect::<Vec<_>>()).collect();
+    assert_eq!(paths, ["/info"]);
+}
+
+#[test]
+fn hyperliquid_reads_are_a_list_with_no_trade_on_it() {
+    let trades = Regex::new(r"(?i)order$|^order|cancel|modify|withdraw|transfer|leverage|approve|^update|schedule").unwrap();
+    for (ty, weight) in hl::READS {
+        assert!(!trades.is_match(ty) || ty == "frontendOpenOrders" || ty == "userNonFundingLedgerUpdates", "{ty}");
+        assert!(weight > 0);
+        hl::check_read(hl::PATH, &serde_json::json!({"type": ty})).unwrap();
+    }
+    for ty in ["order", "cancel", "batchModify", "withdraw3", "usdSend", "scheduleCancel", "updateLeverage", "approveAgent"] {
+        assert!(hl::check_read(hl::PATH, &serde_json::json!({"type": ty})).is_err(), "{ty}");
+    }
+    assert!(hl::check_read("/exchange", &serde_json::json!({"type": "l2Book"})).is_err());
+    assert_eq!(hl_ws::WS_METHODS, ["subscribe", "ping"]);
+    assert!(hl_ws::subscribe("post", "coin", "BTC").is_err());
+}
+
+/// A read the gate refuses never leaves the process.
+#[tokio::test(flavor = "current_thread")]
+async fn the_gate_is_on_the_client_hyperliquid_holds() {
+    let c = hl::Info::new(connector::client(), "http://127.0.0.1:9", None);
+    for ty in ["order", "cancel"] {
+        let e = c.read(serde_json::json!({"type": ty})).await.unwrap_err();
+        assert!(e.to_string().contains("read-only monitor refuses"), "{e}");
+    }
+    let e = c.read(serde_json::json!({"type": "l2Book", "action": {}})).await.unwrap_err();
+    assert!(e.to_string().contains("read-only monitor refuses"), "{e}");
 }
 
 #[test]
@@ -155,6 +214,9 @@ fn every_market_has_a_read_only_connector() {
             for (method, path) in c.allowed_writes() {
                 assert!(["POST", "PUT"].contains(method) && path.to_lowercase().contains("listenkey"), "{method} {path}");
             }
+            for ban in c.rest_bans() {
+                assert!(!ban.banned, "{}", ban.name);
+            }
         }
     }));
     assert!(connector::open("elsewhere", connector::client(), None).is_err());
@@ -163,11 +225,11 @@ fn every_market_has_a_read_only_connector() {
 #[test]
 fn only_a_connector_speaks_to_its_exchange() {
     let url = Regex::new(r#""(?:wss?|https?)://([^/:"]+)"#).unwrap();
-    let endpoint = Regex::new(r#""/(api/v3|fapi|sapi)/"#).unwrap();
-    let names = Regex::new(r"crate::binance|\bbinance::").unwrap();
+    let endpoint = Regex::new(r#""/(api/v3|fapi|sapi|info\b)"#).unwrap();
+    let names = Regex::new(r"crate::(binance|hyperliquid)|\b(binance|hyperliquid)::").unwrap();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for (path, text) in sources() {
-        if path.starts_with(src.join("binance")) {
+        if path.starts_with(src.join("binance")) || path.starts_with(src.join("hyperliquid")) {
             continue;
         }
         for c in url.captures_iter(&text) {

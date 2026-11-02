@@ -1746,7 +1746,7 @@ mod tests {
         let mut cfg = Config::default();
         let mut acct = P::Account::default();
         let d = desk_shape(&cfg, std::slice::from_ref(&acct), &[]);
-        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS.iter().collect(), roles: P::Roles::default(), perps: false, hedge: false, rebates: false, mm: true });
+        assert_eq!(d, P::Desk { currency: "USDT".into(), quote: "USDT".into(), markets: P::MARKETS[..2].iter().collect(), roles: P::Roles::default(), perps: false, hedge: false, rebates: false, mm: true });
         // a day kept with zeros is not a hedge or a rebate
         let zero = P::DayPnl { hedge: Some(0.0), rebates: Some(0.0), ..Default::default() };
         assert!(!desk_shape(&cfg, &[], std::slice::from_ref(&zero)).hedge);

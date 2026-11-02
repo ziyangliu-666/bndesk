@@ -1,4 +1,4 @@
-//! History endpoints: `/api/history`, `/api/fills`, `/api/klines`.
+//! History endpoints: `/api/history`, `/api/fills`, `/api/klines`, `/api/ticker`.
 //!
 //! Never on the desk's thread: SQLite reads run in `spawn_blocking` on a read-only connection to the desk's
 //! db (one per blocking thread, kept; WAL lets it read while the store writes). The desk's P&L rows and each
@@ -64,7 +64,8 @@ pub struct Api {
     klines: Arc<dyn KlineSource>,
     cache: Mutex<Cache>,
     /// After a 429 / 418: no kline request before this (epoch ms).
-    blocked_until: AtomicI64,
+    /// by `Venue::index()`: one exchange asking to be left alone does not stop the other's bars
+    blocked_until: [AtomicI64; P::Venue::COUNT],
     mem: Arc<Mutex<Mem>>,
     /// The store's retention (`keep_fine_days`, `keep_days`), ms: the in-memory rows are thinned alike.
     keep_fine_ms: i64,
@@ -165,7 +166,7 @@ impl Api {
             day_start_min,
             klines,
             cache: Mutex::default(),
-            blocked_until: AtomicI64::new(0),
+            blocked_until: Default::default(),
             mem: Arc::default(),
             keep_fine_ms: 7 * DAY,
             keep_ms: 365 * DAY,
@@ -240,14 +241,17 @@ impl Api {
         if let Some(v) = self.cache_get(&key) {
             return Ok(v);
         }
-        let until = self.blocked_until.load(Ordering::Relaxed);
+        let until = self.blocked_until[venue.index()].load(Ordering::Relaxed);
         if now < until {
             return Err((StatusCode::SERVICE_UNAVAILABLE, format!("{} rate limit: retry in {} s", self.klines.id(), (until - now) / 1000 + 1)));
         }
         let end = cs + CHUNK * iv - 1;
         let rows = self.klines.bars(sym, venue, name, cs, end, CHUNK).await.map_err(|e| match e {
             KlineError::Throttled { wait_s, text } => {
-                self.blocked_until.store(now + wait_s * 1000, Ordering::Relaxed);
+                // the IP's limit is the exchange's, whichever of its markets asked
+                for v in P::Venue::of(venue.market().exchange) {
+                    self.blocked_until[v.index()].store(now + wait_s * 1000, Ordering::Relaxed);
+                }
                 (StatusCode::SERVICE_UNAVAILABLE, text)
             }
             KlineError::Refused(text) => (StatusCode::BAD_REQUEST, text),
@@ -583,12 +587,25 @@ async fn klines(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respons
     Ok(json(&api.klines(&sym, venue, name, iv, from, to).await?))
 }
 
-/// `/api/history`, `/api/fills`, `/api/klines` (all GET).
+/// An instrument's last 24 h, for a market the page has no socket of its own to: 204 for one it does.
+async fn ticker(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Response, ApiError> {
+    let sym = symbol(&q)?.ok_or_else(|| bad("symbol required"))?;
+    let venue = q.get("venue").map_or(Ok(P::Venue::SPOT), |v| venue_of(v))?;
+    let t = api.klines.ticker(&sym, venue).await.map_err(|e| match e {
+        KlineError::Throttled { text, .. } => (StatusCode::SERVICE_UNAVAILABLE, text),
+        KlineError::Refused(text) => (StatusCode::BAD_REQUEST, text),
+        KlineError::Failed(text) => (StatusCode::BAD_GATEWAY, text),
+    })?;
+    Ok(t.map_or_else(|| StatusCode::NO_CONTENT.into_response(), |t| json(&t)))
+}
+
+/// `/api/history`, `/api/fills`, `/api/klines`, `/api/ticker` (all GET).
 pub fn routes(api: Arc<Api>) -> Router {
     Router::new()
         .route("/api/history", get(history))
         .route("/api/fills", get(fills_handler))
         .route("/api/klines", get(klines))
+        .route("/api/ticker", get(ticker))
         .with_state(api)
 }
 

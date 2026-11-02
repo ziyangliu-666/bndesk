@@ -52,6 +52,9 @@ pub struct Market {
     /// It has 1 s bars: a backfilled price comes from those, not from a trade.
     #[serde(skip)]
     pub second_bars: bool,
+    /// Its trades can be asked for by time: a backfilled price at a time can be a trade's. Without either, 1 min bars.
+    #[serde(skip)]
+    pub trade_history: bool,
     /// An account's balances are read on this market, so an account has to be on it.
     #[serde(skip)]
     pub wallet: bool,
@@ -61,9 +64,11 @@ pub struct Market {
 }
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
-pub static MARKETS: [Market; 2] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, wallet: true, quote: "USDT" },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, wallet: false, quote: "USDT" },
+pub static MARKETS: [Market; 4] = [
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, quote: "USDT" },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, quote: "USDT" },
+    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, quote: "USDC" },
+    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, quote: "USDC" },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.
@@ -73,6 +78,8 @@ pub struct Venue(u8);
 impl Venue {
     pub const SPOT: Venue = Venue(0);
     pub const USDM: Venue = Venue(1);
+    pub const HL: Venue = Venue(2);
+    pub const HL_SPOT: Venue = Venue(3);
     pub const COUNT: usize = MARKETS.len();
 
     pub fn all() -> impl Iterator<Item = Venue> {

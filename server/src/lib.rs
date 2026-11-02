@@ -1,4 +1,4 @@
-//! Read-only real-time monitor for Binance accounts. Wire protocol: DESIGN.md.
+//! Read-only real-time monitor for exchange accounts. Wire protocol: DESIGN.md.
 pub mod clock;
 pub mod feeds;
 pub mod protocol;
@@ -9,6 +9,7 @@ pub mod sign;
 pub mod ws;
 pub mod connector;
 pub mod binance;
+pub mod hyperliquid;
 pub mod market;
 pub mod fills;
 pub mod pnl;

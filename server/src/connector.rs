@@ -1,6 +1,7 @@
 //! What the desk needs from an exchange, whichever it is. A connector is a read-only thing: every method here reads, and
-//! a connector's HTTP goes through a client that refuses every write but those `allowed_writes` lists
-//! (`tests/readonly.rs`). Nothing outside a connector's directory and this file names a connector.
+//! a connector's HTTP goes through a client that refuses all but its reads and what `allowed_writes` lists. What a read
+//! looks like is the exchange's: a GET on one, a POST of a listed type to one path on another (`tests/readonly.rs`).
+//! Nothing outside a connector's directory and this file names a connector.
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use crate::binance::Binance;
 use crate::clock::TimeSync;
 use crate::config::AccountCfg;
 use crate::feeds::FeedRef;
+use crate::hyperliquid::Hyperliquid;
 use crate::market::{Info, Inst};
 use crate::protocol::Venue;
 use crate::sign::Credentials;
@@ -127,7 +129,7 @@ pub trait Connector {
     /// What `exchange` says in the config.
     fn id(&self) -> &'static str;
     fn markets(&self) -> Vec<Venue>;
-    /// The only requests other than GET it makes: (method, path). Nothing that trades or moves money.
+    /// The only requests it makes that are not reads: (method, path). Nothing that trades or moves money.
     fn allowed_writes(&self) -> &'static [(&'static str, &'static str)];
 
     /// The exchange's time, as last measured.
@@ -144,9 +146,10 @@ pub trait Connector {
     /// (open time, open, close) of the bars of `interval` ("1s", where the market has them; "1m") of an instrument key
     /// opening in [start, end]; an error `RestError` with status 400 means there are none, for good.
     fn bars<'a>(&'a self, key: &'a str, interval: &'a str, start: i64, end: i64) -> Reply<'a, Vec<(i64, f64, f64)>>;
-    /// The price of the first trade of an instrument key at or after `t` (within a minute).
+    /// The price of the first trade of an instrument key at or after `t` (within a minute), on a market with
+    /// `trade_history`.
     fn trade_at<'a>(&'a self, key: &'a str, t: i64) -> Reply<'a, Option<f64>>;
-    /// (open time, open, close) of a perp's 1 min mark price bars opening in [from, until].
+    /// (open time, open, close) of a perp's 1 min mark price bars opening in [from, until], or the nearest it has.
     fn mark_bars<'a>(&'a self, symbol: &'a str, from: i64, until: i64) -> Reply<'a, Vec<(i64, f64, f64)>>;
     fn kline_source(&self) -> Arc<dyn KlineSource>;
     fn rest_bans(&self) -> Vec<RestBan>;
@@ -167,6 +170,7 @@ pub trait Connector {
 pub fn open(id: &str, http: reqwest::Client, feed: Option<FeedRef>) -> Result<Rc<dyn Connector>> {
     match id {
         "binance" => Ok(Rc::new(Binance::new(http, feed))),
+        "hyperliquid" => Ok(Rc::new(Hyperliquid::new(http, feed))),
         _ => anyhow::bail!("no connector for exchange {id:?}"),
     }
 }

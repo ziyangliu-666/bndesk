@@ -84,10 +84,21 @@ pub struct Px {
 }
 
 /// The prices of `key` at times `ts` (sorted): a market with 1 s bars from those in windows of MAX_BARS seconds, else
-/// from 1 min bars; a market without them from the first trade at or after each time.
+/// from 1 min bars; a market without them from the first trade at or after each time, and one whose trades cannot be
+/// asked for by time from 1 min bars alone, which price the horizons of a minute and more.
 pub async fn prices_at(src: &impl Prices, key: &str, ts: &[i64]) -> anyhow::Result<Vec<Option<Px>>> {
     let mut out = vec![None; ts.len()];
-    let second_bars = venue_of(key).is_some_and(|v| v.market().second_bars);
+    let market = venue_of(key).map(Venue::market);
+    let second_bars = market.is_some_and(|m| m.second_bars);
+    if !second_bars && market.is_some_and(|m| !m.trade_history) {
+        if let (Some(&a), Some(&b)) = (ts.first(), ts.last()) {
+            let mins = none_on_400(src.bars(key, "1m", a.div_euclid(60_000) * 60_000, b).await)?;
+            for (o, &t) in out.iter_mut().zip(ts) {
+                *o = interp_at(&mins, t).map(|v| Px { v, fine: false });
+            }
+        }
+        return Ok(out);
+    }
     if !second_bars {
         for (k, &t) in ts.iter().enumerate() {
             out[k] = none_on_400(src.trade_at(key, t).await)?.map(|v| Px { v, fine: true });
@@ -305,6 +316,17 @@ mod tests {
         assert_eq!(interp_at(&mins, -1), None);
         assert_relative_eq!(interp_at(&mins, 30_000).unwrap(), 13.0);
         assert_eq!(interp_at(&mins, 90_000), Some(16.0));   // a minute without trades keeps the close before
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_market_with_no_trades_to_ask_for_prices_from_one_read_of_its_minutes() {
+        let mut src = Mock::default();
+        src.mins.insert("hl:BTC".into(), vec![(0, 10.0, 16.0), (60_000, 20.0, 20.0)]);
+        src.trade.insert("hl:BTC".into(), 999.0);
+        let px = prices_at(&src, "hl:BTC", &[30_000, 45_000, 60_000]).await.unwrap();
+        assert_eq!(px, [Some(Px { v: 13.0, fine: false }), Some(Px { v: 14.5, fine: false }), Some(Px { v: 20.0, fine: false })]);
+        // one request however many fills, and none for trades: a 1 min price stands for the horizons of a minute and more
+        assert_eq!(*src.log.borrow(), ["1m hl:BTC 0 60000"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
