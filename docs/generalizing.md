@@ -1,6 +1,6 @@
 # Generalizing the desk
 
-bndesk began as the dashboard for one setup: market making on Binance spot, hedged with USD-M perps, from a master account and its sub-accounts, with a FastMM engine beside it. This page records what still ties the code to that setup, most costly first, and the design that removes it. Phase 1 and steps 1 to 3 of the order of work are done; what they changed is marked. The rest needs a second exchange to test against.
+bndesk began as the dashboard for one setup: market making on Binance spot, hedged with USD-M perps, from a master account and its sub-accounts, with a FastMM engine beside it. This page records what still ties the code to that setup, most costly first, and the design that removes it. Phase 1 and steps 1 to 4 of the order of work are done; what they changed is marked. What is left is step 5.
 
 ## What ties it to one setup
 
@@ -8,15 +8,15 @@ bndesk began as the dashboard for one setup: market making on Binance spot, hedg
 
 **2. `Venue = "spot" | "usdm"` is also the exchange's name.** It runs through the protocol (`Fill`, `SymbolRow`, `OpenOrder`, `Account.fees`), about 200 sites in the server and 48 web files, and it carries three meanings at once: which exchange, which product, which margin rules. A second exchange has nowhere to go. Instrument keys (`spot:BTCUSDT`) are stored in `kv`, so they are persistent too. *Step 1: a venue is the id of a market in a table, and pages ask its kind. Step 3: where the server asked "is this spot?" and meant "is this what the desk trades", it asks the role.*
 
-**3. Binance is called from everywhere, not from a connector.** `server/src/binance/` holds only the transport (REST, signing, weight, WebSocket). The endpoints and their JSON are read in `accounts.rs` (the user streams, balances, positions, fees, rate limits), `market.rs` (exchange info), `backfill.rs`, `history.rs` (klines), `recompute.rs` and `repair.rs`. The browser also connects to `stream.binance.com` itself for the forming candle and the 24 h ticker (`components/ex/klines.ts`, `ticker.ts`). *Step 2: every endpoint and field name is in `server/src/binance/`, behind a trait, and a test keeps it there. The browser's two sockets stay, for Binance's two markets only.*
+**3. Binance is called from everywhere, not from a connector.** `server/src/binance/` holds only the transport (REST, signing, weight, WebSocket). The endpoints and their JSON are read in `accounts.rs` (the user streams, balances, positions, fees, rate limits), `market.rs` (exchange info), `backfill.rs`, `history.rs` (klines), `recompute.rs` and `repair.rs`. The browser also connects to `stream.binance.com` itself for the forming candle and the 24 h ticker (`components/ex/klines.ts`, `ticker.ts`). *Step 2: every endpoint and field name is in `server/src/binance/`, behind a trait, and a test keeps it there. The browser's two sockets stay, for Binance's two markets only. Step 4: a second connector beside it, and `/api/ticker` for a market with no socket.*
 
 **4. Valuation is pinned to USDT = 1.** `market::QUOTE` is a constant; an asset's price is its `<asset>USDT` market, and `recompute.rs` and `repair.rs` build those names directly. The futures wallet is Binance's own USD total. Hold a desk in USDC or in anything not quoted in USDT and equity is wrong or missing. *Phase 1 replaced the literal in 56 web files with `Snapshot.desk.currency` and `.quote` (`web/src/desk.ts`), and the name on the figures is configurable; the valuation itself stays USDT = 1, which is why `[desk] currency` only accepts USD or a USD stablecoin.*
 
-**5. Accounts assume a master with sub-accounts.** Transfers come from the master's `sub-account/universalTransfer`, matched by email across the desk (`Role`, `email` in 27 places in `accounts.rs`); accounts without a key are read through the master's sub-account endpoints. A desk of separate accounts, or one account, works, but with no transfer history behind it a deposit or withdrawal the stream reports is taken off P&L for three minutes (`MOVE_HOLD_MS`) and then reads as P&L.
+**5. Accounts assume a master with sub-accounts.** Transfers come from the master's `sub-account/universalTransfer`, matched by email across the desk (`Role`, `email` in 27 places in `accounts.rs`); accounts without a key are read through the master's sub-account endpoints. A desk of separate accounts, or one account, works, but with no transfer history behind it a deposit or withdrawal the stream reports is taken off P&L for three minutes (`MOVE_HOLD_MS`) and then reads as P&L. *Step 4: on Hyperliquid each address's own ledger confirms a transfer, with no master, email or hold. Separate Binance accounts still have the hold.*
 
 **6. Fixed P&L parts and pages that assume them.** Day PnL = market making + inventory + hedge + rebates + other is written out in 41 web files for the hedge and 28 for the rebates. *Phase 1: pages draw the parts a desk has (below). Step 2: the connector tags a distribution as a rebate. Step 3: the list stays fixed, on purpose (below): a role says which instrument goes in which part.*
 
-**7. Order limits are Binance's two windows.** `orders_10s`, `orders_1d`, their limits and alerts, and `orders_source: "binance"`, are in the protocol, the Orders page and the phone's meters.
+**7. Order limits are Binance's two windows.** `orders_10s`, `orders_1d`, their limits and alerts, and `orders_source: "binance"`, are in the protocol, the Orders page and the phone's meters. *Step 4: an exchange without them says `no_order_limits`, and has no meters.*
 
 **8. Engine metrics assume FastMM.** `server/src/engine.rs` reads `fastmm_*` names, and `Engine` has FastMM's shape (kill, max loss, venue channels). Any exporter with those names works; nothing else does. *Phase 1: no engine configured means no Engines section, tab, count or alert row.*
 
@@ -101,26 +101,64 @@ The positions the book keeps are keyed by base on spot, as stored `pnlstate` row
 
 What a role does not do: rows already written stay as written, so a desk that sets one sees the change from its next start (today's figures are rebuilt then from the fills) and its kept days do not move. History's volume and `repair-day` and `recompute-mm` take the roles set now. `repair-day` reads a traded perp's funding from the exchange and its prices from mark klines, as equity has them.
 
+## Done in step 4
+
+The second connector is Hyperliquid, for the reason the order of work asks: it has the least in common with Binance. An account is an address with one margin account behind it; no key, master, email or listen key; its reads are POSTs; it tells the time only in a status reply; it has no list of book tops, no 1 s bars, no trades by time, no mark candles, no order windows and no distributions; its symbols are not `[A-Z0-9]` and its funding is hourly. OKX was the other candidate, and would have shared most of Binance's shape (GET reads, a key, mark candles, sub-account transfers).
+
+A desk runs on it alone or beside Binance. On Binance alone the requests, feeds, figures and stored rows are what they were, and `tests/session.rs` compares them with the same golden file, untouched. `server/src/hyperliquid/` is the connector; `tests/hyperliquid.rs` runs an account against a stand-in built from the published docs, and a session alone and beside Binance, where the parts add up to Day PnL with Other at 0.
+
+### What it showed was wrong
+
+- **"Read-only" meant "only GETs".** Every read there is a `POST`, so `allowed_writes` and the scans in `tests/readonly.rs` could say nothing about it, and listing `POST /info` as a write would have made the guarantee a formality. A read is now the connector's to define and the test's to hold: one path, a list of types, no signed body, and nothing in the directory that can sign. Better than a gate, this desk has no key to misuse there, and refuses one at load.
+- **`Credentials` assumed reading takes a key.** `a.creds.is_some()` stood for "can be read" in four places. `credentials` can now answer that it takes none, and `Account::readable` says what those places meant.
+- **One connector.** `Desk`, `bootstrap`, `make_streams`, `seed_books` and `run` are loops, and `Exchanges` picks by market. Doing this showed what "one exchange" had hidden: `spot_symbols` would have asked Binance about Hyperliquid's symbols; `hedge_symbols` and the Hedge figure's market default reached every market in the table, on a desk that reads two of them; a 429 from one exchange stopped the other's bars; and one exchange down at the start would have kept the desk off the page.
+- **One clock.** Each connector keeps its own and signs with it, and `CLOCK` reads the first exchange's. On this machine the two read 1163 and 1016 ms ahead of it at the same moment. Fills mature and marks are taken on the desk's clock while a market's rings are on its exchange's, so a 1 s markout on the second exchange can be off by the difference between the two exchanges' clocks, not by the machine's error, which both offsets share.
+- **`book_tops` assumed a list of every top.** It is told the symbols now, and Binance's ignores them.
+- **`trade_at` and `mark_bars` assumed a history it does not keep.** `Market::trade_history` sends a backfill to one read of 1 min bars, which was the doc's own suggestion, and `mark_bars` is "or the nearest it has". A 1 s or 10 s markout the desk missed stays missing there.
+- **A symbol is the exchange's name.** The doc expected `/api/klines` and `baseOf` to widen. They did not need to: `names.rs` translates at the boundary, so stored symbols stay `[A-Z0-9]` and the page sees `BTC`, `KPEPE` and `HYPEUSDC`. Base and quote were already `Inst`'s, from the listing. `BTC-USDT-SWAP` on another exchange can go the same way, or be the first thing to need more.
+- **`markets` had to include spot.** That was Binance's rule, not the desk's: `Market::wallet` says where an account's balances must be read, and Hyperliquid has no such market.
+- **Funding needed guessing.** Binance's account event gives no symbol, so the desk gives it to the one position held. Hyperliquid names the coin: `Event::Funding`.
+- **Valuation had no way off Binance's spot.** `asset_inst` falls back to a pair on another exchange's spot market. This is the least step 5 could leave standing, not the numeraire: USDC is still 1.
+- **Transfers matched by email through a master.** A ledger per address gives records directly, `email` holding the address, and `Transfers::pending` lets the day open only once each is read.
+- **A stored fill on an unknown market read as spot.** It is left out and logged now. A row that says nothing is from before fills had a market, and stays spot.
+- **Pages.** A row says which market where the kind would not tell two apart (`venueTag`); `/api/ticker` feeds a market with no socket, whose forming candle already followed the desk's mid; a link to a market this desk lacks finds the one it has; and order meters read `0 / 100` until an account could say it has none. The `Perp`, `USD-M` and last-trade wording that would have been false there went with it.
+
+What the doc feared and did not happen: a single margin account fits `PerpSnapshot` as it was, with the wallet as its value less what is unrealized and `settle` empty. It does not fit once the balance lives on the spot side, which `userAbstraction` tells.
+
+### What is checked, and what is not
+
+Called for real on 2026-11-02, and the shapes in the tests are those answers: `exchangeStatus`, `metaAndAssetCtxs`, `spotMetaAndAssetCtxs`, `l2Book`, `candleSnapshot` (prices are strings, where the docs' types say numbers), its answers to what it refuses (422 for an interval it lacks, 500 and `null` for a coin it does not list), the socket's `bbo`, `activeAssetCtx`, `subscriptionResponse` and `pong`, and that a subscription to an unlisted coin closes the connection.
+
+Built from the published docs and not checked against a real account, since this work read none, though the exchange would answer for any address: `clearinghouseState`, `spotClearinghouseState`, `frontendOpenOrders`, `userFillsByTime`, `userFunding`, `userNonFundingLedgerUpdates`, `userFees`, `userAbstraction` and every user socket feed. In particular:
+
+- the key `nonFundingLedgerUpdates` in the socket's ledger message is not in the docs, only its type; a wrong one costs a minute, as the read has it;
+- how often `clearinghouseState` and `spotState` push, and so how long a fill's position lags it; the reads catch it within 10 s, and until then Other moves;
+- whether a unified account's spot `total` leaves out unrealized P&L, as the desk assumes;
+- whether a withdrawal's `usdc` includes its `fee`, and an `internalTransfer`'s; if not, the fee reads as P&L;
+- the ledger kind `send` is not in the docs' list, and is read as `spotTransfer` is; any other kind stays in P&L and is logged once;
+- whether a minute with no trade has a candle, which `repair-day` needs at the day's start, as it does `m0`.
+
+A first run on a real address should compare the Assets page with the exchange's, and watch Other.
+
 ## What the later steps need from this
 
-**4. A second connector.** Add its markets at the end of `MARKETS` (a place is a `Venue`), implement `Connector`, add it to `connector::open`. Then what the trait does not yet settle:
+**5. The numeraire, engine adapters, the interface's words.**
 
-- `Desk` holds one connector and config refuses a second exchange. `make_streams`, `bootstrap`, `seed_books` and `run` become loops, `on_new` routes by `inst.venue`, and `Venue::market().exchange` picks the connector.
-- `CLOCK` is one offset. Two exchanges need one each, and `fills`, `markouts` and the P&L grid read it as if there were one.
-- An account is one spot wallet plus one perp market: `Account.perp`, `positions` by symbol, `fut_wallet`, `fut_usdt`. A single margin account has to fit `PerpSnapshot`, or that event has to change. `markets` must include a spot market for now, because `Account::ready` and `spot_parts` assume one.
-- Transfers match by email through a master. `Transfers` needs another way to confirm a stream's move, or a desk without one keeps the three-minute hold (item 5).
-- A symbol is `[A-Z0-9]{2,20}` in `/api/klines`, and a base is found by stripping a quote. `BTC-USDT-SWAP` fails both.
-- Kline intervals are Binance's names (`history::INTERVALS`), and `CHUNK` is its limit. `KlineSource::bars` is where a connector would translate them.
-- `Credentials` is an API key and one signer. A passphrase needs another field.
-- A stored fill whose venue no longer parses reads as spot (`store::row_fill`), as it always did. With more markets that should be an error or a kept string.
-- A row says `Perp`, not which perp. With `?markets=2` two BTCUSDT Perp rows read alike in the lists; only the instrument's header and the Markouts filter name the market. `kindWord` is the helper for it.
-- Roles assume what Binance's USD-M is: a quantity in base units, linear, a price in USD (`PnlBook::quote_px`; `Roles::asset` asks the one spot market, and `hedge_symbols` names a symbol on every perp market). An inverse contract needs a size, and a position's value is no longer q × M.
-- `Account.perp` is one market, so the book's perp position and `PerpDay` ask the accounts on that market only: an account with two perp markets has to change that with `positions`.
-- A market without 1 s bars backfills a missed mark from one trade request per fill per horizon (`backfill::prices_at`). Hedge fills are few; a desk that makes markets there and was down for an hour is not. 1 min bars for horizons of 60 s and more would do.
-- `Inst.mark_ring` is timed by `CLOCK` on receipt, as `Mark` has no time, and `CLOCK` is one offset.
-- The 24 h ticker has no server route: another market's reads `--` until `/api/ticker` exists. `web/src/store.ts` defaults a link with no venue to `spot`, and `"perp"` in a link to `usdm`.
+- `market::QUOTE`, `asset_inst` and `asset_price` still pin valuation to USDT, with `other_pairs` as the way around it; `recompute.rs` and `repair.rs` build `spot:<asset>USDT` keys directly, so on a desk without Binance those find no bars and an asset's fee or rebate there counts 0 (`repair-day` runs on Hyperliquid's own fills and funding, and has not met a real one). `PerpSnapshot.wallet` is a USD total, and a perp's price and funding are taken as USD (`quote_px`, `PerpDay`), so USDC-margined ones are off by USDC's price, beside Binance now as well as on it. Add `settle` to `Market` then. `Market::quote` is the start of it.
+- A desk has one `quote` and one `currency`, its first exchange's, and `quote_free` sums stablecoins across whichever exchange an account is on.
+- Engine adapters do not touch any of this.
+- The words: `Binance's limit` and the like remain where only Binance has the thing (order windows, rebates, the stream's note), and are true there. `orders_source: "binance"` is on Hyperliquid's accounts too, unread with no meters. They can read `Market.exchange`, which KeyStrip now does through `exchangeOf`.
 
-**5. The numeraire, engine adapters, the interface's words.** `market::QUOTE`, `asset_inst` and `asset_price` still pin valuation to `<asset>USDT` on `Venue::SPOT`; `recompute.rs` and `repair.rs` build those keys directly, `PerpSnapshot.wallet` is a USD total, and a traded perp's price and funding are taken as USD (`quote_px`, `PerpDay`), where USDC-margined ones are off by USDC's price. Add `settle` to `Market` then. Engine adapters do not touch any of this. The words (`Binance's limit` and 50 or so like it, `orders_source: "binance"`) can read `Market.exchange`, which is on the wire and otherwise unread by the page.
+Not settled by this step, and waiting for what needs them:
+
+- `Credentials` is an API key and one signer. A passphrase needs another field, which Hyperliquid did not ask for.
+- Roles assume what both exchanges' perps are: a quantity in base units, linear, a price in USD. An inverse contract needs a size, and a position's value is no longer q × M. `hedge_symbols` names a symbol on every perp market the desk reads.
+- `Account.perp` is one market, so an account has one. Hyperliquid's builder-deployed perps would be a second, in a clearinghouse read per dex, and what they make reads as Other until then.
+- A symbol's position key is by symbol within an account, and `repair-day` adds positions by symbol across accounts: two exchanges listing the same perp name would collide there. Binance's names and Hyperliquid's do not.
+- `Inst.mark_ring` is timed by `CLOCK` on receipt, as `Mark` has no time.
+- A link is checked against the desk's markets when the page loads. One typed into a running page, to `spot` on a desk without Binance, still opens Binance's public ticker socket from the browser; its bars are refused.
+- Separate Binance accounts with no master still have the three-minute hold of item 5.
+- Hyperliquid's `Pace` is per connector and `/api/klines` is on its own pool, as Binance's is: the bars a busy page asks for are not counted against the weight the desk paces, on an allowance of half the limit.
 
 ## Target design
 
@@ -137,7 +175,7 @@ What a role does not do: rows already written stay as written, so a desk that se
 1. ~~Markets as data, with the aliases.~~ Done.
 2. ~~The connector split of `accounts.rs`, `market.rs` and the kline paths, still only Binance.~~ Done.
 3. ~~Instrument roles, the only step that changes figures for anyone, and only for a desk that sets a role.~~ Done.
-4. A second connector, chosen for having the least in common with Binance (no sub-account transfers, one margin account), to find what the trait got wrong.
+4. ~~A second connector, chosen for having the least in common with Binance (no sub-account transfers, one margin account), to find what the trait got wrong.~~ Done: Hyperliquid.
 5. The real numeraire, engine adapters and the interface's words, each small after that.
 
-The mock demo moves with each step: `web/src/mock.ts` takes `?currency=`, `?hedge=0`, `?rebates=0`, `?mm=0`, `?engines=0`, `?markets=2`, a second perp market, and `?perp=1`, a desk that makes markets on perps and hedges with two others (`&hedge=0`: with nothing).
+The mock demo moves with each step: `web/src/mock.ts` takes `?currency=`, `?hedge=0`, `?rebates=0`, `?mm=0`, `?engines=0`, `?markets=2`, a second perp market, and `?perp=1`, a desk that makes markets on perps and hedges with two others (`&hedge=0`: with nothing), and `?exchange=hl`, a desk on Hyperliquid.
