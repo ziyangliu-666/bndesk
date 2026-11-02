@@ -36,7 +36,18 @@ The optional reference is another instrument whose price leads or hedges this on
 reference, fair = reference mid × EWMA(own mid / reference mid) (half-life configurable, default
 120 s); without one, fair = own mid.
 
-### Sources
+### Connectors
+
+What the desk asks of an exchange is the trait in `server/src/connector.rs`; `server/src/binance/` implements it and is
+the only code that knows an endpoint, a field name or a URL. A connector reports an account's news as
+`accounts::Event`s, applied where they are read: `Account::apply` holds the rules below about which of a REST read and a
+stream event is newer. The markets are the table `protocol::MARKETS`: a market's id is what stored rows, instrument keys
+and links say, it has no ':', and its aliases are accepted going in and never written. A market with 1 s bars has
+backfilled prices from those, one without from trades. An account's `exchange` (default `binance`) names its connector
+and a desk has one; `markets` (`["spot", "usdm"]`, or `futures = true` as ever) are the ones it is read on, and must
+include its spot market. `server/tests/readonly.rs` holds a connector to reading.
+
+### Sources (Binance)
 
 - Public market data (no key): spot `wss://stream.binance.com:9443/stream` and USD-M
   `wss://fstream.binance.com/public/stream` with `<sym>@bookTicker`; USD-M
@@ -257,8 +268,8 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   thinned like the store), so a request does not read the db: on a small machine it does not stay in
   the page cache, and a month of rows took 30 s from disk.
 - `GET /api/fills?symbol&venue&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` and `venue` (a market's id or alias) optional.
-- `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
-  (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 40 000 (the latest).
+- `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: the market's connector's klines
+  (Binance: spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 40 000 (the latest).
   `venue` a market's id or alias, spot by default; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
   Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
   400, a 429 / 418 a 503 until its Retry-After.

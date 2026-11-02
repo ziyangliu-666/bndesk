@@ -96,7 +96,8 @@ label = "sub a"
 email = ""
 api_key_env = "DESK_SUB_A_API_KEY"
 private_key_env = "DESK_SUB_A_PRIVATE_KEY"
-futures = true
+futures = true               # its spot and perp markets; or markets = ["spot", "usdm"]
+# exchange = "binance"       # the connector that reads it; the only one so far
 
 [[accounts]]
 id = "sub-b"
