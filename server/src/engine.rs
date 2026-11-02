@@ -1,11 +1,12 @@
-//! Engine metrics: Prometheus text (FastMM `fastmm-top --metrics` names) -> protocol::Engine.
+//! Engine metrics: Prometheus text -> protocol::Engine, by what the engine's metrics are called: FastMM's own names
+//! (`fastmm-top --metrics`), or any exporter's as `[engines.metrics]` names them, leaving out what they do not say.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use crate::clock::now_s;
-use crate::config::EngineCfg;
+use crate::config::{EngineCfg, EngineFormat, EngineMetrics};
 use crate::feeds::{Feed, FeedKind, FeedRef};
 use crate::protocol as P;
 
@@ -178,17 +179,121 @@ struct VenueRow {
     rest_errors: i64,
 }
 
+/// A counter summed over its labels.
+fn total(s: &Samples, name: &str) -> Option<i64> {
+    s.get(name).map(|v| v.iter().map(|x| x.1).sum::<f64>() as i64)
+}
+
+/// A histogram's quantile: linear within its bucket, as Prometheus's `histogram_quantile` has it, the buckets summed over
+/// any other label. None with no observation yet.
+fn bucket_quantile(rows: &[(Labels, f64)], q: f64) -> Option<f64> {
+    let mut les: Vec<(f64, f64)> = vec![];
+    for (l, v) in rows {
+        let Ok(le) = lb(l, "le").parse::<f64>() else { continue };
+        match les.iter_mut().find(|x| x.0 == le) {
+            Some(x) => x.1 += v,
+            None => les.push((le, *v)),
+        }
+    }
+    les.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let n = les.last()?.1;
+    if n <= 0.0 {
+        return None;
+    }
+    let rank = q * n;
+    let i = les.iter().position(|x| x.1 >= rank)?;
+    let (hi, c) = les[i];
+    let (lo, c0) = if i == 0 { (0.0, 0.0) } else { les[i - 1] };
+    if !hi.is_finite() {
+        return Some(lo);   // past the last bucket with a bound: its bound is all that is known
+    }
+    Some(if c > c0 { lo + (hi - lo) * (rank - c0) / (c - c0) } else { hi })
+}
+
+/// A latency row per configured metric: a summary's quantiles or a histogram's buckets; a summary with other labels, a row
+/// per label value.
+fn latency_rows(s: &Samples, m: &EngineMetrics) -> Vec<P::Latency> {
+    let scale = m.latency_scale().unwrap_or(1e6);
+    let mut out = vec![];
+    for name in &m.latency {
+        let row = name.trim_end_matches("_seconds").trim_end_matches("_microseconds").trim_end_matches("_milliseconds");
+        let buckets = samples(s, &format!("{name}_bucket"));
+        if !buckets.is_empty() {
+            out.push(P::Latency { name: row.to_string(), p50_us: bucket_quantile(buckets, 0.5).map(|x| x * scale), p99_us: bucket_quantile(buckets, 0.99).map(|x| x * scale) });
+            continue;
+        }
+        let mut rows: Vec<(String, P::Latency)> = vec![];
+        for (l, v) in samples(s, name) {
+            let mut others: Vec<(&String, &String)> = l.iter().filter(|(k, _)| *k != "quantile").collect();
+            others.sort();
+            let id = others.iter().map(|x| x.1.as_str()).collect::<Vec<_>>().join(" ");
+            let i = rows.iter().position(|r| r.0 == id).unwrap_or_else(|| {
+                let n = if id.is_empty() { row.to_string() } else { format!("{row} {id}") };
+                rows.push((id.clone(), P::Latency { name: n, p50_us: None, p99_us: None }));
+                rows.len() - 1
+            });
+            match lb(l, "quantile") {
+                "0.5" => rows[i].1.p50_us = Some(v * scale),
+                "0.99" => rows[i].1.p99_us = Some(v * scale),
+                _ => {}
+            }
+        }
+        out.extend(rows.into_iter().map(|r| r.1));
+    }
+    out
+}
+
+/// An engine by the names its config gives: what they do not name is null, and the page has no place for it.
+fn generic(cfg: &EngineCfg, m: &EngineMetrics, s: &Samples, scrape_age_s: f64) -> P::Engine {
+    let up = m.up.as_ref().is_none_or(|n| s.get(n).and_then(|v| v.first()).is_some_and(|x| x.1 != 0.0));
+    let named = |n: &Option<String>| n.as_ref().and_then(|n| total(s, n));
+    let mut rejects: Vec<P::RejectCount> = m.rejects.iter().flat_map(|n| samples(s, n)).map(|(l, v)| {
+        let mut labels: Vec<(&String, &String)> = l.iter().collect();
+        labels.sort();
+        let reason = labels.iter().map(|x| x.1.as_str()).collect::<Vec<_>>().join(" ");
+        P::RejectCount { reason: if reason.is_empty() { "all".into() } else { reason }, count: *v as i64 }
+    }).collect();
+    rejects.sort_by_key(|r| -r.count);
+    P::Engine {
+        name: cfg.name.clone(),
+        url: cfg.url.clone(),
+        up,
+        stale_s: round_to(scrape_age_s, 2),
+        state: if up { "running" } else { "stopped" }.into(),
+        orders: named(&m.orders),
+        cancels: named(&m.cancels),
+        fills: named(&m.fills),
+        rejects,
+        latency: latency_rows(s, m),
+        ..Default::default()
+    }
+}
+
 pub fn to_engine(cfg: &EngineCfg, s: Option<&Samples>, scrape_age_s: f64) -> P::Engine {
     let Some(s) = s.filter(|s| !s.is_empty()) else {
+        let zero = (cfg.format == EngineFormat::Fastmm).then_some(0);
+        let money = zero.map(f64::from);
         return P::Engine {
             name: cfg.name.clone(),
             url: cfg.url.clone(),
             up: false,
             stale_s: round_to(scrape_age_s, 1),
             state: "unreachable".into(),
+            orders: zero.map(i64::from),
+            cancels: zero.map(i64::from),
+            fills: zero.map(i64::from),
+            risk_rejects: zero.map(i64::from),
+            venue_rejects: zero.map(i64::from),
+            realized: money,
+            unrealized: money,
+            fees: money,
+            kill: zero.map(|_| false),
             ..Default::default()
         };
     };
+    if let EngineFormat::Generic(m) = &cfg.format {
+        return generic(cfg, m, s, scrape_age_s);
+    }
     let empty = Labels::new();
     let info = s.get("fastmm_info").and_then(|v| v.first()).map_or(&empty, |x| &x.0);
     let kr = one(s, "fastmm_kill_reason", 0.0) as i64;
@@ -287,17 +392,17 @@ pub fn to_engine(cfg: &EngineCfg, s: Option<&Samples>, scrape_age_s: f64) -> P::
         stale_s: round_to(one(s, "fastmm_status_age_seconds", scrape_age_s), 2),
         state: state_name(one(s, "fastmm_state", -1.0) as i64).into(),
         strategy,
-        orders: one(s, "fastmm_orders_sent_total", 0.0) as i64,
-        cancels: one(s, "fastmm_cancels_sent_total", 0.0) as i64,
-        fills: one(s, "fastmm_fills_total", 0.0) as i64,
-        risk_rejects: one(s, "fastmm_risk_rejects_total", 0.0) as i64,
-        venue_rejects: one(s, "fastmm_venue_rejects_total", 0.0) as i64,
+        orders: Some(one(s, "fastmm_orders_sent_total", 0.0) as i64),
+        cancels: Some(one(s, "fastmm_cancels_sent_total", 0.0) as i64),
+        fills: Some(one(s, "fastmm_fills_total", 0.0) as i64),
+        risk_rejects: Some(one(s, "fastmm_risk_rejects_total", 0.0) as i64),
+        venue_rejects: Some(one(s, "fastmm_venue_rejects_total", 0.0) as i64),
         rejects,
-        realized: one(s, "fastmm_realized_pnl", 0.0),
-        unrealized: one(s, "fastmm_unrealized_pnl", 0.0),
-        fees: one(s, "fastmm_fees", 0.0),
+        realized: Some(one(s, "fastmm_realized_pnl", 0.0)),
+        unrealized: Some(one(s, "fastmm_unrealized_pnl", 0.0)),
+        fees: Some(one(s, "fastmm_fees", 0.0)),
         max_loss: (max_loss != 0.0).then_some(max_loss),
-        kill: one(s, "fastmm_kill_active", 0.0) == 1.0,
+        kill: Some(one(s, "fastmm_kill_active", 0.0) == 1.0),
         kill_reason,
         latency,
         venues: venues
@@ -313,6 +418,12 @@ pub fn to_engine(cfg: &EngineCfg, s: Option<&Samples>, scrape_age_s: f64) -> P::
             })
             .collect(),
     }
+}
+
+/// The metrics a config names that a scrape does not have: the page shows them as "--" and this says why.
+fn missing_names<'a>(cfg: &'a EngineCfg, s: &Samples) -> Vec<&'a str> {
+    let EngineFormat::Generic(m) = &cfg.format else { return vec![] };
+    m.names().into_iter().filter(|n| !s.contains_key(*n) && !s.contains_key(&format!("{n}_bucket"))).collect()
 }
 
 pub struct EngineScraper {
@@ -353,10 +464,18 @@ pub async fn run(this: EngineScraperRef, http: reqwest::Client) {
         let t = this.borrow();
         (t.cfg.url.clone(), t.feed.clone())
     };
+    let mut said = String::new();
     loop {
         match scrape(&http, &url).await {
             Ok(text) => {
                 let s = parse(&text);
+                let missing = missing_names(&this.borrow().cfg, &s).join(", ");
+                if missing != said {
+                    if !missing.is_empty() {
+                        tracing::warn!("engine {}: {url} has no {missing}", this.borrow().cfg.name);
+                    }
+                    said = missing;
+                }
                 {
                     let mut t = this.borrow_mut();
                     t.samples = Some(s);
@@ -413,7 +532,7 @@ fastmm_venue_rate_limit_cooldowns_total{venue="binance"} 4
 "#;
 
     fn cfg(url: &str) -> EngineCfg {
-        EngineCfg { name: "eng".into(), url: url.into() }
+        EngineCfg { name: "eng".into(), url: url.into(), format: EngineFormat::Fastmm }
     }
 
     #[test]
@@ -429,8 +548,8 @@ fastmm_venue_rate_limit_cooldowns_total{venue="binance"} 4
         let s = parse(SAMPLE);
         let e = to_engine(&cfg("http://x/metrics"), Some(&s), 0.0);
         assert!(e.up && e.state == "running" && e.strategy == "mm \"x\"");
-        assert_eq!((e.orders, e.cancels, e.fills, e.risk_rejects, e.venue_rejects), (1000, 900, 42, 3, 7));
-        assert!(e.realized == 12.5 && e.unrealized == -3.25 && e.max_loss == Some(200.0) && !e.kill && e.kill_reason.is_none());
+        assert_eq!((e.orders, e.cancels, e.fills, e.risk_rejects, e.venue_rejects), (Some(1000), Some(900), Some(42), Some(3), Some(7)));
+        assert!(e.realized == Some(12.5) && e.unrealized == Some(-3.25) && e.max_loss == Some(200.0) && e.kill == Some(false) && e.kill_reason.is_none());
         assert!(e.rejects[0].reason == "venue RateLimited" && e.rejects[0].count == 7);
         assert!(e.latency[0].name == "decode" && (e.latency[0].p50_us.unwrap() - 1.5).abs() < 1e-9);
         assert!(e.latency[1].name == "tick_to_trade" && (e.latency[1].p99_us.unwrap() - 80.0).abs() < 1e-9);
@@ -445,8 +564,86 @@ fastmm_venue_rate_limit_cooldowns_total{venue="binance"} 4
     fn kill_and_unreachable() {
         let s = parse("fastmm_up 1\nfastmm_state 3\nfastmm_kill_active 1\nfastmm_kill_reason 2\n");
         let e = to_engine(&cfg("u"), Some(&s), 0.0);
-        assert!(e.kill && e.kill_reason.as_deref() == Some("MaxLoss") && e.state == "stopped");
+        assert!(e.kill == Some(true) && e.kill_reason.as_deref() == Some("MaxLoss") && e.state == "stopped");
         let e = to_engine(&cfg("u"), None, 12.0);
         assert!(!e.up && e.state == "unreachable" && e.stale_s == 12.0);
+        // an engine that went away reads 0 on the wire, as it always has
+        assert_eq!((e.orders, e.realized, e.kill), (Some(0), Some(0.0), Some(false)));
+    }
+
+    fn generic_cfg(m: EngineMetrics) -> EngineCfg {
+        EngineCfg { name: "gen".into(), url: "u".into(), format: EngineFormat::Generic(m) }
+    }
+
+    const EXPORTER: &str = r#"# TYPE quoter_up gauge
+quoter_up 1
+quoter_orders_total{venue="a",side="buy"} 10
+quoter_orders_total{venue="a",side="sell"} 5
+quoter_orders_total{venue="b",side="buy"} 1
+quoter_fills_total 4
+quoter_rejects_total{reason="post_only"} 2
+quoter_rejects_total{reason="rate"} 7
+quoter_tick_seconds{step="decode",quantile="0.5"} 2e-06
+quoter_tick_seconds{step="decode",quantile="0.99"} 5e-06
+quoter_tick_seconds{step="send",quantile="0.5"} 1e-05
+quoter_rtt_seconds_bucket{le="0.001"} 50
+quoter_rtt_seconds_bucket{le="0.01"} 100
+quoter_rtt_seconds_bucket{le="+Inf"} 100
+quoter_rtt_seconds_count 100
+"#;
+
+    #[test]
+    fn any_exporter_by_the_names_it_is_given() {
+        let s = parse(EXPORTER);
+        let m = EngineMetrics {
+            up: Some("quoter_up".into()),
+            orders: Some("quoter_orders_total".into()),
+            fills: Some("quoter_fills_total".into()),
+            rejects: Some("quoter_rejects_total".into()),
+            latency: vec!["quoter_tick_seconds".into(), "quoter_rtt_seconds".into()],
+            ..Default::default()
+        };
+        let e = to_engine(&generic_cfg(m.clone()), Some(&s), 0.5);
+        assert!(e.up && e.state == "running" && e.stale_s == 0.5);
+        // summed over their labels; rows by reason; what is not named is null, FastMM's own with it
+        assert_eq!((e.orders, e.fills, e.cancels), (Some(16), Some(4), None));
+        assert_eq!((e.risk_rejects, e.venue_rejects, e.realized, e.unrealized, e.fees, e.max_loss, e.kill), (None, None, None, None, None, None, None));
+        assert!(e.venues.is_empty() && e.strategy.is_empty());
+        assert_eq!((e.rejects[0].reason.as_str(), e.rejects[0].count, e.rejects[1].reason.as_str()), ("rate", 7, "post_only"));
+        let lat = |n: &str| e.latency.iter().find(|l| l.name == n).unwrap().clone();
+        assert_eq!((lat("quoter_tick decode").p50_us, lat("quoter_tick decode").p99_us), (Some(2.0), Some(5.0)));
+        assert_eq!(lat("quoter_tick send").p99_us, None);
+        // a histogram: the 50th of 100 at the top of the first bucket, the 99th nearly through the second
+        assert!((lat("quoter_rtt").p50_us.unwrap() - 1000.0).abs() < 1e-6);
+        assert!((lat("quoter_rtt").p99_us.unwrap() - 9820.0).abs() < 1e-6);
+        // on the wire a null, not a 0
+        let v = serde_json::to_value(&e).unwrap();
+        assert!(v["cancels"].is_null() && v["realized"].is_null() && v["kill"].is_null() && v["orders"] == 16);
+        assert!(missing_names(&generic_cfg(m), &s).is_empty());
+    }
+
+    #[test]
+    fn up_goes_by_its_metric_or_by_the_scrape_and_a_missing_name_is_said() {
+        let named = EngineMetrics { up: Some("x_up".into()), orders: Some("x_orders".into()), ..Default::default() };
+        let s = parse("x_up 0\n");
+        let e = to_engine(&generic_cfg(named.clone()), Some(&s), 0.0);
+        assert!(!e.up && e.state == "stopped" && e.orders.is_none());
+        assert_eq!(missing_names(&generic_cfg(named.clone()), &s), ["x_orders"]);
+        // no such metric: not known to be up
+        assert!(!to_engine(&generic_cfg(named), Some(&parse("other 1\n")), 0.0).up);
+        // none named: its metrics answering is all there is
+        let scrape_only = EngineMetrics { orders: Some("x_orders".into()), ..Default::default() };
+        assert!(to_engine(&generic_cfg(scrape_only.clone()), Some(&parse("x_orders 3\n")), 0.0).up);
+        // unreachable: nothing, not zeros
+        let e = to_engine(&generic_cfg(scrape_only), None, 9.0);
+        assert!(!e.up && e.state == "unreachable" && e.orders.is_none() && e.kill.is_none());
+    }
+
+    #[test]
+    fn a_histogram_with_nothing_in_it_has_no_quantile() {
+        let s = parse("x_bucket{le=\"1\"} 0\nx_bucket{le=\"+Inf\"} 0\n");
+        assert_eq!(bucket_quantile(samples(&s, "x_bucket"), 0.5), None);
+        let s = parse("x_bucket{le=\"1\"} 1\nx_bucket{le=\"+Inf\"} 100\n");
+        assert_eq!(bucket_quantile(samples(&s, "x_bucket"), 0.99), Some(1.0));
     }
 }

@@ -193,7 +193,7 @@ pub async fn recompute_day(c: &mut Connection, market: &Rc<RefCell<Market>>, src
         let mut need = vec![a.key.clone()];
         let fee_asset = if a.fee != 0.0 { a.fee_asset.as_str() } else { "" };
         for asset in [a.quote.as_str(), fee_asset] {
-            if !asset.is_empty() && !(par && STABLES.contains(&asset)) {
+            if !(asset.is_empty() || par && STABLES.contains(&asset)) {
                 let way = market.borrow_mut().way(asset);
                 need.extend(way.iter().map(|w| w.0.clone()));
                 ways.insert(asset.to_string(), way);

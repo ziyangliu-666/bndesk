@@ -182,10 +182,58 @@ impl PauseCfg {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct EngineCfg {
     pub name: String,
     pub url: String,
+    pub format: EngineFormat,
+}
+
+/// What an engine's metrics are called.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum EngineFormat {
+    /// FastMM's own names (`fastmm-top --metrics`).
+    #[default]
+    Fastmm,
+    /// Any exporter's, named in `[engines.metrics]`; what is not named is left out.
+    Generic(EngineMetrics),
+}
+
+/// `[engines.metrics]`: a Prometheus metric's name for each thing the desk can show of an engine. A counter with labels
+/// is summed over them; `rejects` keeps them, as a row per label set. `up`, a gauge that is 0 when the engine is not
+/// running: unnamed, it is up while its metrics answer.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineMetrics {
+    pub up: Option<String>,
+    pub orders: Option<String>,
+    pub cancels: Option<String>,
+    pub fills: Option<String>,
+    pub rejects: Option<String>,
+    /// Summaries (a `quantile` label) or histograms (`<name>_bucket` and `le`), a row each.
+    #[serde(default)]
+    pub latency: Vec<String>,
+    /// What they are in: s (the Prometheus convention, and the default), ms, us or ns.
+    pub latency_unit: Option<String>,
+}
+
+impl EngineMetrics {
+    /// Microseconds per unit of what `latency` metrics are in.
+    pub fn latency_scale(&self) -> Result<f64> {
+        Ok(match self.latency_unit.as_deref().unwrap_or("s") {
+            "s" => 1e6,
+            "ms" => 1e3,
+            "us" => 1.0,
+            "ns" => 1e-3,
+            u => bail!("[engines.metrics] latency_unit: {u:?}, want s, ms, us or ns"),
+        })
+    }
+
+    /// Every metric named, to tell which an exporter does not have.
+    pub fn names(&self) -> Vec<&str> {
+        [&self.up, &self.orders, &self.cancels, &self.fills, &self.rejects].into_iter().flatten().map(String::as_str)
+            .chain(self.latency.iter().map(String::as_str)).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -669,7 +717,22 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
                 Some(Value::String(x)) => Ok(x.clone()),
                 _ => Err(anyhow!("[[engines]] needs {k}")),
             };
-            Ok(EngineCfg { name: get("name")?, url: get("url")? })
+            let name = get("name")?;
+            let format = match (e.get("format").map(|v| v.as_str()), e.get("metrics")) {
+                (None | Some(Some("fastmm")), None) => EngineFormat::Fastmm,
+                (Some(Some("generic")), Some(metrics)) => {
+                    let m: EngineMetrics = typed(metrics, "engines.metrics")?;
+                    m.latency_scale()?;
+                    if m.names().is_empty() {
+                        bail!("engine {name}: [engines.metrics] names nothing");
+                    }
+                    EngineFormat::Generic(m)
+                }
+                (Some(Some("generic")), None) => bail!("engine {name}: format = \"generic\" needs [engines.metrics]"),
+                (None | Some(Some("fastmm")), Some(_)) => bail!("engine {name}: [engines.metrics] goes with format = \"generic\""),
+                _ => bail!("engine {name}: format is \"fastmm\" or \"generic\""),
+            };
+            Ok(EngineCfg { name, url: get("url")?, format })
         })
         .collect::<Result<_>>()?;
     let (currency, numeraire) = numeraire(opt_s(table(&raw, "desk")?, "currency")?, &exchanges)?;
@@ -930,6 +993,22 @@ mod tests {
         ] {
             let e = format!("{:#}", one(body).unwrap_err());
             assert!(e.contains(want), "{body}: {e}");
+        }
+    }
+
+    #[test]
+    fn an_engine_says_what_its_metrics_are_called() {
+        let d = tempfile::tempdir().unwrap();
+        let e = |rest: &str| load(write(&d, &format!("[[engines]]\nname = \"e\"\nurl = \"u\"\n{rest}"))).map(|c| c.engines[0].format.clone());
+        assert_eq!(e("").unwrap(), EngineFormat::Fastmm);
+        assert_eq!(e("format = \"fastmm\"\n").unwrap(), EngineFormat::Fastmm);
+        let EngineFormat::Generic(m) = e("format = \"generic\"\n[engines.metrics]\norders = \"o_total\"\nlatency = [\"l\"]\nlatency_unit = \"ms\"\n").unwrap() else { panic!() };
+        assert_eq!((m.orders.as_deref(), m.latency.len(), m.latency_scale().unwrap(), m.names()), (Some("o_total"), 1, 1e3, vec!["o_total", "l"]));
+        for (bad, says) in [("format = \"generic\"\n", "needs"), ("format = \"x\"\n", "is \"fastmm\""), ("[engines.metrics]\norders = \"o\"\n", "goes with"),
+                            ("format = \"generic\"\n[engines.metrics]\n", "names nothing"), ("format = \"generic\"\n[engines.metrics]\nlatency = [\"l\"]\nlatency_unit = \"h\"\n", "latency_unit"),
+                            ("format = \"generic\"\n[engines.metrics]\nordrs = \"o\"\n", "ordrs")] {
+            let err = format!("{:#}", e(bad).unwrap_err());
+            assert!(err.contains(says), "{bad}: {err}");
         }
     }
 

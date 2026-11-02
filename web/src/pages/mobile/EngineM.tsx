@@ -71,7 +71,7 @@ function EngineSection({ e, feeds, now, alerts }: { e: Engine; feeds: Feed[]; no
       title={
         <>
           {e.name}
-          <Tag>{e.strategy}</Tag>
+          {e.strategy && <Tag>{e.strategy}</Tag>}
         </>
       }
       right={<EngineState e={e} />}

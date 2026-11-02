@@ -62,7 +62,7 @@ export const RULES: Record<string, { name: string; means: string }> = {
   dust: { name: "Dust", means: "A balance below the symbol's minimum notional: it can't be sold as it is." },
   engine: {
     name: "Engine",
-    means: "An engine's kill switch is on, its state is not running, its metrics are more than 5 s old, or its venue rejects spiked.",
+    means: "An engine's kill switch is on, its state is not running, its metrics are more than 5 s old, or its rejects spiked.",
   },
   engine_latency: { name: "Engine latency", means: "An engine's p99 latency is above the limit." },
   futures_margin: {

@@ -392,7 +392,9 @@ impl Alerts {
 
         for eng in &v.engines {
             let h = self.engine_hist.entry(eng.name.clone()).or_default();
-            h.push_back((now, eng.venue_rejects, eng.venues.iter().map(|x| x.cooldowns).sum()));
+            // an exporter of its own has its rejects as one list
+            let rejects = eng.venue_rejects.unwrap_or_else(|| eng.rejects.iter().map(|r| r.count).sum());
+            h.push_back((now, rejects, eng.venues.iter().map(|x| x.cooldowns).sum()));
             while h.front().is_some_and(|x| x.0 < now - 10 * MIN) {
                 h.pop_front();
             }
@@ -401,7 +403,7 @@ impl Alerts {
                     if eng.up { "stale" } else { "unreachable" }, eng.stale_s));
                 continue;
             }
-            if eng.kill {
+            if eng.kill == Some(true) {
                 add("engine", &format!("{}:kill", eng.name), Level::Crit, format!("{} kill switch: {}", eng.name,
                     eng.kill_reason.as_deref().filter(|r| !r.is_empty()).unwrap_or("active")));
             }
@@ -418,9 +420,9 @@ impl Alerts {
                 add("engine", &format!("{}:state", eng.name), Level::Warn, format!("{} state {}", eng.name, eng.state));
             }
             let minute_ago = *h.iter().find(|x| x.0 >= now - MIN).unwrap_or(&h[0]);
-            if eng.venue_rejects - minute_ago.1 > 20 {
-                add("engine", &format!("{}:rejects", eng.name), Level::Warn, format!("{} {} venue rejects in 1 min", eng.name,
-                    eng.venue_rejects - minute_ago.1));
+            if rejects - minute_ago.1 > 20 {
+                add("engine", &format!("{}:rejects", eng.name), Level::Warn, format!("{} {} {}rejects in 1 min", eng.name,
+                    rejects - minute_ago.1, if eng.venue_rejects.is_some() { "venue " } else { "" }));
             }
             let (first, last) = (h[0].2, h[h.len() - 1].2);
             if last > first {

@@ -113,10 +113,25 @@ api_key_env = "DESK_SUB_B_API_KEY"
 private_key_env = "DESK_SUB_B_PRIVATE_KEY"
 futures = false
 
-# Optional engine metrics (Prometheus text), e.g. through an SSH tunnel.
+# Optional engine metrics (Prometheus text), e.g. through an SSH tunnel. FastMM's by their own names:
 # [[engines]]
 # name = "engine-1"
 # url = "http://127.0.0.1:9464/metrics"
+#
+# Any other exporter's, by what it calls them. What is not named has no place on the page, and an engine with no `up` is
+# up while its metrics answer.
+# [[engines]]
+# name = "quoter"
+# url = "http://127.0.0.1:9100/metrics"
+# format = "generic"
+# [engines.metrics]
+# up = "quoter_running"
+# orders = "quoter_orders_total"          # counters are summed over their labels
+# cancels = "quoter_cancels_total"
+# fills = "quoter_fills_total"
+# rejects = "quoter_rejects_total"        # a row for each label set
+# latency = ["quoter_tick_seconds"]       # summaries (quantile="0.5", "0.99") or histograms (<name>_bucket)
+# latency_unit = "s"                      # s, ms, us, ns
 
 # An account on Hyperliquid: its address, from the environment, and no key. It can sit beside the accounts above.
 # [[accounts]]

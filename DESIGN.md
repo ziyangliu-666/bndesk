@@ -555,9 +555,10 @@ interface HedgeLeg {
 }
 
 interface Engine { name: string; url: string; up: boolean; stale_s: number; state: string; strategy: string;
-  orders: number; cancels: number; fills: number; risk_rejects: number; venue_rejects: number;
+  // null: its metrics do not say. FastMM's names say all of these; an exporter of its own what [engines.metrics] names
+  orders: number | null; cancels: number | null; fills: number | null; risk_rejects: number | null; venue_rejects: number | null;
   rejects: { reason: string; count: number }[];
-  realized: number; unrealized: number; fees: number; max_loss: number | null; kill: boolean; kill_reason: string | null;
+  realized: number | null; unrealized: number | null; fees: number | null; max_loss: number | null; kill: boolean | null; kill_reason: string | null;
   latency: { name: string; p50_us: number | null; p99_us: number | null }[];
   venues: { name: string; md: string; user: string; order: string; reconnects: number; cooldowns: number; rest_errors: number }[] }
 

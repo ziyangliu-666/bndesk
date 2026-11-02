@@ -261,7 +261,8 @@ const activityNow = () => minuteActivity(minuteOf(now));
 // desk without them, so a page can be looked at without its parts (the real figures come from a desk with no futures);
 // `?markets=2` adds a second perp market, its instruments and positions copies of USD-M's: no page should care which;
 // `?perp=1` is a desk that makes markets on perps: what it quotes is on USD-M, traded, and it hedges with two USDC perps
-// (`&hedge=0`: with nothing) ----
+// (`&hedge=0`: with nothing); `?engine=generic` an engine by an exporter of its own, the rest of its figures null;
+// `?earlier=USDC` a desk that changed its currency this morning ----
 const params = new URLSearchParams(location.search);
 const MARKETS: Market[] = [
   { id: "spot", exchange: "Binance", kind: "spot", name: "Spot" },
@@ -284,7 +285,28 @@ const DESK: Desk = {
   hedge: on("hedge"),
   rebates: on("rebates"),
   mm: on("mm"),
+  ...(params.get("earlier") ? { earlier: { until: Math.floor(Date.now() / 86_400_000) * 86_400_000, currency: params.get("earlier")! } } : {}),
 };
+
+/** What `format = "generic"` leaves of an engine: the names `[engines.metrics]` gave it, and nothing of FastMM's. */
+function genericEngine(e: Engine): Engine {
+  return {
+    ...e,
+    strategy: "",
+    cancels: null,
+    risk_rejects: null,
+    venue_rejects: null,
+    rejects: [{ reason: "post_only", count: 12 }, { reason: "rate", count: 3 }],
+    realized: null,
+    unrealized: null,
+    fees: null,
+    max_loss: null,
+    kill: null,
+    kill_reason: null,
+    latency: [{ name: "quote_tick", p50_us: 41, p99_us: 180 }, { name: "order_rtt", p50_us: 2100, p99_us: 8900 }],
+    venues: [],
+  };
+}
 
 /** A row on the perp desk: what was on spot is the traded perp, what was a perp its hedge under another symbol. */
 function onPerps<R extends { symbol: string; venue: string }>(r: R): R {
@@ -383,6 +405,7 @@ function shaped<T extends Partial<Snapshot>>(m: T): T {
   }
   if (!DESK.rebates && m.accounts) m.accounts = m.accounts.map((a) => ({ ...a, rebates: 0 }));
   if (!on("engines") && m.engines) m.engines = [];
+  if (params.get("engine") === "generic" && m.engines) m.engines = m.engines.slice(0, 1).map(genericEngine);
   if (!on("engines") && m.feeds) m.feeds = m.feeds.filter((f) => f.kind !== "engine");
   if (HL) hlDesk(m);
   return m;

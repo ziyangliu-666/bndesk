@@ -48,19 +48,24 @@ function EngineSection({ e }: { e: EngineT }) {
         )}
         {stale && <span className="fig warn-text">metrics {num(e.stale_s, 1)} s old</span>}
       </div>
-      {/* two groups, apart: what the engine did, then its money */}
+      {/* two groups, apart: what the engine did, then its money; a figure its metrics do not say has no place */}
       <div className="ops-engine-figs">
       <div className="ops-pairs">
-        <Pair label="Orders" title="Orders sent by the engine (counter from its metrics)">{int(e.orders)}</Pair>
-        <Pair label="Cancels" title="Cancels sent by the engine">{int(e.cancels)}</Pair>
-        <Pair label="Fills" title="Fills received by the engine">{int(e.fills)}</Pair>
-        <Pair label="Risk rejects" title="Orders the engine's risk checks refused" tone={e.risk_rejects ? "warn-text" : ""}>
-          {int(e.risk_rejects)}
-        </Pair>
-        <Pair label="Venue rejects" title="Orders the exchange rejected" tone={e.venue_rejects ? "warn-text" : ""}>
-          {int(e.venue_rejects)}
-        </Pair>
+        {e.orders != null && <Pair label="Orders" title="Orders sent by the engine (counter from its metrics)">{int(e.orders)}</Pair>}
+        {e.cancels != null && <Pair label="Cancels" title="Cancels sent by the engine">{int(e.cancels)}</Pair>}
+        {e.fills != null && <Pair label="Fills" title="Fills received by the engine">{int(e.fills)}</Pair>}
+        {e.risk_rejects != null && (
+          <Pair label="Risk rejects" title="Orders the engine's risk checks refused" tone={e.risk_rejects ? "warn-text" : ""}>
+            {int(e.risk_rejects)}
+          </Pair>
+        )}
+        {e.venue_rejects != null && (
+          <Pair label="Venue rejects" title="Orders the exchange rejected" tone={e.venue_rejects ? "warn-text" : ""}>
+            {int(e.venue_rejects)}
+          </Pair>
+        )}
       </div>
+      {e.realized != null && (
       <div className="ops-pairs">
         <Pair label="Realized" title="Realized PnL reported by the engine">
           <Money v={e.realized} sign />
@@ -75,6 +80,7 @@ function EngineSection({ e }: { e: EngineT }) {
           {e.max_loss == null ? "--" : <Money v={e.max_loss} />}
         </Pair>
       </div>
+      )}
       </div>
       <div className="ops-engine-tables">
         <table className="ops-table">
@@ -102,7 +108,7 @@ function EngineSection({ e }: { e: EngineT }) {
               ))}
           </tbody>
         </table>
-        <table className="ops-table">
+        {e.latency.length > 0 && <table className="ops-table">
           <thead>
             <tr>
               <th className="l">Latency</th>
@@ -119,8 +125,8 @@ function EngineSection({ e }: { e: EngineT }) {
               </tr>
             ))}
           </tbody>
-        </table>
-        <table className="ops-table">
+        </table>}
+        {e.venues.length > 0 && <table className="ops-table">
           <thead>
             <tr>
               <th className="l">Venue</th>
@@ -151,7 +157,7 @@ function EngineSection({ e }: { e: EngineT }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table>}
       </div>
     </section>
   );

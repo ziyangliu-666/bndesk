@@ -462,31 +462,27 @@ export function EngineFacts({ e, spike }: { e: Engine; spike?: boolean }) {
     <KV
       cols={3}
       items={[
-        {
-          label: "Realized",
-          info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started; Unrealized: its open position at its own marks. ${cur()}.`,
-          value: money(e.realized),
-          v: e.realized,
-        },
-        {
-          label: "Unrealized",
-          value: money(e.unrealized),
-          v: e.unrealized,
-        },
-        // a cost, signed as one (as the hedge legs' fees)
-        { label: "Fees", value: money(e.fees == null ? null : -e.fees), v: e.fees == null ? null : -e.fees },
-        { label: "Orders", value: int(e.orders) },
-        { label: "Cancels", value: int(e.cancels) },
-        { label: "Fills", value: int(e.fills) },
-        {
-          label: "Risk rejects",
-          value: int(e.risk_rejects),
-        },
-        {
-          label: "Venue rejects",
-          value: int(e.venue_rejects),
-          tone: spike ? "warn" : undefined,
-        },
+        // what its metrics do not say has no place
+        ...(e.realized == null ? [] : [
+          {
+            label: "Realized",
+            info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started; Unrealized: its open position at its own marks. ${cur()}.`,
+            value: money(e.realized),
+            v: e.realized,
+          },
+          {
+            label: "Unrealized",
+            value: money(e.unrealized),
+            v: e.unrealized ?? undefined,
+          },
+          // a cost, signed as one (as the hedge legs' fees)
+          { label: "Fees", value: money(e.fees == null ? null : -e.fees), v: e.fees == null ? undefined : -e.fees },
+        ]),
+        ...(e.orders == null ? [] : [{ label: "Orders", value: int(e.orders) }]),
+        ...(e.cancels == null ? [] : [{ label: "Cancels", value: int(e.cancels) }]),
+        ...(e.fills == null ? [] : [{ label: "Fills", value: int(e.fills) }]),
+        ...(e.risk_rejects == null ? [] : [{ label: "Risk rejects", value: int(e.risk_rejects) }]),
+        ...(e.venue_rejects == null ? [] : [{ label: "Venue rejects", value: int(e.venue_rejects), tone: spike ? ("warn" as const) : undefined }]),
         {
           label: "Last metrics",
           value: `${num(e.stale_s, 1)} s ago`,
@@ -541,11 +537,11 @@ export function LatencyTable({ e, p99Limit }: { e: Engine; p99Limit?: number | n
 export function KillBar({ e }: { e: Engine }) {
   const money = useMoney();
   if (e.max_loss == null) return null;
-  const loss = Math.max(0, -(e.realized + e.unrealized));
+  const loss = Math.max(0, -((e.realized ?? 0) + (e.unrealized ?? 0)));
   return (
     <LimitBar
       label="Loss limit"
-      info={`The engine stops itself (its kill switch) when its own loss reaches ${money(e.max_loss, "usd")} ${cur()}. The bar is its loss now, realized plus unrealized: ${money(e.realized + e.unrealized)} ${cur()}; empty while it is making money.`}
+      info={`The engine stops itself (its kill switch) when its own loss reaches ${money(e.max_loss, "usd")} ${cur()}. The bar is its loss now, realized plus unrealized: ${money((e.realized ?? 0) + (e.unrealized ?? 0))} ${cur()}; empty while it is making money.`}
       value={loss}
       limit={e.max_loss}
     />
