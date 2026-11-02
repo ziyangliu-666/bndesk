@@ -577,13 +577,32 @@ const SKEW_STEP = 250;
 let skewNow = 0;
 
 /** One message into the state: `get` reads it as changed so far, `set` changes it, fill events go to `events`. */
+/** A link or a saved instrument with no market, or another desk's: the market this desk has it on, or none. */
+function onThisDesk(st: State, s: Snapshot): Partial<State> {
+  const ids = s.desk?.markets?.map((x) => x.id);
+  if (!ids) return {};
+  const here = (i: { symbol: string; venue: Venue }): Instrument | null => {
+    if (ids.includes(i.venue)) return { symbol: i.symbol, venue: i.venue };
+    const r = s.symbols.find((x) => x.symbol === i.symbol);
+    return r ? { symbol: r.symbol, venue: r.venue } : null;
+  };
+  const out: Partial<State> = {};
+  if (st.deskSymbol && !ids.includes(st.deskSymbol.venue)) out.deskSymbol = here(st.deskSymbol);
+  const d = st.route.detail;
+  if (d?.kind === "instrument" && !ids.includes(d.venue)) {
+    const to = here(d);
+    if (to) out.route = { ...st.route, detail: { kind: "instrument", ...to } };
+  }
+  return out;
+}
+
 function reduce(m: Msg, get: () => State, set: (p: Partial<State>) => void, events: FillEvent[]) {
   const now = Date.now();
   const snap = get().snap;
   switch (m.type) {
     case "snapshot": {
       const s = { ...m.data, series: withBars(m.data.series, m.data.bars) };
-      set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts) });
+      set({ snap: s, lastMsg: now, skew: s.now - now, conn: "live", ...sample(get().ring, s), ...pruneHidden(get().hiddenAlerts, s.alerts), ...onThisDesk(get(), s) });
       events.push({ kind: "reset", fills: s.fills });
       return;
     }
