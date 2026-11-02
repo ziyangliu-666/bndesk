@@ -21,7 +21,7 @@ use crate::backfill;
 use crate::beta::Betas;
 use crate::clock::{CLOCK, now_s};
 use crate::config::{self as C, Config};
-use crate::connector::{self, Connector, PublicFeed};
+use crate::connector::{Connector, Exchanges, PublicFeed};
 use crate::engine::{self, EngineScraper, EngineScraperRef};
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::{FillBook, FillRec};
@@ -76,11 +76,11 @@ pub fn desk_shape(cfg: &Config, accounts: &[P::Account], days: &[P::DayPnl]) -> 
     // something hedges: a perp account whose market hedges unless told otherwise, an instrument named as a hedge, a
     // position in one. A desk whose every perp is traded has the columns and tabs of futures, and no Hedge figure.
     let venues: Vec<Venue> = cfg.accounts.iter().chain(&cfg.master).flat_map(|a| a.markets.iter().copied().filter(|v| !v.is_spot())).collect();
-    let wallet_hedges = accounts.iter().any(|a| a.fut_wallet != 0.0) && Venue::all().any(|v| !v.is_spot() && cfg.roles.market(v) == P::InstRole::Hedge);
+    let wallet_hedges = accounts.iter().any(|a| a.fut_wallet != 0.0) && cfg.venues().any(|v| !v.is_spot() && cfg.roles.market(v) == P::InstRole::Hedge);
     P::Desk {
         currency: cfg.currency.clone(),
-        quote: crate::market::QUOTE.into(),
-        markets: P::MARKETS.iter().filter(|m| m.exchange.eq_ignore_ascii_case(&cfg.exchange)).collect(),
+        quote: cfg.quote().into(),
+        markets: cfg.venues().map(Venue::market).collect(),
         roles: cfg.roles.clone(),
         perps,
         hedge: cfg.roles.any_hedge(&venues)
@@ -178,11 +178,11 @@ pub struct Desk {
     pub started: f64,
     /// the last logged gaps between Π's quantities and the balances (check_positions)
     pub position_gaps: String,
-    pub connector: Rc<dyn Connector>,
+    pub exchanges: Exchanges,
     pub store: Rc<Store>,
     pub alerts: RefCell<Alerts>,
     pub engines: Vec<EngineScraperRef>,
-    pub public_feed: FeedRef,
+    pub public_feeds: Vec<FeedRef>,
     pub day_start: Rc<Cell<i64>>,
     pub series: Vec<P::SeriesPoint>,
     /// market making and the hedge legs' P&L at each series point (the day chart's bars draw them)
@@ -201,7 +201,7 @@ pub struct Desk {
     pub new_acct: HashMap<String, Vec<(i64, f64, f64)>>,
     pub fill_protos: HashMap<String, P::Fill>,
     pub tracked: Rc<RefCell<HashSet<String>>>,
-    pub streams: Option<Rc<dyn PublicFeed>>,
+    pub streams: Vec<Rc<dyn PublicFeed>>,
     pub betas: Option<Rc<RefCell<Betas>>>,
     pub accounts: Vec<AccountRef>,
     pub view: Option<View>,
@@ -248,7 +248,7 @@ fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store) {
 }
 
 impl Desk {
-    fn new(cfg: Config, market: Market, connector: Rc<dyn Connector>, public_feed: FeedRef) -> Desk {
+    fn new(cfg: Config, market: Market, exchanges: Exchanges, public_feeds: Vec<FeedRef>) -> Desk {
         let store = Rc::new(Store::new(&cfg.db));
         let s2 = store.clone();
         let alerts = Alerts::new(Box::new(move |a: &P::Alert| {
@@ -293,10 +293,10 @@ impl Desk {
         Desk {
             started: now_s(),
             position_gaps: String::new(),
-            connector,
+            exchanges,
             alerts: RefCell::new(alerts),
             engines: cfg.engines.iter().map(|e| Rc::new(RefCell::new(EngineScraper::new(e.clone())))).collect(),
-            public_feed,
+            public_feeds,
             day_start: Rc::new(Cell::new(day_start)),
             series: vec![],
             series_x: vec![],
@@ -310,7 +310,7 @@ impl Desk {
             new_acct: HashMap::new(),
             fill_protos: HashMap::new(),
             tracked,
-            streams: None,
+            streams: vec![],
             betas: cfg.beta.clone().map(|b| Rc::new(RefCell::new(Betas::new(b)))),
             accounts: vec![],
             view: None,
@@ -339,13 +339,14 @@ impl Desk {
 
     pub fn all_feeds(&self) -> Vec<FeedRef> {
         let mut out: Vec<FeedRef> = self.streams.iter().flat_map(|s| s.feeds()).collect();
-        out.push(self.public_feed.clone());
+        out.extend(self.public_feeds.iter().cloned());
         for a in &self.accounts {
             let a = a.borrow();
             out.extend(a.feeds.iter().cloned());
             out.push(a.rest_feed.clone());
         }
-        if !self.cfg.simulate {
+        // the master's transfers: only an exchange with a master has that feed to show
+        if !self.cfg.simulate && self.cfg.venues().any(|v| v.market().wallet) {
             out.push(self.transfers.borrow().feed.clone());
         }
         out.extend(self.engines.iter().map(|e| e.borrow().feed.clone()));
@@ -354,12 +355,21 @@ impl Desk {
 
     // setup
 
-    /// Each instrument the market comes to track is watched by the connector's public feed.
+    /// Each instrument the market comes to track is watched by the public feed of its market's connector.
     fn make_streams(&mut self) {
-        let streams = self.connector.public_feed(self.market.clone());
-        let watch = streams.clone();
-        self.market.borrow_mut().on_new = Box::new(move |inst| watch.watch(inst));
-        self.streams = Some(streams);
+        let mut routes: Vec<Option<Rc<dyn PublicFeed>>> = vec![None; Venue::COUNT];
+        for c in self.exchanges.iter() {
+            let streams = c.public_feed(self.market.clone());
+            for v in c.markets() {
+                routes[v.index()] = Some(streams.clone());
+            }
+            self.streams.push(streams);
+        }
+        self.market.borrow_mut().on_new = Box::new(move |inst| {
+            if let Some(s) = &routes[inst.venue.index()] {
+                s.watch(inst);
+            }
+        });
     }
 
     fn make_accounts(&mut self) {
@@ -367,18 +377,23 @@ impl Desk {
         if self.cfg.simulate {
             accounts = sim::accounts().into_iter().map(Account::shared).collect();
         } else {
-            let master_ok = self.cfg.master.as_ref().is_some_and(|m| self.connector.credentials(m).is_ok());
+            let read = |ac: &C::AccountCfg| match self.exchanges.named(&ac.exchange) {
+                Some(c) => c.credentials(ac),
+                None => Err(format!("no connector for exchange {:?}", ac.exchange)),
+            };
+            let master_ok = self.cfg.master.as_ref().is_some_and(|m| read(m).is_ok());
             let cfgs: Vec<C::AccountCfg> = self.cfg.master.iter().cloned().chain(self.cfg.accounts.iter().cloned()).collect();
             for ac in cfgs {
-                let (creds, reason) = match self.connector.credentials(&ac) {
-                    Ok(c) => (Some(c), String::new()),
+                let (creds, readable, reason) = match read(&ac) {
+                    Ok(c) => (c, true, String::new()),
                     Err(r) => {
                         warn!("account {}: {r}", ac.id);
-                        (None, r)
+                        (None, false, r)
                     }
                 };
-                let use_master = creds.is_none() && ac.role != Role::Master && !ac.email.is_empty() && master_ok;
+                let use_master = !readable && ac.role != Role::Master && !ac.email.is_empty() && master_ok;
                 let mut acct = Account::new(ac, creds, &reason);
+                acct.readable = readable;
                 if use_master {
                     acct.use_master();
                 }
@@ -405,22 +420,23 @@ impl Desk {
                 info: d.info.clone(),
             }));
         });
-        let spot_symbols: Vec<String> =
-            self.cfg.markets.iter().filter(|m| m.venue.is_spot()).map(|m| m.symbol.clone()).collect();
         let roles = Rc::new(self.cfg.roles.clone());
-        let perp_symbols: Vec<String> = self.cfg.markets.iter().filter(|m| !m.venue.is_spot() && self.cfg.roles.traded(&m.symbol, m.venue)).map(|m| m.symbol.clone()).collect();
         for a in &accounts {
             let mut a = a.borrow_mut();
             a.roles = roles.clone();
+            // an account is asked about the symbols of its own exchange
+            let exchange = a.cfg.exchange.clone();
+            let mine = || self.cfg.markets.iter().filter(|m| m.venue.on(&exchange));
             if a.cfg.futures() {
-                a.perp_symbols = perp_symbols.clone();
+                a.perp_symbols = mine().filter(|m| !m.venue.is_spot() && self.cfg.roles.traded(&m.symbol, m.venue)).map(|m| m.symbol.clone()).collect();
             }
+            let spot_symbols: Vec<String> = mine().filter(|m| m.venue.is_spot()).map(|m| m.symbol.clone()).collect();
             a.market = Some(self.market.clone());
             a.on_fill = self.on_fill.clone();
             a.on_fee = on_fee.clone();
             a.on_fee_change = on_fee_change.clone();
             a.on_dividend = on_dividend.clone();
-            a.spot_symbols = spot_symbols.clone();
+            a.spot_symbols = spot_symbols;
         }
         let master = accounts.iter().find(|a| a.borrow().role == Role::Master).cloned();
         if let Some(m) = &master
@@ -618,8 +634,8 @@ impl Desk {
             let pre = format!("{}:", a.id);
             for r in data.dividends.iter().filter(|r| r.id.starts_with(&pre)) {
                 let id = r.id[pre.len()..].to_string();
-                a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone(),
-                                                  rebate: self.connector.is_rebate(&r.info) });
+                let rebate = self.exchanges.named(&a.cfg.exchange).is_some_and(|c| c.is_rebate(&r.info));
+                a.dividends.insert(id, Dividend { ts: r.ts, asset: r.asset.clone(), amount: r.amount, info: r.info.clone(), rebate });
             }
             if let Some(v) = data.kv.get(&format!("open:{}:{ds}", a.id)).and_then(|v| v.parse::<f64>().ok()) {
                 a.equity_open = Some(v);
@@ -953,7 +969,7 @@ impl Desk {
             let mut m = self.market.borrow_mut();
             let all = self.accounts.iter().all(|a| {
                 let a = a.borrow();
-                !(a.creds.is_some() || self.cfg.simulate) || a.valued(&mut m)
+                !(a.readable || self.cfg.simulate) || a.valued(&mut m)
             });
             if !all {
                 return;   // a half-priced desk would draw a false jump in equity
@@ -1098,7 +1114,7 @@ impl Desk {
                 .iter()
                 .filter(|a| {
                     let a = a.borrow();
-                    a.creds.is_some() || a.via_master || self.cfg.simulate
+                    a.readable || a.via_master || self.cfg.simulate
                 })
                 .collect();
             let valued = !readable.is_empty() && readable.iter().all(|a| a.borrow().valued(&mut m));
@@ -1246,25 +1262,59 @@ impl DeskSource for Source {
 
 // tasks
 
-async fn bootstrap(connector: &dyn Connector, feed: &FeedRef, cfg: &Config) -> Market {
-    loop {
-        let r: Result<_> = async {
-            connector.sync_clock().await?;
-            connector.instruments().await
+/// An exchange's clock and what it lists, its feed saying how that went.
+async fn read_exchange(connector: &dyn Connector, feed: &FeedRef) -> Result<crate::market::Info> {
+    let r: Result<_> = async {
+        connector.sync_clock().await?;
+        connector.instruments().await
+    }
+    .await;
+    match &r {
+        Ok(_) => feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", connector.clock().offset_ms()))),
+        Err(e) => {
+            // network at startup: keep trying
+            let d: String = format!("{e:#}").chars().take(200).collect();
+            feed.borrow_mut().set_up(false, Some(&d));
+            warn!("bootstrap of {} failed: {e:#}", connector.id());
         }
-        .await;
-        match r {
-            Ok(info) => {
-                feed.borrow_mut().set_up(true, Some(&format!("clock offset {} ms", connector.clock().offset_ms())));
-                return Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
+    }
+    r
+}
+
+/// How long a desk waits at startup for an exchange that does not answer, once another has.
+const BOOT_WAIT: Duration = Duration::from_secs(60);
+
+/// The market, once every exchange has said what it lists; or, past BOOT_WAIT with at least one that has, without the
+/// others (their indices returned for `late_exchange`), so one exchange down does not keep the rest off the page.
+async fn bootstrap(exchanges: &Exchanges, feeds: &[FeedRef], cfg: &Config) -> (Market, Vec<usize>) {
+    let started = std::time::Instant::now();
+    let all: Vec<&Rc<dyn Connector>> = exchanges.iter().collect();
+    let mut info = crate::market::Info::new();
+    let mut missing: Vec<usize> = (0..all.len()).collect();
+    loop {
+        let mut still = vec![];
+        for i in missing {
+            match read_exchange(&**all[i], &feeds[i]).await {
+                Ok(x) => info.extend(x),
+                Err(_) => still.push(i),
             }
-            Err(e) => {
-                // network at startup: keep trying
-                let d: String = format!("{e:#}").chars().take(200).collect();
-                feed.borrow_mut().set_up(false, Some(&d));
-                warn!("bootstrap failed: {e:#}");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
+        }
+        missing = still;
+        if missing.is_empty() || (missing.len() < all.len() && started.elapsed() >= BOOT_WAIT) {
+            return (Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps), missing);
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// An exchange that was down when the desk started: its listing joins the market when it comes back.
+async fn late_exchange(market: MarketRef, connector: Rc<dyn Connector>, feed: FeedRef) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        if let Ok(info) = read_exchange(&*connector, &feed).await {
+            market.borrow_mut().add_info(info);
+            info!("{}: listing read", connector.id());
+            return;
         }
     }
 }
@@ -1335,10 +1385,11 @@ async fn prune(desk: DeskRef) {
 async fn seed_books(market: MarketRef, connector: Rc<dyn Connector>) {
     loop {
         for venue in connector.markets() {
-            if !market.borrow().insts.iter().any(|i| i.t.is_none() && i.venue == venue) {
+            let unseen: Vec<String> = market.borrow().insts.iter().filter(|i| i.t.is_none() && i.venue == venue).map(|i| i.symbol.clone()).collect();
+            if unseen.is_empty() {
                 continue;
             }
-            let rows = match connector.book_tops(venue).await {
+            let rows = match connector.book_tops(venue, &unseen).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("seed {venue} books: {e:#}");
@@ -1380,11 +1431,11 @@ async fn shutdown_signal() {
 /// One request at a time, 2 s apart, a minute after the start.
 async fn rebate_days(desk: DeskRef, keyed: Vec<AccountRef>) {
     tokio::time::sleep(Duration::from_secs(60)).await;
-    let (days, start_min, connector) = {
+    let (days, start_min, exchanges) = {
         let d = desk.borrow();
         let today = crate::pnl::utc_day(d.day_start());
         let days: Vec<String> = d.day_real.iter().filter(|(k, r)| r.rebates.is_none() && **k != today).map(|(k, _)| k.clone()).collect();
-        (days, d.cfg.day_start_min, d.connector.clone())
+        (days, d.cfg.day_start_min, d.exchanges.clone())
     };
     for day in days {
         let Ok(date) = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d") else { continue };
@@ -1392,6 +1443,8 @@ async fn rebate_days(desk: DeskRef, keyed: Vec<AccountRef>) {
         let mut sum = 0.0;
         let mut all = true;
         for a in &keyed {
+            let exchange = a.borrow().cfg.exchange.clone();
+            let Some(connector) = exchanges.named(&exchange) else { continue };
             match connector.distributions(a, ds, ds + DAY).await {
                 Ok(rows) => sum += accounts::past_rebates(a, &rows),
                 Err(e) => {
@@ -1433,15 +1486,16 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         }
     }
     let mut sig = Box::pin(shutdown_signal());
-    let http = connector::client();
-    let public_feed = Feed::shared("public rest", FeedKind::Rest, "");
-    let exchange = connector::open(&cfg.exchange, http.clone(), Some(public_feed.clone()))?;
-    exchange.clock().lead();
-    let market = tokio::select! {
-        m = bootstrap(&*exchange, &public_feed, &cfg) => m,
+    let http = crate::connector::client();
+    let public_feeds: Vec<FeedRef> = cfg.exchanges.iter().enumerate()
+        .map(|(i, e)| Feed::shared(if i == 0 { "public rest".to_string() } else { format!("{e} rest") }, FeedKind::Rest, ""))
+        .collect();
+    let exchanges = Exchanges::open(&cfg.exchanges, &http, &public_feeds.iter().cloned().map(Some).collect::<Vec<_>>())?;
+    let (market, late) = tokio::select! {
+        m = bootstrap(&exchanges, &public_feeds, &cfg) => m,
         _ = &mut sig => return Ok(()),
     };
-    let desk: DeskRef = Rc::new(RefCell::new(Desk::new(cfg, market, exchange.clone(), public_feed.clone())));
+    let desk: DeskRef = Rc::new(RefCell::new(Desk::new(cfg, market, exchanges.clone(), public_feeds.clone())));
     {
         let mut d = desk.borrow_mut();
         d.make_streams();
@@ -1461,7 +1515,10 @@ pub async fn run(mut cfg: Config) -> Result<()> {
             s.setup(&d);
             tasks.push(tokio::task::spawn_local(s.run()));
         } else {
-            tasks.extend(exchange.start_accounts(&d.accounts, &d.transfers, d.day_start.clone()));
+            for c in exchanges.iter() {
+                let mine: Vec<AccountRef> = d.accounts.iter().filter(|a| a.borrow().cfg.exchange.eq_ignore_ascii_case(c.id())).cloned().collect();
+                tasks.extend(c.start_accounts(&mine, &d.transfers, d.day_start.clone()));
+            }
         }
         for e in &d.engines {
             tasks.push(tokio::task::spawn_local(engine::run(e.clone(), http.clone())));
@@ -1469,18 +1526,24 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     }
     if !simulate {
         let d = desk.borrow();
-        let keyed: Vec<AccountRef> = d.accounts.iter().filter(|a| a.borrow().creds.is_some()).cloned().collect();
+        let keyed: Vec<AccountRef> = d.accounts.iter().filter(|a| a.borrow().readable).cloned().collect();
         tasks.push(tokio::task::spawn_local(rebate_days(desk.clone(), keyed)));
     }
     tasks.push(tokio::task::spawn_local(ticker(desk.clone())));
-    tasks.push(tokio::task::spawn_local(exchange.keep_clock()));
-    tasks.push(tokio::task::spawn_local(seed_books(desk.borrow().market.clone(), exchange.clone())));
+    for c in exchanges.iter() {
+        tasks.push(tokio::task::spawn_local(c.keep_clock()));
+        tasks.push(tokio::task::spawn_local(seed_books(desk.borrow().market.clone(), c.clone())));
+    }
+    for i in late {
+        let c = exchanges.iter().nth(i).expect("an exchange of this desk").clone();
+        tasks.push(tokio::task::spawn_local(late_exchange(desk.borrow().market.clone(), c, public_feeds[i].clone())));
+    }
     tasks.push(tokio::task::spawn_local(prune(desk.clone())));
     if !simulate {
         let d = desk.borrow();
         let (pnl, store) = (d.pnl.clone(), d.store.clone());
         tasks.push(tokio::task::spawn_local(backfill::run((d.pnl.clone(), d.market.clone()), (d.fills.clone(), d.market.clone()),
-                                                          exchange.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
+                                                          exchanges.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
     }
     if desk.borrow().betas.is_some() {
         tasks.push(tokio::task::spawn_local(beta_loop(desk.clone())));
@@ -1490,7 +1553,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let handle = desk.borrow().hub.borrow().handle();
     let history = {
         let d = desk.borrow();
-        crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min, d.connector.kline_source())
+        crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min, d.exchanges.kline_source())
             .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
             .roles(d.cfg.roles.clone())
     };
@@ -1502,7 +1565,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     for t in &tasks {
         t.abort();
     }
-    if let Some(s) = &desk.borrow().streams {
+    for s in &desk.borrow().streams {
         s.stop();
     }
     srv.cleanup().await;
@@ -1518,7 +1581,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "desk", about = "Read-only Binance multi-account desk monitor")]
+#[command(name = "desk", about = "Read-only multi-account desk monitor")]
 struct Args {
     #[arg(long, default_value = "desk.toml")]
     config: String,

@@ -34,6 +34,11 @@ impl MarketCfg {
 /// The exchange of a config that names none.
 pub const DEFAULT_EXCHANGE: &str = "binance";
 
+/// The exchange's perp market, where something says none.
+pub fn perp_of(exchange: &str) -> Venue {
+    Venue::of(exchange).find(|v| !v.is_spot()).unwrap_or(Venue::USDM)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountCfg {
     pub id: String,
@@ -73,7 +78,7 @@ impl AccountCfg {
 
     /// The market its positions are on.
     pub fn perp(&self) -> Venue {
-        self.markets.iter().copied().find(|v| !v.is_spot()).unwrap_or(Venue::USDM)
+        self.markets.iter().copied().find(|v| !v.is_spot()).unwrap_or_else(|| perp_of(&self.exchange))
     }
 }
 
@@ -216,8 +221,8 @@ pub struct Config {
     pub master: Option<AccountCfg>,
     pub accounts: Vec<AccountCfg>,
     pub engines: Vec<EngineCfg>,
-    /// The one exchange the accounts name: a desk reads one until a second connector exists.
-    pub exchange: String,
+    /// The exchanges it reads, the first's clock its own: those its accounts name, then those of markets it only watches.
+    pub exchanges: Vec<String>,
 }
 
 impl Config {
@@ -253,8 +258,18 @@ impl Config {
             master: None,
             accounts: vec![],
             engines: vec![],
-            exchange: DEFAULT_EXCHANGE.into(),
+            exchanges: vec![DEFAULT_EXCHANGE.into()],
         }
+    }
+
+    /// The markets of the desk's exchanges.
+    pub fn venues(&self) -> impl Iterator<Item = Venue> + '_ {
+        Venue::all().filter(|v| self.exchanges.iter().any(|e| v.on(e)))
+    }
+
+    /// The asset the desk's cash is quoted in: its first exchange's.
+    pub fn quote(&self) -> &'static str {
+        self.exchanges.first().and_then(|e| Venue::of(e).next()).map_or(QUOTE, |v| v.market().quote)
     }
 }
 
@@ -376,7 +391,7 @@ fn sub_tables<'a>(t: &'a Table, k: &str) -> Result<Vec<&'a Table>> {
 /// An account's markets: `markets`, or `futures` as it always read. Both must agree, and they are the exchange's.
 fn account_markets(d: &Table, aid: &str, exchange: &str) -> Result<Vec<Venue>> {
     let futures = b(d, "futures", false)?;
-    let mut markets = vec![Venue::SPOT];
+    let mut markets = vec![Venue::of(exchange).find(|v| v.is_spot()).unwrap_or(Venue::SPOT)];
     if d.contains_key("markets") {
         markets = array(d, "markets")?
             .iter()
@@ -387,13 +402,19 @@ fn account_markets(d: &Table, aid: &str, exchange: &str) -> Result<Vec<Venue>> {
         if d.contains_key("futures") && futures != markets.iter().any(|v| !v.is_spot()) {
             bail!("account {aid}: futures = {futures} and markets = {markets:?} say different things");
         }
-        if !markets.iter().any(|v| v.is_spot()) {
-            bail!("account {aid}: markets need its spot market: the account's balances are read there");
+        if let Some(w) = Venue::of(exchange).find(|v| v.market().wallet)
+            && !markets.contains(&w)
+        {
+            bail!("account {aid}: markets need its {w} market: the account's balances are read there");
         }
-    } else if futures {
-        markets.push(Venue::USDM);
+    } else if Venue::of(exchange).any(|v| v.market().wallet) {
+        if futures {
+            markets.push(perp_of(exchange));
+        }
+    } else {
+        markets = Venue::of(exchange).collect();
     }
-    if let Some(v) = markets.iter().find(|v| !v.market().exchange.eq_ignore_ascii_case(exchange)) {
+    if let Some(v) = markets.iter().find(|v| !v.on(exchange)) {
         bail!("account {aid}: market {v} is not on exchange {exchange:?}");
     }
     Ok(markets)
@@ -420,7 +441,7 @@ fn account(d: &Table, role: Role, default_id: &str) -> Result<AccountCfg> {
 }
 
 /// `[roles]`, then `[[markets]] role`, then `hedge_symbols`: a perp named there hedges whatever its market's default.
-fn roles(t: &Table, markets: &[MarketCfg], hedge_symbols: &[String]) -> Result<Roles> {
+fn roles(t: &Table, markets: &[MarketCfg], hedge_symbols: &[String], exchanges: &[String]) -> Result<Roles> {
     let mut out = Roles::default();
     for (k, v) in t {
         let venue: Venue = k.parse().map_err(|e: String| anyhow!("[roles] {e}"))?;
@@ -435,7 +456,7 @@ fn roles(t: &Table, markets: &[MarketCfg], hedge_symbols: &[String]) -> Result<R
         }
     }
     for sym in hedge_symbols {
-        for venue in Venue::all().filter(|v| !v.is_spot()) {
+        for venue in Venue::all().filter(|v| !v.is_spot() && exchanges.iter().any(|e| v.on(e))) {
             if markets.iter().any(|m| m.symbol == *sym && m.venue == venue && m.role == Some(InstRole::Traded)) {
                 bail!("[[markets]] {sym}: role = \"traded\", and [exposure] hedge_symbols names it");
             }
@@ -456,14 +477,14 @@ fn vs_symbol(exp: &Table) -> Result<Option<String>> {
     })
 }
 
-fn beta(exp: &Table) -> Result<Option<BetaCfg>> {
+fn beta(exp: &Table, first_exchange: &str) -> Result<Option<BetaCfg>> {
     if s(exp, "beta", "fixed")? != "estimate" {
         return Ok(None);
     }
     let Some(vs) = vs_symbol(exp)? else {
         bail!("[exposure] beta = \"estimate\" needs beta_vs or hedge_symbols");
     };
-    let venue = beta_venue(exp)?;
+    let venue = beta_venue(exp, first_exchange)?;
     let sample_s = f(exp, "beta_sample_s", 10.0)?;
     Ok(Some(BetaCfg {
         vs: format!("{venue}:{vs}"),
@@ -477,21 +498,48 @@ fn beta(exp: &Table) -> Result<Option<BetaCfg>> {
     }))
 }
 
-/// beta_vs_venue as instrument keys name it: an alias reads as its market.
-fn beta_venue(exp: &Table) -> Result<&str> {
-    let v = s(exp, "beta_vs_venue", "usdm")?;
+/// beta_vs_venue as instrument keys name it: an alias reads as its market. Unset, the desk's first exchange's perps.
+fn beta_venue<'a>(exp: &'a Table, first_exchange: &str) -> Result<&'a str> {
+    let v = s(exp, "beta_vs_venue", perp_of(first_exchange).as_str())?;
     Ok(match v.parse::<Venue>() {
         Ok(venue) => venue.as_str(),
         Err(_) => v,
     })
 }
 
-fn beta_vs(exp: &Table) -> Result<Option<String>> {
-    Ok(vs_symbol(exp)?.map(|vs| format!("{}:{vs}", beta_venue(exp).unwrap_or("usdm"))))
+fn beta_vs(exp: &Table, first_exchange: &str) -> Result<Option<String>> {
+    Ok(vs_symbol(exp)?.map(|vs| format!("{}:{vs}", beta_venue(exp, first_exchange).unwrap_or(perp_of(first_exchange).as_str()))))
 }
 
 fn typed<T: serde::de::DeserializeOwned>(v: &Value, what: &str) -> Result<T> {
     v.clone().try_into().with_context(|| format!("[{what}]"))
+}
+
+/// What the desk reads: the exchanges its accounts name, in order, then those of the markets it is told to watch. A desk
+/// that names nothing reads the default one.
+fn exchanges_of<'a>(accounts: impl Iterator<Item = &'a AccountCfg>, markets: &[MarketCfg], exp: &Table) -> Result<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    let mut add = |e: String| {
+        if !out.iter().any(|x| x.eq_ignore_ascii_case(&e)) {
+            out.push(e);
+        }
+    };
+    for a in accounts {
+        add(a.exchange.to_lowercase());
+    }
+    for m in markets {
+        add(m.venue.exchange());
+        if let Some(r) = &m.reference {
+            add(r.venue.exchange());
+        }
+    }
+    if let Some(v) = opt_s(exp, "beta_vs_venue")?.and_then(|v| v.parse::<Venue>().ok()) {
+        add(v.exchange());
+    }
+    if out.is_empty() {
+        out.push(DEFAULT_EXCHANGE.into());
+    }
+    Ok(out)
 }
 
 /// Checks what sessions.rs would otherwise trip over at run time.
@@ -535,14 +583,16 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         if symbol.is_empty() {
             bail!("[[markets]] entry without symbol");
         }
+        let own = venue(m, "venue", "spot")?;
         let reference = match m.get("reference") {
             None => None,
-            Some(Value::Table(r)) => Some(Ref { symbol: s(r, "symbol", "")?.to_uppercase(), venue: venue(r, "venue", "usdm")? }),
+            // unset, the perp market of its own exchange
+            Some(Value::Table(r)) => Some(Ref { symbol: s(r, "symbol", "")?.to_uppercase(), venue: venue(r, "venue", perp_of(&own.exchange()).as_str())? }),
             Some(_) => bail!("[[markets]] {symbol}: reference must be a table"),
         };
         markets.push(MarketCfg {
             symbol: symbol.to_uppercase(),
-            venue: venue(m, "venue", "spot")?,
+            venue: own,
             reference,
             beta: f(m, "beta", 1.0)?,
             beta_prior: opt_f(m, "beta_prior")?,
@@ -553,14 +603,6 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         .iter()
         .map(|h| h.as_str().map(str::to_uppercase).ok_or_else(|| anyhow!("hedge_symbols: expected strings")))
         .collect::<Result<_>>()?;
-    let roles = roles(table(&raw, "roles")?, &markets, &hedge_symbols)?;
-    let mut beta = beta(exp)?;
-    if let Some(b) = beta.as_mut() {
-        b.priors = markets
-            .iter()
-            .filter_map(|m| m.beta_prior.map(|p| (format!("{}:{}", m.venue, m.symbol), p)))
-            .collect();
-    }
     let master = match raw.get("master") {
         None => None,
         Some(Value::Table(t)) => Some(account(t, Role::Master, "master")?),
@@ -571,6 +613,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         .enumerate()
         .map(|(i, a)| account(a, Role::Sub, &format!("sub-{}", i + 1)))
         .collect::<Result<_>>()?;
+    let exchanges = exchanges_of(master.iter().chain(&accounts), &markets, exp)?;
+    let roles = roles(table(&raw, "roles")?, &markets, &hedge_symbols, &exchanges)?;
+    let mut beta = beta(exp, &exchanges[0])?;
+    if let Some(b) = beta.as_mut() {
+        b.priors = markets
+            .iter()
+            .filter_map(|m| m.beta_prior.map(|p| (format!("{}:{}", m.venue, m.symbol), p)))
+            .collect();
+    }
     let engines = sub_tables(&raw, "engines")?
         .into_iter()
         .map(|e| {
@@ -581,14 +632,6 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
             Ok(EngineCfg { name: get("name")?, url: get("url")? })
         })
         .collect::<Result<_>>()?;
-    let exchange = {
-        let all: Vec<&AccountCfg> = master.iter().chain(&accounts).collect();
-        let first = all.first().map_or(DEFAULT_EXCHANGE, |a| a.exchange.as_str());
-        if let Some(other) = all.iter().find(|a| a.exchange != first) {
-            bail!("account {}: exchange {:?}, where the desk's is {first:?}: a desk reads one exchange for now", other.id, other.exchange);
-        }
-        first.to_string()
-    };
     let c = Config {
         path: path.clone(),
         listen: s(srv, "listen", "127.0.0.1:8710")?.into(),
@@ -616,11 +659,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         roles,
         markets_only: b(exp, "markets_only", false)?,
         beta,
-        beta_vs: beta_vs(exp)?,
+        beta_vs: beta_vs(exp, &exchanges[0])?,
         sessions: array(&raw, "sessions")?.iter().map(|x| typed(x, "sessions")).collect::<Result<_>>()?,
         events: array(&raw, "events")?.iter().map(|x| typed(x, "events")).collect::<Result<_>>()?,
         currency: {
-            let c = s(table(&raw, "desk")?, "currency", QUOTE)?;
+            let quote = Venue::of(&exchanges[0]).next().map_or(QUOTE, |v| v.market().quote);
+            let c = s(table(&raw, "desk")?, "currency", quote)?;
             // figures are not converted, so the name has to be a dollar's
             if c != "USD" && !is_stable(c) {
                 bail!("desk.currency: {c:?} would label figures valued at USDT = 1 with no conversion: USD or a USD stablecoin");
@@ -636,7 +680,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         master,
         accounts,
         engines,
-        exchange,
+        exchanges,
     };
     validate(&c)?;
     Ok(c)
@@ -751,7 +795,7 @@ mod tests {
         assert!(c.accounts[0].futures() && !c.accounts[1].futures());
         assert_eq!(c.accounts[0].markets, [Venue::SPOT, Venue::USDM]);
         assert_eq!(c.accounts[1].markets, [Venue::SPOT]);
-        assert_eq!(c.exchange, "binance");
+        assert_eq!(c.exchanges, ["binance"]);
         assert_eq!(c.master.as_ref().unwrap().private_key_env, "DESK_MASTER_PRIVATE_KEY");
         assert_eq!(c.fee_expiry, None);
         assert_eq!((c.currency.as_str(), c.market_making), ("USDT", true));

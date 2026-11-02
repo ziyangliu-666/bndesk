@@ -173,6 +173,8 @@ pub struct Account {
     pub email: String,
     pub role: Role,
     pub creds: Option<Rc<Credentials>>,
+    /// The exchange can be asked about it: it has a key, or reading it takes none.
+    pub readable: bool,
     pub balances: HashMap<String, (f64, f64)>,
     // account update time (ms) of each asset's balance held: REST updateTime or stream u; a snapshot or
     // event older than what is held is not applied (a REST read can be overtaken by a fill on the stream)
@@ -242,6 +244,7 @@ impl Account {
             label: cfg.label.clone(),
             email: cfg.email.clone(),
             role: cfg.role,
+            readable: creds.is_some(),
             creds,
             balances: HashMap::new(),
             bal_u: HashMap::new(),

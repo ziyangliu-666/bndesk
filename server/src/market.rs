@@ -262,6 +262,18 @@ impl Market {
         }
     }
 
+    /// What an exchange lists, read after the desk started: instruments made in the meantime take it up.
+    pub fn add_info(&mut self, info: Info) {
+        for (venue, symbols) in info {
+            for inst in self.insts.iter_mut().filter(|i| i.venue == venue) {
+                if let Some(s) = symbols.get(&inst.symbol) {
+                    (inst.base, inst.quote, inst.min_notional) = (s.base.clone(), s.quote.clone(), s.min_notional);
+                }
+            }
+            self.info.insert(venue, symbols);
+        }
+    }
+
     /// The instrument by key ("spot:XUSDT").
     pub fn get(&self, k: &str) -> Option<&Inst> {
         self.by_key.get(k).map(|&i| &self.insts[i])

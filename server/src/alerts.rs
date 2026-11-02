@@ -260,7 +260,7 @@ impl Alerts {
             }
             let (spot_active, futures) = acct.map_or((false, false), |x| {
                 let x = x.borrow();
-                (x.traded.iter().any(|k| k.starts_with("spot:")), x.cfg.futures())
+                (x.traded.iter().any(|k| k.split_once(':').and_then(|(v, _)| v.parse::<Venue>().ok()).is_some_and(Venue::is_spot)), x.cfg.futures())
             });
             if self.held(&format!("quote_idle:{}", a.id), spot_active && a.quote_free < ac.quote_idle_usd, now,
                          (ac.quote_idle_s * 1000.0) as i64) {
@@ -291,7 +291,7 @@ impl Alerts {
         }
 
         let now_s = now as f64 / 1000.0;
-        for g in desk.connector.rest_bans() {
+        for g in desk.exchanges.iter().flat_map(|c| c.rest_bans()) {
             let banned = g.banned;
             let last = g.last;
             if banned || last.is_some_and(|(_, t)| now_s - t < 600.0) {

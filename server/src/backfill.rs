@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::connector::{Connector, RestError};
+use crate::connector::{Exchanges, RestError};
 use crate::fills::{FillBook, HORIZONS};
 use crate::market::Market;
 use crate::pnl::{Bars, PnlBook};
@@ -29,13 +29,25 @@ pub trait Prices {
     fn trade_at(&self, key: &str, t: i64) -> impl Future<Output = anyhow::Result<Option<f64>>>;
 }
 
-impl Prices for Rc<dyn Connector> {
+/// The market of a key ("venue:SYMBOL").
+fn venue_of(key: &str) -> Option<Venue> {
+    key.split_once(':').and_then(|(v, _)| v.parse().ok())
+}
+
+/// Each key asked of its market's connector: a market this desk does not read has no prices.
+impl Prices for Exchanges {
     async fn bars(&self, key: &str, interval: &str, start: i64, end: i64) -> anyhow::Result<Vec<(i64, f64, f64)>> {
-        Connector::bars(&**self, key, interval, start, end).await
+        match venue_of(key).and_then(|v| self.of(v)) {
+            Some(c) => c.bars(key, interval, start, end).await,
+            None => Ok(vec![]),
+        }
     }
 
     async fn trade_at(&self, key: &str, t: i64) -> anyhow::Result<Option<f64>> {
-        Connector::trade_at(&**self, key, t).await
+        match venue_of(key).and_then(|v| self.of(v)) {
+            Some(c) => c.trade_at(key, t).await,
+            None => Ok(None),
+        }
     }
 }
 
@@ -75,7 +87,7 @@ pub struct Px {
 /// from 1 min bars; a market without them from the first trade at or after each time.
 pub async fn prices_at(src: &impl Prices, key: &str, ts: &[i64]) -> anyhow::Result<Vec<Option<Px>>> {
     let mut out = vec![None; ts.len()];
-    let second_bars = key.split_once(':').and_then(|(v, _)| v.parse::<Venue>().ok()).is_some_and(|v| v.market().second_bars);
+    let second_bars = venue_of(key).is_some_and(|v| v.market().second_bars);
     if !second_bars {
         for (k, &t) in ts.iter().enumerate() {
             out[k] = none_on_400(src.trade_at(key, t).await)?.map(|v| Px { v, fine: true });

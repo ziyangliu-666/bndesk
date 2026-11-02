@@ -19,12 +19,7 @@ pub const FAPI: &str = "https://fapi.binance.com";
 /// The only non-GET calls the monitor makes: creating and keeping alive a USD-M listen key.
 pub const ALLOWED_WRITES: [(&str, &str); 2] = [("POST", "/fapi/v1/listenKey"), ("PUT", "/fapi/v1/listenKey")];
 
-pub use crate::connector::RestError;
-
-/// Python's PermissionError for a write the read-only monitor refuses.
-#[derive(Debug, thiserror::Error)]
-#[error("read-only monitor refuses {0}")]
-pub struct PermissionError(pub String);
+pub use crate::connector::{PermissionError, RestError};
 
 pub fn governors() -> Governors {
     Governors { spot: Rc::new(Governor::new("spot", 6000, 0.5)), usdm: Rc::new(Governor::new("usdm", 2400, 0.5)) }

@@ -33,7 +33,7 @@ use serde_json::Value;
 use crate::backfill::{Prices, interp_at};
 use crate::beta::Betas;
 use crate::clock::CLOCK;
-use crate::connector::{self, PerpTrade};
+use crate::connector::{Exchanges, PerpTrade};
 use crate::config::Config;
 use crate::fills::FillRec;
 use crate::market::{Book, Market, STABLES};
@@ -391,9 +391,10 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let (from, to) = (hhmm(ds, from)?, hhmm(ds, to)?);
     let now = crate::clock::now_ms();
     anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min), "{day} is not over yet");
-    let public = connector::open(&cfg.exchange, connector::client(), None)?;
-    public.clock().lead();
-    public.sync_clock().await.context("time sync")?;
+    let public = Exchanges::open_once(&cfg.exchanges)?;
+    for c in public.iter() {
+        c.sync_clock().await.context("time sync")?;
+    }
     let t_bal = CLOCK.now();
 
     // the balances now and the futures legs, with each account's key
@@ -402,12 +403,13 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let mut pos: HashMap<String, f64> = HashMap::new();
     // symbol -> (trades, funding (t, amount))
     type Raw = (Vec<PerpTrade>, Vec<(i64, f64)>);
-    let mut legs_raw: HashMap<String, Raw> = HashMap::new();
+    let mut legs_raw: HashMap<(String, Venue), Raw> = HashMap::new();
     let mut perp_funding: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
     let mut traded_perps: Vec<(String, Venue)> = vec![];
     let c = crate::store::open(&cfg.db)?;
     for ac in &cfg.accounts {
-        let reader = public.reader(ac).map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
+        let exchange = public.named(&ac.exchange).ok_or_else(|| anyhow!("account {}: no connector for {:?}", ac.id, ac.exchange))?;
+        let reader = exchange.reader(ac).map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
         // when this account's balances stood (its fills up to then are in them)
         let balances = reader.balances().await?;
         read_at.insert(ac.id.clone(), balances.updated.unwrap_or_else(|| CLOCK.now()));
@@ -426,7 +428,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         }
         let venue = ac.perp();
         for sym in &leg_symbols(&c, cfg, venue, &ac.id, ds, &held)? {
-            let e = legs_raw.entry(sym.clone()).or_default();
+            let e = legs_raw.entry((sym.clone(), venue)).or_default();
             for t in reader.perp_trades(sym, ds).await? {
                 e.0.push(t);
             }
@@ -500,7 +502,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         let rows = st.query_map([ds, ds + DAY], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?, r.get::<_, String>(3)?)))?;
         for r in rows {
             let (ts, a, x, info) = r?;
-            if public.is_rebate(&info) {
+            if public.iter().any(|c| c.is_rebate(&info)) {
                 rebates.push((ts, a, x));
             }
         }
@@ -536,9 +538,9 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let mut bars = HashMap::new();
     for k in &want {
         // a traded perp at its mark, as equity has it
-        let perp = k.split_once(':').filter(|(v, _)| keys.contains(k) && v.parse::<Venue>().is_ok_and(|v| !v.is_spot())).map(|x| x.1);
-        let v = match perp {
-            Some(sym) => public.mark_bars(sym, ds - MIN, ds + DAY).await?,
+        let perp = k.split_once(':').and_then(|(v, s)| Some((v.parse::<Venue>().ok()?, s))).filter(|(v, _)| keys.contains(k) && !v.is_spot());
+        let v = match perp.and_then(|(v, s)| Some((public.of(v)?, s))) {
+            Some((c, sym)) => c.mark_bars(sym, ds - MIN, ds + DAY).await?,
             None => crate::backfill::none_on_400(public.bars(k, "1m", ds - MIN, ds + DAY).await)?,
         };
         bars.insert(k.clone(), v);
@@ -546,8 +548,9 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     eprintln!("{} kline series", bars.len());
     // the legs: mark price klines, the quantity at the day start
     let mut legs = vec![];
-    for (sym, (trades, funding)) in legs_raw {
-        let marks = public.mark_bars(&sym, ds - MIN, ds + DAY).await?;
+    for ((sym, venue), (trades, funding)) in legs_raw {
+        let exchange = public.of(venue).ok_or_else(|| anyhow!("{venue}: no connector"))?;
+        let marks = exchange.mark_bars(&sym, ds - MIN, ds + DAY).await?;
         let q_now = pos.get(&sym).copied().unwrap_or(0.0);
         let mut day_trades = vec![];
         let mut q_after = 0.0;

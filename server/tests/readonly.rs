@@ -105,7 +105,7 @@ fn no_order_or_transfer_endpoints_requested() {
 /// go on this list.
 const READS: [(&str, &[&str]); 4] = [
     ("PublicFeed", &["watch", "feeds", "stop"]),
-    ("KlineSource", &["id", "bars"]),
+    ("KlineSource", &["id", "bars", "ticker"]),
     ("AccountReader", &["balances", "perp_positions", "perp_trades", "perp_funding"]),
     ("Connector", &["id", "markets", "allowed_writes", "clock", "sync_clock", "keep_clock", "instruments", "public_feed", "book_tops", "bars", "trade_at",
                     "mark_bars", "kline_source", "rest_bans", "credentials", "start_accounts", "reader", "is_rebate", "distributions"]),
@@ -212,15 +212,15 @@ async fn binance_sends_only_reads_to_the_exchange() {
     let c: Rc<dyn Connector> = Rc::new(Binance::with_bases(connector::client(), None, &base, &base));
     c.sync_clock().await.unwrap();
     c.instruments().await.unwrap();
-    for v in Venue::all() {
-        c.book_tops(v).await.unwrap();
+    for v in c.markets() {
+        c.book_tops(v, &["XUSDT".to_string()]).await.unwrap();
         let key = format!("{v}:XUSDT");
         c.bars(&key, "1m", 0, 60_000).await.unwrap();
         c.trade_at(&key, 0).await.unwrap();
     }
     c.mark_bars("XUSDT", 0, 60_000).await.unwrap();
     let kl = c.kline_source();
-    for v in Venue::all() {
+    for v in c.markets() {
         let _ = kl.bars("XUSDT", v, "1m", 0, 60_000, 10).await;
     }
 

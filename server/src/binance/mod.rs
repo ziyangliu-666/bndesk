@@ -111,7 +111,7 @@ impl Connector for Binance {
         Rc::new(public::Streams::new(market))
     }
 
-    fn book_tops(&self, venue: Venue) -> Reply<'_, Vec<(String, f64, f64)>> {
+    fn book_tops<'a>(&'a self, venue: Venue, _symbols: &'a [String]) -> Reply<'a, Vec<(String, f64, f64)>> {
         async move {
             let (path, weight) = if venue == Venue::SPOT { ("/api/v3/ticker/bookTicker", 4) } else { ("/fapi/v1/ticker/bookTicker", 5) };
             let rows: Vec<Value> = self.public.get(path, &[], weight, false).await?;
@@ -149,8 +149,8 @@ impl Connector for Binance {
             .collect()
     }
 
-    fn credentials(&self, cfg: &AccountCfg) -> Result<Rc<Credentials>, String> {
-        crate::sign::credentials(&cfg.api_key_env, &cfg.private_key_env, &cfg.secret_env).map(Rc::new)
+    fn credentials(&self, cfg: &AccountCfg) -> Result<Option<Rc<Credentials>>, String> {
+        crate::sign::credentials(&cfg.api_key_env, &cfg.private_key_env, &cfg.secret_env).map(|c| Some(Rc::new(c)))
     }
 
     fn start_accounts(&self, accounts: &[AccountRef], transfers: &TransfersRef, day_start: Rc<Cell<i64>>) -> Vec<JoinHandle<()>> {
@@ -178,7 +178,7 @@ impl Connector for Binance {
 
     fn reader(&self, cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String> {
         let creds = self.credentials(cfg)?;
-        Ok(Box::new(reader::Reader(Rest::new(self.http.clone(), governors(), Some(creds), None).with_bases(&self.bases.0, &self.bases.1))))
+        Ok(Box::new(reader::Reader(Rest::new(self.http.clone(), governors(), creds, None).with_bases(&self.bases.0, &self.bases.1))))
     }
 
     fn is_rebate(&self, info: &str) -> bool {

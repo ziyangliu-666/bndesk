@@ -27,6 +27,11 @@ pub struct RestError {
     pub body: String,
 }
 
+/// A request that is not a read: refused before it leaves the process.
+#[derive(Debug, thiserror::Error)]
+#[error("read-only monitor refuses {0}")]
+pub struct PermissionError(pub String);
+
 /// The desk's HTTP pool.
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -50,6 +55,18 @@ pub trait PublicFeed {
 /// (open time, open, high, low, close, base volume).
 pub type Kline = (i64, f64, f64, f64, f64, f64);
 
+/// An instrument's last 24 h. An exchange that does not say a high or low gives none.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Ticker {
+    pub last: f64,
+    pub open: f64,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub volume: f64,
+    pub quote_volume: f64,
+    pub t: i64,
+}
+
 /// Why bars could not be had.
 pub enum KlineError {
     /// The exchange asked to be left alone this long.
@@ -65,6 +82,10 @@ pub trait KlineSource: Send + Sync {
     /// Up to `limit` bars of `interval` (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w) opening in [start, end].
     fn bars<'a>(&'a self, symbol: &'a str, venue: Venue, interval: &'a str, start: i64, end: i64, limit: i64)
                 -> BoxFuture<'a, Result<Vec<Kline>, KlineError>>;
+    /// The last 24 h, for a market the page has no socket of its own to. None: the page does not need it from here.
+    fn ticker<'a>(&'a self, _symbol: &'a str, _venue: Venue) -> BoxFuture<'a, Result<Option<Ticker>, KlineError>> {
+        Box::pin(std::future::ready(Ok(None)))
+    }
 }
 
 /// An exchange has stopped answering this IP, or did lately.
@@ -118,8 +139,8 @@ pub trait Connector {
     /// What each market lists.
     fn instruments(&self) -> Reply<'_, Info>;
     fn public_feed(&self, market: MarketRef) -> Rc<dyn PublicFeed>;
-    /// Every symbol's book top on a market: (symbol, bid, ask).
-    fn book_tops(&self, venue: Venue) -> Reply<'_, Vec<(String, f64, f64)>>;
+    /// The book tops of these symbols on a market: (symbol, bid, ask). May answer for more than it was asked.
+    fn book_tops<'a>(&'a self, venue: Venue, symbols: &'a [String]) -> Reply<'a, Vec<(String, f64, f64)>>;
     /// (open time, open, close) of the bars of `interval` ("1s", where the market has them; "1m") of an instrument key
     /// opening in [start, end]; an error `RestError` with status 400 means there are none, for good.
     fn bars<'a>(&'a self, key: &'a str, interval: &'a str, start: i64, end: i64) -> Reply<'a, Vec<(i64, f64, f64)>>;
@@ -130,9 +151,9 @@ pub trait Connector {
     fn kline_source(&self) -> Arc<dyn KlineSource>;
     fn rest_bans(&self) -> Vec<RestBan>;
 
-    /// The account's key, or why it has none.
-    fn credentials(&self, cfg: &AccountCfg) -> Result<Rc<Credentials>, String>;
-    /// Reads the accounts from here on, as `Event`s, and fills in the transfers.
+    /// The account's key, none if reading it takes none, or why it cannot be read.
+    fn credentials(&self, cfg: &AccountCfg) -> Result<Option<Rc<Credentials>>, String>;
+    /// Reads these accounts, all on this exchange, from here on, as `Event`s, and fills in the transfers.
     fn start_accounts(&self, accounts: &[AccountRef], transfers: &TransfersRef, day_start: Rc<Cell<i64>>) -> Vec<JoinHandle<()>>;
     /// An account's own reads, or why it cannot be read.
     fn reader(&self, cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String>;
@@ -147,5 +168,89 @@ pub fn open(id: &str, http: reqwest::Client, feed: Option<FeedRef>) -> Result<Rc
     match id {
         "binance" => Ok(Rc::new(Binance::new(http, feed))),
         _ => anyhow::bail!("no connector for exchange {id:?}"),
+    }
+}
+
+/// The connectors of a desk: `Venue::market().exchange` picks one. The first's clock is the desk's.
+#[derive(Clone)]
+pub struct Exchanges(Vec<Rc<dyn Connector>>);
+
+impl Exchanges {
+    /// One connector per id; `feeds` beside them, what each one's public requests count on.
+    pub fn open(ids: &[String], http: &reqwest::Client, feeds: &[Option<FeedRef>]) -> Result<Exchanges> {
+        let list: Vec<Rc<dyn Connector>> = ids.iter().zip(feeds).map(|(id, f)| open(id, http.clone(), f.clone())).collect::<Result<_>>()?;
+        Ok(Exchanges::from(list))
+    }
+
+    pub fn from(list: Vec<Rc<dyn Connector>>) -> Exchanges {
+        if let Some(c) = list.first() {
+            c.clock().lead();
+        }
+        Exchanges(list)
+    }
+
+    /// Connectors with no feed, for a command that runs once.
+    pub fn open_once(ids: &[String]) -> Result<Exchanges> {
+        Self::open(ids, &client(), &vec![None; ids.len()])
+    }
+
+    /// What every market lists.
+    pub async fn instruments(&self) -> Result<Info> {
+        let mut info = Info::new();
+        for c in &self.0 {
+            info.extend(c.instruments().await?);
+        }
+        Ok(info)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Rc<dyn Connector>> {
+        self.0.iter()
+    }
+
+    pub fn first(&self) -> &Rc<dyn Connector> {
+        &self.0[0]
+    }
+
+    pub fn named(&self, exchange: &str) -> Option<&Rc<dyn Connector>> {
+        self.0.iter().find(|c| c.id().eq_ignore_ascii_case(exchange))
+    }
+
+    pub fn of(&self, venue: Venue) -> Option<&Rc<dyn Connector>> {
+        self.0.iter().find(|c| venue.on(c.id()))
+    }
+
+    /// What every market's bars come from: a market with no connector here has none.
+    pub fn kline_source(&self) -> Arc<dyn KlineSource> {
+        let sources: Vec<(&'static str, Arc<dyn KlineSource>)> = self.0.iter().map(|c| (c.id(), c.kline_source())).collect();
+        Arc::new(KlineRoutes(sources))
+    }
+}
+
+struct KlineRoutes(Vec<(&'static str, Arc<dyn KlineSource>)>);
+
+impl KlineRoutes {
+    fn of(&self, venue: Venue) -> Result<&Arc<dyn KlineSource>, KlineError> {
+        self.0.iter().find(|(id, _)| venue.on(id)).map(|x| &x.1).ok_or_else(|| KlineError::Refused(format!("this desk does not read {venue}")))
+    }
+}
+
+impl KlineSource for KlineRoutes {
+    fn id(&self) -> &'static str {
+        self.0.first().map_or("exchange", |x| x.0)
+    }
+
+    fn bars<'a>(&'a self, symbol: &'a str, venue: Venue, interval: &'a str, start: i64, end: i64, limit: i64)
+                -> BoxFuture<'a, Result<Vec<Kline>, KlineError>> {
+        match self.of(venue) {
+            Ok(s) => s.bars(symbol, venue, interval, start, end, limit),
+            Err(e) => Box::pin(std::future::ready(Err(e))),
+        }
+    }
+
+    fn ticker<'a>(&'a self, symbol: &'a str, venue: Venue) -> BoxFuture<'a, Result<Option<Ticker>, KlineError>> {
+        match self.of(venue) {
+            Ok(s) => s.ticker(symbol, venue),
+            Err(e) => Box::pin(std::future::ready(Err(e))),
+        }
     }
 }

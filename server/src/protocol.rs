@@ -52,12 +52,18 @@ pub struct Market {
     /// It has 1 s bars: a backfilled price comes from those, not from a trade.
     #[serde(skip)]
     pub second_bars: bool,
+    /// An account's balances are read on this market, so an account has to be on it.
+    #[serde(skip)]
+    pub wallet: bool,
+    /// The asset its prices and its accounts' cash are in.
+    #[serde(skip)]
+    pub quote: &'static str,
 }
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
 pub static MARKETS: [Market; 2] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false },
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, wallet: true, quote: "USDT" },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, wallet: false, quote: "USDT" },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.
@@ -87,6 +93,20 @@ impl Venue {
 
     pub fn is_spot(self) -> bool {
         self.market().kind == MarketKind::Spot
+    }
+
+    /// The markets of an exchange, by what its accounts say: `exchange = "binance"`.
+    pub fn of(exchange: &str) -> impl Iterator<Item = Venue> + '_ {
+        Venue::all().filter(move |v| v.on(exchange))
+    }
+
+    pub fn on(self, exchange: &str) -> bool {
+        self.market().exchange.eq_ignore_ascii_case(exchange)
+    }
+
+    /// The exchange's name as an account says it.
+    pub fn exchange(self) -> String {
+        self.market().exchange.to_lowercase()
     }
 }
 
