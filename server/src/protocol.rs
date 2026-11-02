@@ -58,6 +58,9 @@ pub struct Market {
     /// An account's balances are read on this market, so an account has to be on it.
     #[serde(skip)]
     pub wallet: bool,
+    /// Its accounts are read with an address and no key.
+    #[serde(skip)]
+    pub keyless: bool,
     /// The asset its prices and its accounts' cash are in.
     #[serde(skip)]
     pub quote: &'static str,
@@ -65,10 +68,10 @@ pub struct Market {
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
 pub static MARKETS: [Market; 4] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, quote: "USDT" },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, quote: "USDT" },
-    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, quote: "USDC" },
-    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, quote: "USDC" },
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, keyless: false, quote: "USDT" },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, keyless: false, quote: "USDT" },
+    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, keyless: true, quote: "USDC" },
+    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, keyless: true, quote: "USDC" },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.

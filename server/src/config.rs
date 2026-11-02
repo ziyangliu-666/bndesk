@@ -52,6 +52,8 @@ pub struct AccountCfg {
     pub api_key_env: String,
     pub secret_env: String,
     pub private_key_env: String,
+    /// Where reading takes no key: the environment variable holding the account's address.
+    pub address_env: String,
     pub show: bool,   // false: used for transfers and sub-account reads, kept off the desk
 }
 
@@ -67,6 +69,7 @@ impl AccountCfg {
             api_key_env: String::new(),
             secret_env: String::new(),
             private_key_env: String::new(),
+            address_env: String::new(),
             show: true,
         }
     }
@@ -423,8 +426,20 @@ fn account_markets(d: &Table, aid: &str, exchange: &str) -> Result<Vec<Venue>> {
 fn account(d: &Table, role: Role, default_id: &str) -> Result<AccountCfg> {
     let aid = s(d, "id", default_id)?;
     let exchange = s(d, "exchange", DEFAULT_EXCHANGE)?;
-    if !crate::protocol::MARKETS.iter().any(|m| m.exchange.eq_ignore_ascii_case(exchange)) {
+    if Venue::of(exchange).next().is_none() {
         bail!("account {aid}: no connector for exchange {exchange:?}");
+    }
+    let keyless = Venue::of(exchange).any(|v| v.market().keyless);
+    if keyless {
+        // a desk that reads never holds what could trade
+        if let Some(k) = ["api_key_env", "secret_env", "private_key_env"].iter().find(|k| d.contains_key(**k)) {
+            bail!("account {aid}: {k}: reading an account on {exchange} takes its address (address_env) and no key, so this desk will not take one");
+        }
+        if role == Role::Master {
+            bail!("[master]: {exchange} has no master account to read others through: each is an [[accounts]] entry of its own");
+        }
+    } else if d.contains_key("address_env") {
+        bail!("account {aid}: address_env: {exchange} reads an account with a key");
     }
     Ok(AccountCfg {
         id: aid.into(),
@@ -436,6 +451,7 @@ fn account(d: &Table, role: Role, default_id: &str) -> Result<AccountCfg> {
         api_key_env: s(d, "api_key_env", "")?.into(),
         secret_env: s(d, "secret_env", "")?.into(),
         private_key_env: s(d, "private_key_env", "")?.into(),
+        address_env: s(d, "address_env", "")?.into(),
         show: b(d, "show", true)?,
     })
 }
@@ -766,6 +782,48 @@ mod tests {
         assert!(one("markets = [\"usdm\"]").unwrap_err().to_string().contains("spot market"));
         assert!(one("markets = [\"coinm\"]").is_err());
         assert!(one("exchange = \"elsewhere\"").unwrap_err().to_string().contains("no connector"));
+    }
+
+    #[test]
+    fn a_desk_on_hyperliquid_alone_or_beside_binance() {
+        let d = tempfile::tempdir().unwrap();
+        let hl = "exchange = \"hyperliquid\"\naddress_env = \"X\"";
+        // every market of the exchange by default, a perp alone if said: no spot market is needed to read balances
+        let c = load(write(&d, &format!("[[accounts]]\nid = \"h\"\n{hl}\n"))).unwrap();
+        assert_eq!((c.accounts[0].markets.as_slice(), c.exchanges.as_slice()), ([Venue::HL, Venue::HL_SPOT].as_slice(), ["hyperliquid".to_string()].as_slice()));
+        assert_eq!((c.accounts[0].perp(), c.quote(), c.currency.as_str()), (Venue::HL, "USDC", "USDC"));
+        let c = load(write(&d, &format!("[[accounts]]\nid = \"h\"\n{hl}\nmarkets = [\"hl\"]\n"))).unwrap();
+        assert_eq!(c.accounts[0].markets, [Venue::HL]);
+        assert_eq!(load(write(&d, &format!("[[accounts]]\nid = \"h\"\n{hl}\nmarkets = [\"hlspot\"]\n"))).unwrap().accounts[0].perp(), Venue::HL);
+        assert!(load(write(&d, &format!("[[accounts]]\nid = \"h\"\n{hl}\nmarkets = [\"usdm\"]\n"))).unwrap_err().to_string().contains("not on exchange"));
+        // beside Binance: the first account's exchange leads, and a market it only watches brings its exchange
+        let c = load(write(&d, &format!("[[accounts]]\nid = \"b\"\nfutures = true\n[[accounts]]\nid = \"h\"\n{hl}\n"))).unwrap();
+        assert_eq!(c.exchanges, ["binance", "hyperliquid"]);
+        assert_eq!(c.venues().collect::<Vec<_>>(), [Venue::SPOT, Venue::USDM, Venue::HL, Venue::HL_SPOT]);
+        assert_eq!((c.quote(), c.currency.as_str()), ("USDT", "USDT"));
+        let c = load(write(&d, "[[markets]]\nsymbol = \"BTC\"\nvenue = \"hl\"\n")).unwrap();
+        assert_eq!(c.exchanges, ["hyperliquid"]);
+        let c = load(write(&d, "[[accounts]]\nid = \"b\"\n[[markets]]\nsymbol = \"BTC\"\nvenue = \"hl\"\n")).unwrap();
+        assert_eq!(c.exchanges, ["binance", "hyperliquid"]);
+        // a reference names its own exchange's perps by default; hedge_symbols reach this desk's markets and no others
+        let c = load(write(&d, "[exposure]\nhedge_symbols = [\"BTC\"]\n[[markets]]\nsymbol = \"HYPEUSDC\"\nvenue = \"hlspot\"\nreference = { symbol = \"HYPE\" }\n")).unwrap();
+        assert_eq!(c.markets[0].reference.as_ref().unwrap().venue, Venue::HL);
+        assert_eq!(c.beta_vs.as_deref(), Some("hl:BTC"));
+        assert_eq!(serde_json::to_value(&c.roles).unwrap()["instruments"], serde_json::json!({"hl:BTC": "hedge"}));
+        let c = load(write(&d, "[exposure]\nhedge_symbols = [\"AUSDT\"]\n")).unwrap();
+        assert_eq!(serde_json::to_value(&c.roles).unwrap()["instruments"], serde_json::json!({"usdm:AUSDT": "hedge"}));
+    }
+
+    #[test]
+    fn hyperliquid_refuses_a_key_outright() {
+        let d = tempfile::tempdir().unwrap();
+        let one = |t: &str| load(write(&d, t)).unwrap_err().to_string();
+        for k in ["api_key_env", "secret_env", "private_key_env"] {
+            let e = one(&format!("[[accounts]]\nid = \"h\"\nexchange = \"hyperliquid\"\n{k} = \"X\"\n"));
+            assert!(e.contains("no key"), "{k}: {e}");
+        }
+        assert!(one("[master]\nexchange = \"hyperliquid\"\n").contains("no master"));
+        assert!(one("[[accounts]]\nid = \"b\"\naddress_env = \"X\"\n").contains("reads an account with a key"));
     }
 
     #[test]

@@ -64,10 +64,13 @@ pub async fn bars(info: &Info, names: &NamesRef, key: &str, interval: &str, star
     Ok(out)
 }
 
+/// An instrument's (mark, previous day's price, base volume, notional).
+type DayFigures = (f64, f64, f64, f64);
+
 #[derive(Default)]
 struct Cached {
-    /// asked at, and desk symbol's (market, symbol) -> (mark, previous day's price, base volume, notional)
-    ctxs: (i64, HashMap<(Venue, String), (f64, f64, f64, f64)>),
+    /// asked at, and each instrument's day figures
+    ctxs: (i64, HashMap<(Venue, String), DayFigures>),
     /// each instrument's asked at, high, low
     ranges: HashMap<(Venue, String), (i64, f64, f64)>,
 }

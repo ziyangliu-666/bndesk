@@ -941,7 +941,7 @@ impl Desk {
                 a.transfers_day = td;
                 a.day_start = ds;
                 a.equity_mark = if a.can_open(&mut m) { Some((now, a.equity(&mut m))) } else { None };
-                if let Some(eo) = a.take_opening(&mut m, tr.loaded) {
+                if let Some(eo) = a.take_opening(&mut m, tr.ready()) {
                     self.store.put(Row::Kv(format!("open:{}:{ds}", a.id), repr(eo)));
                 }
                 for (s, (amt, _)) in &a.positions {

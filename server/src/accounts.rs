@@ -80,6 +80,8 @@ pub enum Event {
     BalanceSnapshot { u: i64, rows: HashMap<String, (f64, f64)> },
     /// Every balance, from a read with no update time (through a parent account).
     BalancesRead { rows: Vec<(String, f64, f64)> },
+    /// Funding paid on a perp at `t`, for an exchange that says which perp.
+    Funding { t: i64, symbol: String, usd: f64 },
     /// A balance change apart from trading.
     Move(Move),
     /// An order was placed at t, for a desk that counts them itself (`CountOrdersHere`).
@@ -694,6 +696,13 @@ impl Account {
                 self.set_balances(rows, true);
                 self.spot_loaded = true;
             }
+            Event::Funding { t, symbol, usd } => {
+                let ds = self.day_start;
+                self.funding_stream.retain(|x| x.0 >= ds);
+                if t >= ds && !self.funding_stream.iter().any(|x| x.0 == t && x.1 == symbol) {
+                    self.funding_stream.push((t, symbol, usd));
+                }
+            }
             Event::Move(mv) => self.moves.push(mv),
             Event::OrderPlaced { t } => self.count_new(t),
             Event::Order { venue, symbol, id, side, price, left, open, created } => {
@@ -876,7 +885,7 @@ pub type TransfersRef = Rc<RefCell<Transfers>>;
 /// Called once per new transfer record (the store keeps them).
 pub type OnRecord = Rc<dyn Fn(&str, &Transfer)>;
 
-/// What the master's key sees: transfers since the day start, as a connector finds them.
+/// Transfers since the day start, as a connector finds them: what a master's key sees, or each account's own ledger.
 pub struct Transfers {
     pub loaded: bool,   // opening equity waits for the first history
     pub master: Option<AccountRef>,
@@ -885,6 +894,8 @@ pub struct Transfers {
     pub records: HashMap<String, Transfer>,
     pub on_record: OnRecord,
     pub sub_info: String,
+    /// Accounts whose ledger has not been read yet, on an exchange where each account has its own.
+    pub pending: HashSet<String>,
 }
 
 impl Transfers {
@@ -904,7 +915,13 @@ impl Transfers {
             records: HashMap::new(),
             on_record: Rc::new(|_, _| {}),
             sub_info: String::new(),
+            pending: HashSet::new(),
         }
+    }
+
+    /// Every history there is to read has been: today's transfers can be taken off an opening equity.
+    pub fn ready(&self) -> bool {
+        self.loaded && self.pending.is_empty()
     }
 
     pub fn add(&mut self, tid: &str, rec: Transfer) {

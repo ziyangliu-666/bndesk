@@ -4,6 +4,9 @@ pub mod rest;
 pub mod names;
 pub mod public;
 pub mod klines;
+pub mod events;
+pub mod account;
+pub mod reader;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -44,6 +47,15 @@ impl Hyperliquid {
     pub fn with_bases(http: reqwest::Client, feed: Option<FeedRef>, base: &str, ws_url: &str) -> Self {
         Hyperliquid { client: Client::new(http, base, feed), names: Arc::new(RwLock::new(names::Names::default())), base: base.into(), ws_url: ws_url.into() }
     }
+}
+
+/// The account's address, from the environment like any other account's identity: lowercase, as its ledger writes them.
+pub fn address(cfg: &AccountCfg) -> Result<String, String> {
+    let name = if cfg.address_env.is_empty() { "(address_env unset)" } else { &cfg.address_env };
+    let v = std::env::var(&cfg.address_env).ok().filter(|v| !v.is_empty()).ok_or_else(|| format!("no address: env {name} is empty"))?;
+    let hex = v.strip_prefix("0x").filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    hex.ok_or_else(|| format!("env {name} is not an address: 0x and 40 hex digits"))?;
+    Ok(v.to_lowercase())
 }
 
 impl Connector for Hyperliquid {
@@ -135,16 +147,26 @@ impl Connector for Hyperliquid {
         vec![self.client.pace.ban()]
     }
 
-    fn credentials(&self, _cfg: &AccountCfg) -> Result<Option<Rc<Credentials>>, String> {
-        Err("reading an account comes next".into())
+    /// None: an address is all reading an account takes.
+    fn credentials(&self, cfg: &AccountCfg) -> Result<Option<Rc<Credentials>>, String> {
+        address(cfg).map(|_| None)
     }
 
-    fn start_accounts(&self, _accounts: &[AccountRef], _transfers: &TransfersRef, _day_start: Rc<Cell<i64>>) -> Vec<JoinHandle<()>> {
-        vec![]
+    fn start_accounts(&self, accounts: &[AccountRef], transfers: &TransfersRef, _day_start: Rc<Cell<i64>>) -> Vec<JoinHandle<()>> {
+        let mut tasks = vec![];
+        for (i, a) in accounts.iter().enumerate() {
+            let (user, feed) = {
+                let ab = a.borrow();
+                (address(&ab.cfg), ab.rest_feed.clone())
+            };
+            let Ok(user) = user else { continue };
+            tasks.extend(account::start(a, &user, &self.names, self.client.with_feed(feed), transfers, &self.ws_url, i as f64 * 3.0));
+        }
+        tasks
     }
 
-    fn reader(&self, _cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String> {
-        Err("reading an account comes next".into())
+    fn reader(&self, cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String> {
+        Ok(Box::new(reader::Reader { read: self.client.clone(), user: address(cfg)?, names: self.names.clone() }))
     }
 
     /// Its maker rebates are negative fees on the fills, and it has no distributions.
