@@ -238,6 +238,25 @@ pub struct Mark<'a> {
     pub next_funding: Option<i64>,
 }
 
+/// Where an asset is priced on a spot market other than `Venue::SPOT`: its pair in that market's own quote, else in a
+/// stablecoin, the first by name when there are several.
+fn other_pairs(info: &Info) -> HashMap<String, (String, Venue)> {
+    let mut out: HashMap<String, (String, Venue, bool)> = HashMap::new();
+    for venue in Venue::all().filter(|v| v.is_spot() && *v != Venue::SPOT) {
+        for (symbol, s) in info.get(&venue).into_iter().flatten() {
+            let own = s.quote == venue.market().quote;
+            if !own && !is_stable(&s.quote) {
+                continue;
+            }
+            let better = out.get(&s.base).is_none_or(|(held, _, held_own)| (own, std::cmp::Reverse(symbol)) > (*held_own, std::cmp::Reverse(held)));
+            if better {
+                out.insert(s.base.clone(), (symbol.clone(), venue, own));
+            }
+        }
+    }
+    out.into_iter().map(|(a, (s, v, _))| (a, (s, v))).collect()
+}
+
 pub struct Market {
     pub info: Info,
     pub halflife_s: f64,
@@ -246,12 +265,15 @@ pub struct Market {
     pub insts: Vec<Inst>,
     by_key: HashMap<String, InstId>,
     by_sym: [FxHashMap<Box<str>, InstId>; Venue::COUNT],
+    /// asset -> its pair on a spot market other than `Venue::SPOT`, for an asset with no `<asset>USDT` there
+    other_pairs: HashMap<String, (String, Venue)>,
     pub on_new: Box<dyn FnMut(&Inst)>,
 }
 
 impl Market {
     pub fn new(info: Info, halflife_s: f64, max_spread_bps: f64) -> Self {
         Market {
+            other_pairs: other_pairs(&info),
             info,
             halflife_s,
             max_spread_bps,
@@ -272,6 +294,7 @@ impl Market {
             }
             self.info.insert(venue, symbols);
         }
+        self.other_pairs = other_pairs(&self.info);
     }
 
     /// The instrument by key ("spot:XUSDT").
@@ -327,11 +350,16 @@ impl Market {
         if let Some(id) = self.find(&sym, Venue::SPOT) {
             return Some(id);
         }
-        self.known(&sym, Venue::SPOT).then(|| self.ensure(&sym, Venue::SPOT, None))
+        if self.known(&sym, Venue::SPOT) {
+            return Some(self.ensure(&sym, Venue::SPOT, None));
+        }
+        let (sym, venue) = self.other_pairs.get(asset)?.clone();
+        Some(self.ensure(&sym, venue, None))
     }
 
-    /// The asset's USD (USDT) price now: its USDT market's valuation price. USDT is 1; another stablecoin is
-    /// priced like any asset (USDC at USDCUSDT's mid), 1 only while its pair has no price (or none is listed).
+    /// The asset's USD (USDT) price now: its USDT market's valuation price, or with none, its pair on another exchange's
+    /// spot market (taken as USD until the numeraire is real). USDT is 1; another stablecoin is priced like any asset
+    /// (USDC at USDCUSDT's mid), 1 only while its pair has no price (or none is listed).
     pub fn asset_price(&mut self, asset: &str) -> Option<f64> {
         if asset == QUOTE {
             return Some(1.0);
@@ -548,6 +576,42 @@ mod tests {
         assert_relative_eq!(m.asset_price("LDBTC").unwrap(), 100.01, max_relative = 1e-12);
         assert_eq!(m.asset_price("ZZZ"), None);
         assert!(m.get("spot:ZZZUSDT").is_none());
+    }
+
+    #[test]
+    fn an_asset_with_no_usdt_market_is_priced_on_another_exchanges_spot() {
+        let mut i = info(&[("BTCUSDT", SymbolInfo::new("BTC", "USDT", 5.0))]);
+        i.insert(Venue::HL_SPOT, HashMap::from([
+            ("HYPEUSDC".to_string(), SymbolInfo::new("HYPE", "USDC", 10.0)),
+            ("HYPEUSDE".to_string(), SymbolInfo::new("HYPE", "USDE", 10.0)),
+            ("HYPEDAI".to_string(), SymbolInfo::new("HYPE", "DAI", 10.0)),
+            ("BTCUSDC".to_string(), SymbolInfo::new("BTC", "USDC", 10.0)),
+            ("PIPDAI".to_string(), SymbolInfo::new("PIP", "DAI", 10.0)),
+            ("ODDHYPE".to_string(), SymbolInfo::new("ODD", "HYPE", 10.0)),
+        ]));
+        i.insert(Venue::HL, HashMap::from([("ONLYPERP".to_string(), SymbolInfo::new("ONLYPERP", "USDC", 10.0))]));
+        let mut m = Market::new(i, 120.0, 100.0);
+        // its own quote first, then a stablecoin; a pair in anything else prices nothing; a perp is not a price of an asset
+        assert_eq!(m.asset_inst("HYPE").map(|i| m.insts[i].key.clone()), Some("hlspot:HYPEUSDC".to_string()));
+        assert_eq!(m.asset_inst("PIP").map(|i| m.insts[i].key.clone()), Some("hlspot:PIPDAI".to_string()));
+        assert_eq!(m.asset_inst("ODD"), None);
+        assert_eq!(m.asset_inst("ONLYPERP"), None);
+        // Binance's stays first, and a desk on Binance alone never gets here
+        assert_eq!(m.asset_inst("BTC").map(|i| m.insts[i].key.clone()), Some("spot:BTCUSDT".to_string()));
+        m.on_book(Venue::HL_SPOT, &Book::new("HYPEUSDC", 87.0, 87.2, Some(1)));
+        assert_relative_eq!(m.asset_price("HYPE").unwrap(), 87.1, max_relative = 1e-12);
+        assert_eq!(m.asset_price("USDC"), Some(1.0));
+    }
+
+    #[test]
+    fn a_listing_read_late_joins_what_was_made_before_it() {
+        let mut m = Market::new(Info::new(), 120.0, 100.0);
+        let x = m.ensure("KPEPE", Venue::HL, None);
+        assert_eq!((m.insts[x].base.as_str(), m.insts[x].quote.as_str()), ("KPEPE", "USDT"));
+        m.add_info(Info::from([(Venue::HL, HashMap::from([("KPEPE".to_string(), SymbolInfo::new("KPEPE", "USDC", 10.0))])),
+                               (Venue::HL_SPOT, HashMap::from([("HYPEUSDC".to_string(), SymbolInfo::new("HYPE", "USDC", 10.0))]))]));
+        assert_eq!((m.insts[x].quote.as_str(), m.insts[x].min_notional), ("USDC", 10.0));
+        assert!(m.asset_inst("HYPE").is_some());
     }
 
     #[test]

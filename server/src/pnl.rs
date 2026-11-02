@@ -654,7 +654,7 @@ impl PnlBook {
         let f = Rc::new(PFill {
             ts,
             symbol: m.insts[inst].symbol.clone(),
-            venue: Venue::SPOT,
+            venue: m.insts[inst].venue,
             side: if qty > 0.0 { Side::Buy } else { Side::Sell },
             price: px,
             qty: qty.abs(),
