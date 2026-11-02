@@ -15,7 +15,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
-import { cur, baseOf, isTraded, venueTag } from "../desk";
+import { cur, baseOf, isTraded, venueTag, exchangeWord } from "../desk";
 
 const short = (s: string) => baseOf(s);
 
@@ -45,7 +45,7 @@ const tradingAccounts = (accounts: Account[]) => accounts.filter((a) => a.role !
  *  line. Bars are neutral and turn amber, then red, only near a limit. */
 /** How the counts were had when not from Binance's own /api/v3/rateLimit/order. */
 const streamNote = (a: Account) =>
-  a.orders_source === "stream" ? " Counted from the user stream (the key cannot read Binance's own count): orders Binance rejected are not in it." : "";
+  a.orders_source === "stream" ? ` Counted from the user stream (the key cannot read ${exchangeWord()}'s own count): orders it rejected are not in it.` : "";
 
 function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrder[] }) {
   const m = useAmount();
@@ -82,7 +82,7 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
             {/* what can run out, a row each: label, how near the limit (the bar), the figure */}
             <div className="ops-limit-rows fig">
               {!a.no_order_limits && <>
-              <span className="ops-l" title={`Orders placed in the last 10 s, of Binance's ${int(l10)}.${streamNote(a)}`}>Orders 10 s</span>
+              <span className="ops-l" title={`Orders placed in the last 10 s, of ${exchangeWord()}'s ${int(l10)}.${streamNote(a)}`}>Orders 10 s</span>
               <LimitBar value={a.orders_10s} limit={l10} />
               <span className={limitTone(r10)}>
                 {int(a.orders_10s)} / {int(l10)}

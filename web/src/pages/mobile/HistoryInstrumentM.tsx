@@ -19,7 +19,7 @@ import {
 import type { Venue } from "../../protocol";
 import { Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./history.css";
-import { cur, isPerp, marketOf } from "../../desk";
+import { cur, isPerp, marketOf, notionalCur } from "../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -57,7 +57,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
       iv === "line"
         ? { key: "k", kind: "line", label: symbol, color: C.ink, data: closePoints(k.bars), toggle: false, format: price }
         : { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false, format: price },
-      { key: "vol", kind: "histogram", label: `Vol(${cur()})`, pane: 1, data: volumePoints(k.bars, true), format: (v) => compact(v), lastValue: false },
+      { key: "vol", kind: "histogram", label: `Vol(${notionalCur()})`, pane: 1, data: volumePoints(k.bars, true), format: (v) => compact(v), lastValue: false },
     ],
     [iv, k.bars, symbol],
   );

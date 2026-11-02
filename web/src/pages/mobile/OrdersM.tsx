@@ -12,7 +12,7 @@ import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./rest/ops.css";
-import { cur, baseOf, isPerp, isSpot, venueTag } from "../../desk";
+import { cur, baseOf, isPerp, isSpot, venueTag, exchangeWord, notionalCur } from "../../desk";
 
 const base = (s: string) => baseOf(s);
 const MAX_ROWS = 200;
@@ -171,7 +171,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
                 { label: "Fair", value: price(sel.fair) },
                 { label: "From fair", value: `${bps(sel.dist_bps)} bps`, tone: sel.dist_bps != null && sel.dist_bps < 0 ? "warn" : "" },
                 { label: "Amount", value: qOf(sel.qty) },
-                { label: `Notional (${cur()})`, value: money(sel.notional, "full") },
+                { label: `Notional (${notionalCur()})`, value: money(sel.notional, "full") },
                 { label: "Account", value: labelOf(sel.account) },
                 { label: "Placed", value: sel.since != null ? hms(sel.since, tz) + (tz === "utc" ? " UTC" : "") : "--" },
                 { label: "Age", value: sel.since != null ? span(now - sel.since) : "--" },
@@ -243,7 +243,7 @@ function Rates({ accounts: all }: { accounts: Account[] }) {
   if (!accounts.length) return <Empty>{all.length ? "No order limits on this exchange" : "No account is trading"}</Empty>;
   const lim1d = accounts.find((a) => a.orders_1d_limit > 0)?.orders_1d_limit;
   const stream = accounts.some((a) => a.orders_source === "stream")
-    ? "\n\nCounted from the user stream (the key cannot read Binance's own count): orders Binance rejected are not in it."
+    ? `\n\nCounted from the user stream (the key cannot read ${exchangeWord()}'s own count): orders it rejected are not in it.`
     : "";
   const digits = pctDigits(accounts.filter((a) => a.orders_1d_limit > 0).map((a) => a.orders_1d / a.orders_1d_limit));
   return (

@@ -12,7 +12,7 @@ import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, typ
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
-import { cur, roled, useDesk } from "../../desk";
+import { roled, useDesk, notionalCur } from "../../desk";
 
 type Tab = "pnl" | "equity" | "exposure";
 const TABS: { value: Tab; label: string; title: string }[] = [
@@ -123,7 +123,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const vol: ExSeries = {
     key: "vol",
     kind: "histogram",
-    label: `Vol(${cur()})`,
+    label: `Vol(${notionalCur()})`,
     color: VOL,
     pane: 1,
     data: pts("vol", (r) => r.vol, step === 0 ? past.rows : head, volTail),
@@ -138,7 +138,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   };
   const volLegend: ExLegendItem[] =
     step === 0 && tab !== "equity" && tab !== "exposure"
-      ? [{ pane: 1, key: "vol", label: `Vol(${cur()})`, value: (t) => { const r = volAt(t); return r ? [fBig(r.vol), C.ink] : "--"; } }]
+      ? [{ pane: 1, key: "vol", label: `Vol(${notionalCur()})`, value: (t) => { const r = volAt(t); return r ? [fBig(r.vol), C.ink] : "--"; } }]
       : [];
 
   let list: ExSeries[];

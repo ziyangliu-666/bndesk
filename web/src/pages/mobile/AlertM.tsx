@@ -11,7 +11,7 @@ import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
 import { Sec, Stats } from "./rest/ui";
-import { cur, quoteAsset, baseOf, isTraded, marketOf, spotVenue, inventoryWord, venueTag } from "../../desk";
+import { cur, quoteAsset, baseOf, isTraded, marketOf, spotVenue, inventoryWord, venueTag, exchangeWord, cashWord } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -366,8 +366,8 @@ function OrdersEv({ rule, subject, accounts }: { rule: "orders_10s" | "orders_1d
       title={tenS ? "Orders 10 s, by account" : "Orders today, by account"}
       info={
         tenS
-          ? "New orders in the last 10 s against Binance's limit."
-          : `Orders today against Binance's daily limit${list[0] ? `, ${int(list[0].orders_1d_limit)}` : ""}.`
+          ? `New orders in the last 10 s against ${exchangeWord()}'s limit.`
+          : `Orders today against ${exchangeWord()}'s daily limit${list[0] ? `, ${int(list[0].orders_1d_limit)}` : ""}.`
       }
     >
       {list.map((a) => (
@@ -676,7 +676,7 @@ function QuoteIdleEv({ acct }: { acct: Account }) {
           { label: "Resting bids", value: money(acct.bids_notional, "usd") },
           {
             label: "Bid use",
-            info: `The share of the account's ${quoteAsset()} tied up in its resting buy orders: resting bids ÷ (free ${quoteAsset()} + resting bids). Near 100 %, there is little left to bid with.`,
+            info: `The share of the account's ${cashWord()} tied up in its resting buy orders: resting bids ÷ (free ${cashWord()} + resting bids). Near 100 %, there is little left to bid with.`,
             value: pct(acct.utilization),
           },
         ]}

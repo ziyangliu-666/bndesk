@@ -10,7 +10,7 @@ import { daySummary, sumDays, summaryNote, type DayRow, type Part } from "./data
 import { maskText, qtyText } from "../../mask";
 import { SeriesKey } from "../../components/ex";
 import { hedgePnl, useLegPnl } from "../../selectors";
-import { cur, useDesk, isHedge } from "../../desk";
+import { cur, useDesk, isHedge, notionalCur } from "../../desk";
 
 const sg = (v: number | null | undefined, d = 2) => (v == null ? "--" : num(v, d, true));
 
@@ -84,7 +84,7 @@ export function DeskSide({
           <div className="hx-figs">
             <Fig big label="Day PnL" value={m(sg(day.pnl))} tone={tone(day.pnl)} />
             <Fig label="Fills" value={int(day.fills)} />
-            <Fig label="Volume" value={m(compact(day.volume))} tone={hide ? "masked" : undefined} title={`Filled notional, ${cur()}`} />
+            <Fig label="Volume" value={m(compact(day.volume))} tone={hide ? "masked" : undefined} title={`Filled notional, ${notionalCur()}`} />
             <div className="hx-fig">
               <span className="hx-fig-l">Chart</span>
               <button type="button" className="hx-link hx-fig-v" onClick={onIntraday} title={intraday ? "Back to one bar a day" : "The day in 15 minute bars, as on the phone's day page"}>
@@ -109,7 +109,7 @@ export function DeskSide({
             <Fig label="Average day" value={m(sg(sm.average))} title="Over the finished days (today left out)" />
             <Fig label="Days up" value={sm.finished ? `${sm.up} of ${sm.finished} finished` : "--"} title="Finished days that made money, of the finished days with a Day PnL (today is still moving)" />
             <Fig label="Fills" value={rows.length ? int(sm.fills) : "--"} />
-            <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title={`Filled notional, ${cur()}`} />
+            <Fig label="Volume" value={rows.length ? m(compact(sm.volume)) : "--"} tone={hide ? "masked" : undefined} title={`Filled notional, ${notionalCur()}`} />
           </div>
           {/* what the figures cover, in the same day counts the split and the chart use */}
           <div className="hx-note muted">
@@ -275,7 +275,7 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
           tone={tone(pnl)}
         />
         <Fig label="Fills" value={dash ? "--" : int(s.fills)} />
-        <Fig label="Volume" value={dash ? "--" : m(compact(s.buyNotional + s.sellNotional))} tone={hide ? "masked" : undefined} title={`Filled notional, ${cur()}`} />
+        <Fig label="Volume" value={dash ? "--" : m(compact(s.buyNotional + s.sellNotional))} tone={hide ? "masked" : undefined} title={`Filled notional, ${notionalCur()}`} />
         <Fig label="Buys" value={dash ? "--" : int(s.buys)} tone="up" />
         <Fig label="Sells" value={dash ? "--" : int(s.sells)} tone="down" />
         <Fig label="Avg buy" value={s.buyQty > 0 ? price(s.buyNotional / s.buyQty) : "--"} />

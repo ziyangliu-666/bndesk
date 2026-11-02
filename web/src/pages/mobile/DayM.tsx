@@ -10,7 +10,7 @@ import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
 import { MASK } from "../../mask";
 import "./rest/assets.css";
 import "./history.css";
-import { cur, useDesk } from "../../desk";
+import { cur, useDesk, notionalCur } from "../../desk";
 
 const DEF_SE =
   "± is the likely error of the figure: its standard error, from how much the day's hourly results varied (Newey–West, lag 3).";
@@ -111,7 +111,7 @@ export function DayM({ date }: { date: string }) {
           cols={3}
           items={[
             { label: "Fills", value: int(d.fills) },
-            { label: `Volume (${cur()})`, value: money(d.volume, "k") },
+            { label: `Volume (${notionalCur()})`, value: money(d.volume, "k") },
             {
               label: "Hours covered",
               info:

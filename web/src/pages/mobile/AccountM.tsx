@@ -9,7 +9,7 @@ import { FillRow, TIP, useFillSheet } from "./shared";
 import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
-import { cur, deskNow, quoteAsset, isPerp, marketOf, venueTag } from "../../desk";
+import { cur, deskNow, isPerp, marketOf, venueTag, cashWord } from "../../desk";
 
 const FILLS = 30;
 type Tab = "balance" | "instruments" | "orders" | "fills";
@@ -92,8 +92,8 @@ function Balance({ id }: { id: string }) {
               info: "Money moved into the account since the day start (out, if negative), net. Day PnL = equity change − transfers in.",
               value: money(Math.abs(a.transfers_day), "full"),
             },
-            { label: `${quoteAsset()} free`, value: money(a.quote_free, "full") },
-            { label: `${quoteAsset()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(a.quote_locked, "full") },
+            { label: `${cashWord()} free`, value: money(a.quote_free, "full") },
+            { label: `${cashWord()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(a.quote_locked, "full") },
             { label: "Inventory", info: `Non-quote spot assets, free + locked, at mid, ${cur()}.`, value: money(a.inventory_value, "full") },
             ...(deskNow().rebates ? [{ label: "Rebates", info: `Market-maker rebates credited since the day start: already part of Day PnL, ${cur()}.`, value: <Amt v={a.rebates} /> },] : []),
           ]}

@@ -23,14 +23,15 @@ export interface Roles {
 
 /** How this desk is set up, so the pages draw only what applies (DESIGN.md). Nothing here changes a figure. */
 export interface Desk {
-  currency: string; // the name money figures carry: not a conversion
-  quote: string; // the asset quote_free and quote_locked are balances of
+  currency: string; // what money figures are in: [desk] currency, an asset, or USD for the first exchange's quote
+  quote: string; // the first exchange's quote, what a market name's suffix is stripped by
   markets: Market[]; // what every venue field can say
   roles?: Roles; // what instruments are for; absent or empty: spot is traded, a perp hedges
   perps?: boolean; // an account has a perp market or a position: the futures columns and tabs
   hedge: boolean; // something hedges: the Hedge figure
   rebates: boolean; // a rebate has been credited, today or on a kept day
   mm: boolean; // Trading PnL is split into market making and inventory
+  earlier?: { until: number; currency: string }; // figures before `until` are in that currency, stored and not shown
 }
 
 /** A market the desk reads. `id` is what `venue` fields say; ask `kind`, not the id, what kind of market it is. */
@@ -223,7 +224,7 @@ export interface Account {
   orders_10s_limit: number;
   orders_1d: number;
   orders_1d_limit: number;
-  orders_source: "binance" | "stream"; // "stream": counted from the user stream, without rejected orders
+  orders_source: string; // the exchange's id: its own count; "stream": counted from the user stream, without rejected orders
   no_order_limits?: boolean; // its exchange has no such windows: no meter, not an empty one
   open_orders: number;
   bids_notional: number;

@@ -127,5 +127,5 @@ export function useBusiest(n: number, venue?: Venue | null): string[] {
 export function unpriced(p: { mm_unmarked_fills: number; mm_unmarked_notional: number } | undefined, hide: boolean): string {
   const n = p?.mm_unmarked_fills ?? 0;
   if (!n) return "";
-  return ` ${int(n)} fill${n === 1 ? "" : "s"} without a 60 s price (${maskText(hide, money(p!.mm_unmarked_notional))} ${cur()} notional) left out: none taken live, none from Binance's klines (yet).`;
+  return ` ${int(n)} fill${n === 1 ? "" : "s"} without a 60 s price (${maskText(hide, money(p!.mm_unmarked_notional))} ${cur()} notional) left out: none taken live, none from the exchange's klines (yet).`;
 }

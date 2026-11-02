@@ -18,7 +18,7 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
-import { cur, quoteAsset, baseOf, useDesk, isSpot, spotVenue, hasPerps, inventoryWord, notionalWord, roled, venueTag } from "../desk";
+import { cur, quoteAsset, baseOf, useDesk, isSpot, spotVenue, hasPerps, inventoryWord, notionalWord, roled, venueTag, cashWord } from "../desk";
 import type { Venue } from "../protocol";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
@@ -93,8 +93,8 @@ function Hero() {
           },
         ]}
         parts={[
-          { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: `Spot: ${quoteAsset()} free and in orders plus the other assets at mid` },
-          ...(hasPerps(desk) ? [{ label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },] : []),
+          { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: `Spot: ${cashWord()} free and in orders plus the other assets at their price` },
+          ...(hasPerps(desk) ? [{ label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "Perps: wallet balance plus unrealized PnL" },] : []),
         ]}
         facts={[
           [
@@ -278,7 +278,7 @@ interface SpotRow {
 }
 
 const rowIdSpot = (p: GetRowIdParams<SpotRow>) => p.data.symbol;
-const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== quoteAsset() && selectInstrument({ symbol: e.data.symbol, venue: e.data.venue });
+const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== cashWord() && selectInstrument({ symbol: e.data.symbol, venue: e.data.venue });
 
 function useSpotRows() {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -309,7 +309,7 @@ function useSpotRows() {
       .sort((a, b) => b.value - a.value);
     const free = (accounts ?? []).reduce((k, a) => k + a.quote_free, 0);
     const inOrders = (accounts ?? []).reduce((k, a) => k + a.quote_locked, 0);
-    const usdt: SpotRow = { symbol: quoteAsset(), asset: quoteAsset(), venue: spotVenue(), amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
+    const usdt: SpotRow = { symbol: cashWord(), asset: cashWord(), venue: spotVenue(), amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
     return { rows, usdt };
   }, [symbols, orders, accounts]);
 }
@@ -334,7 +334,7 @@ function SpotAccounts() {
           <thead>
             <tr>
               <th className="l">Account</th>
-              <th title={`Free spot quote balance, ${cur()}`}>{quoteAsset()} free</th>
+              <th title={`Free spot quote balance, ${cur()}`}>{cashWord()} free</th>
               <th title={`Spot quote balance locked in open bids, ${cur()}`}>In orders</th>
               <th title={`Non-quote spot assets at mid, ${cur()}`}>Inventory</th>
               <th title="Resting bid notional / (free quote + resting bid notional)">Bid use</th>
@@ -434,7 +434,7 @@ function FuturesAccounts() {
             <thead>
               <tr>
                 <th className="l">Account</th>
-                <th title={`USD-M futures wallet balance, ${cur()}`}>Wallet</th>
+                <th title={`Perp wallet balance, ${cur()}`}>Wallet</th>
                 <th title={`Unrealized PnL of the positions at mark, ${cur()}`}>uPnL</th>
                 <th title={`Futures available balance, ${cur()}`}>Available</th>
                 <th title="Open positions">Positions</th>
@@ -470,7 +470,7 @@ function Futures() {
   const cols = useMemo<ColDef<PosRow>[]>(() => {
     const n = (c: ColDef<PosRow>): ColDef<PosRow> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
-      { field: "symbol", headerName: "Symbol", headerTooltip: "USD-M perpetual", width: 120, cellRenderer: SymCell },
+      { field: "symbol", headerName: "Symbol", headerTooltip: "Perpetual", width: 120, cellRenderer: SymCell },
       n({ field: "amt", headerName: "Size", headerTooltip: "Position size, base asset; negative = short", width: 96, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "notional", headerName: "Notional", headerTooltip: `Size × mark, ${cur()}`, width: 96, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({ field: "entry", headerName: "Entry price", headerTooltip: "Average entry price", width: 96, valueFormatter: fPrice }),

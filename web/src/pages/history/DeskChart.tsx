@@ -8,7 +8,7 @@ import { REF_LINE } from "../../components/ex/palette";
 import { C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { compact, num, int } from "../../format";
 import { PARTS, type HInterval, type Mode, type Part, type Row } from "./data";
-import { cur, useDesk } from "../../desk";
+import { useDesk, notionalCur } from "../../desk";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
   pi: { label: "Trading", long: "Trading PnL", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
@@ -203,7 +203,7 @@ export function DeskChart({
     out.push({
       key: "vol",
       kind: "histogram",
-      label: `Vol(${cur()})`,
+      label: `Vol(${notionalCur()})`,
       pane: 1,
       color: rgba(C.ink2, 0.32),
       format: vol,

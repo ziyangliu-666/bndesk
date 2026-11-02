@@ -26,7 +26,7 @@ import {
 } from "./rest/ui";
 import "./history.css";
 import { MASK } from "../../mask";
-import { cur, useDesk, isHedge, venueTag } from "../../desk";
+import { cur, earlierNote, useDesk, isHedge, venueTag } from "../../desk";
 
 // ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
 // kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
@@ -212,6 +212,7 @@ function DeskHistory() {
           <div className="h-sum-label">{label}</div>
           <Amt v={sum.total} className="h-sum-v" />
           {rows.length > 0 && <div className="h-sum-note">{summaryNote(sum)}</div>}
+          {earlierNote() && <div className="h-sum-note" title={earlierNote()!.title}>{earlierNote()!.text}</div>}
         </div>
         <Stats
           cols={2}

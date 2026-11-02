@@ -27,7 +27,7 @@ import {
 } from "../../components/ex";
 import { refLabel } from "../../components/ui";
 import { maskFormat, maskNode, useHide } from "../../mask";
-import { cur, baseOf, marketTitle } from "../../desk";
+import { cur, baseOf, marketTitle, notionalCur } from "../../desk";
 
 // research §3.2: Line 1s 1m 5m 15m 1H 4H 1D ▾(30m 1W), 1m first. No 1s: the server's kline proxy has no 1 s
 // bars (spec, Data), and the Line already draws the 1 m closes.
@@ -178,7 +178,7 @@ function Klines({ inst }: { inst: Instrument }) {
         ? { key: "k", kind: "line", label: symbol, data: closePoints(k.bars), color: C.ink, toggle: false, format: price }
         : { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false },
       // the market's volume, not ours: never masked
-      { key: "vol", kind: "histogram", label: `Vol(${cur()})`, data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
+      { key: "vol", kind: "histogram", label: `Vol(${notionalCur()})`, data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
       // ours on its own scale in the same pane (a sliver next to the market's otherwise); the legend has the figure
       {
         key: "ours",

@@ -9,7 +9,7 @@ import { flexCols } from "../grid";
 import { int, num, pct } from "../format";
 import { Meter, StateTag } from "./ui";
 import { amount, hideNow, money } from "../mask";
-import { cur, quoteAsset, useDesk, markets, hasPerps } from "../desk";
+import { cur, useDesk, markets, hasPerps, exchangeWord, cashWord } from "../desk";
 import type { Venue } from "../protocol";
 
 type Row = Account & { _total?: boolean };
@@ -145,7 +145,7 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
     const futOnly = (p: ValueFormatterParams<Row>) => (p.data?.fut_wallet || p.data?._total ? fMoney(p) : "--");
     const account: ColDef<Row> = { field: "label", headerName: "Account", headerTooltip: "Account label; hover a name for its email", width: 112, pinned: "left", cellRenderer: AccountCell };
     const stream: ColDef<Row> = { field: "user_stream", headerName: "Stream", headerTooltip: "User data stream state (fills, orders, balances)", width: 76, cellRenderer: StreamCell };
-    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: `Spot balances at mid (${quoteAsset()} at 1, other stablecoins at their ${quoteAsset()} pair) plus futures margin balance, ${cur()}`, width: 92, valueFormatter: fMoney });
+    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: `Spot balances at their price plus futures margin balance, in ${cur()}`, width: 92, valueFormatter: fMoney });
     const day = n({ field: "pnl_day", headerName: "Day PnL", headerTooltip: `Equity now − equity at the day start − net transfers in since then, ${cur()}`, width: 80, valueFormatter: fSigned, cellClass: signedCls(hide) });
     const open = n({ field: "open_orders", headerName: "Open", headerTooltip: "Number of open orders", width: 56, valueFormatter: fInt, cellClass: "num" });
     if (full) {
@@ -156,7 +156,7 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
         n({ field: "transfers_day", headerName: "Transfers", headerTooltip: `Net transfers in since the day start, ${cur()}`, width: 86, valueFormatter: fSigned }),
         ...(d.rebates ? [n({ field: "rebates", headerName: "Rebates", headerTooltip: `Market-maker rebates credited since the day start, part of Day PnL, ${cur()}`, width: 76, valueFormatter: fSigned }),] : []),
         n({ field: "equity_open", headerName: "Equity open", headerTooltip: `Equity at the day start, ${cur()}`, width: 92, valueFormatter: fMoney, hide: !wide }),
-        n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 86, valueFormatter: fMoney }),
+        n({ field: "quote_free", headerName: `${cashWord()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 86, valueFormatter: fMoney }),
         n({ field: "quote_locked", headerName: "In orders", headerTooltip: `Spot quote balance locked in open bids, ${cur()}`, width: 80, valueFormatter: fMoney }),
         n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 86, valueFormatter: fMoney }),
         ...(hasPerps(d) ? [n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: `Futures wallet balance, ${cur()}`, width: 100, valueFormatter: futOnly }),] : []),
@@ -175,13 +175,13 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
       stream,
       equity,
       day,
-      n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 80, valueFormatter: fMoney }),
+      n({ field: "quote_free", headerName: `${cashWord()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 80, valueFormatter: fMoney }),
       n({ field: "quote_locked", headerName: "Locked", headerTooltip: `Spot quote balance locked in open orders, ${cur()}`, width: 70, valueFormatter: fMoney }),
       n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 80, valueFormatter: fMoney }),
       ...(hasPerps(d) ? [n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: `Futures wallet balance, ${cur()}`, width: 78, valueFormatter: futOnly }),] : []),
       ...(hasPerps(d) ? [n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),] : []),
-      ...(!limited ? [] : [{ colId: "o10", headerName: "Orders 10 s", headerTooltip: "Orders placed in the last 10 s / Binance limit", width: 104, cellRenderer: M10, valueGetter: (p) => (p.data ? p.data.orders_10s / (p.data.orders_10s_limit || 1) : 0) },
-      { colId: "o1d", headerName: "Orders today", headerTooltip: "Orders placed today as a share of the Binance daily limit, %", width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) }] as ColDef<Row>[]),
+      ...(!limited ? [] : [{ colId: "o10", headerName: "Orders 10 s", headerTooltip: `Orders placed in the last 10 s / ${exchangeWord()}'s limit`, width: 104, cellRenderer: M10, valueGetter: (p) => (p.data ? p.data.orders_10s / (p.data.orders_10s_limit || 1) : 0) },
+      { colId: "o1d", headerName: "Orders today", headerTooltip: `Orders placed today as a share of ${exchangeWord()}'s daily limit, %`, width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) }] as ColDef<Row>[]),
       { colId: "util", headerName: "Bid use", width: 90, cellRenderer: UtilCell, valueGetter: (p) => p.data?.utilization ?? 0, headerTooltip: "Resting bid notional / (free quote + resting bid notional), %" },
       open,
     ];

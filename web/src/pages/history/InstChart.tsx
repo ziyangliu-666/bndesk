@@ -26,7 +26,7 @@ import { C, INV_COLOR } from "../../theme";
 import { compact, price, qty } from "../../format";
 import type { HInterval } from "./data";
 import { maskFormat } from "../../mask";
-import { cur } from "../../desk";
+import { notionalCur } from "../../desk";
 
 const KI: Record<HInterval, KInterval> = { "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w" };
 
@@ -112,7 +112,7 @@ export function InstChart({
   const series = useMemo<ExSeries[]>(
     () => [
       { key: "k", kind: "candles", label: symbol, data: bars, toggle: false, format: price },
-      { key: "vol", kind: "histogram", label: `Vol(${cur()})`, pane: 1, data: volumePoints(bars, true), format: (v) => compact(v) },
+      { key: "vol", kind: "histogram", label: `Vol(${notionalCur()})`, pane: 1, data: volumePoints(bars, true), format: (v) => compact(v) },
       { key: "ours", kind: "histogram", label: "Ours", pane: 1, data: ours, color: C.ink, format: maskFormat(hide, (v) => compact(v)) },
       { key: "net", kind: "line", label: "Net qty", pane: 2, color: INV_COLOR, data: net, format: maskFormat(hide, (v) => qty(v, true)), lastValue: true },
     ],

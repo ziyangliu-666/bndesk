@@ -13,7 +13,7 @@ import { maskFormat } from "../../../mask";
 import { useTodayMinutes } from "../../desk/pnlData";
 import { PAST_BARS_PHONE, dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
 import { PNL_STEP, histBars, joinChart, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
-import { cur, useDesk } from "../../../desk";
+import { useDesk, notionalCur } from "../../../desk";
 
 const IVS: { value: PnlIv; label: string }[] = [
   { value: "line", label: "Line" },
@@ -99,7 +99,7 @@ export function DeskChart({ ms }: { ms: number }) {
     ...(desk.hedge ? [line("hedge", "Hedge", data.hedge)] : []),
     ...(desk.rebates && data.rebates.length ? [line("reb", "Rebates", data.rebates)] : []),
     ...(data.rebates.length ? [line("other", "Other", data.other)] : []),
-    { key: "vol", kind: "histogram", label: `Vol(${cur()})`, pane: 2, color: VOL, data: data.vol, format: vol, lastValue: false },
+    { key: "vol", kind: "histogram", label: `Vol(${notionalCur()})`, pane: 2, color: VOL, data: data.vol, format: vol, lastValue: false },
   ];
   // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)
   const view = Math.max(Math.min(VIEW[iv] ?? Infinity, nToday.current), 30);

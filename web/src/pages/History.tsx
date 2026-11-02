@@ -40,7 +40,7 @@ import {
 } from "./history/data";
 import "./history/history.css";
 import { useInstFills } from "./desk/instFills";
-import { cur, spotVenue, venueTag } from "../desk";
+import { cur, earlierNote, spotVenue, venueTag } from "../desk";
 
 const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
@@ -251,6 +251,7 @@ export function History() {
             </button>
             <InstrumentPicker value={inst ?? lastInst.current} active={!!inst} onPick={pickInst} />
           </div>
+          {earlierNote() && <span className="hx-earlier muted" title={earlierNote()!.title}>{earlierNote()!.text}</span>}
           <span className="hx-span muted fig">{span}</span>
         </div>
         <div className="hx-chart-body">

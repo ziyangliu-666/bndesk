@@ -62,6 +62,27 @@ export function venueTag(v: Venue | null | undefined): string {
   if (!m) return "";
   return m.kind === "spot" && markets().filter((x) => x.kind === "spot").length < 2 ? "" : kindWord(m);
 }
+/** Whose limit or rebate it is, where no one market says: the desk's one exchange, else "the exchange". */
+export function exchangeWord(): string {
+  const all = new Set(markets().map((m) => m.exchange));
+  return all.size === 1 ? [...all][0]! : "the exchange";
+}
+/** The word on balances counted as cash: the quote while it is what the figures are in and the desk has one exchange, whose
+ *  stablecoins are all that word has ever covered; else what it is. */
+export function cashWord(): string {
+  const d = deskNow();
+  const named = d.currency === d.quote || d.currency === "USD";
+  return named && new Set(markets().map((m) => m.exchange)).size === 1 ? d.quote : "Cash";
+}
+/** What a fill's or an order's own notional, and the volume stored with it, is called: each stays in what it is quoted in,
+ *  all about a dollar on a desk in dollars, and on a desk in anything else not in its currency. */
+export const notionalCur = () => (DOLLARS.includes(deskNow().currency) ? cur() : quoteAsset());
+/** "EUR from 2 Nov", on a desk whose earlier figures are in another currency; and what became of them. */
+export function earlierNote(d: Desk = deskNow()): { text: string; title: string } | null {
+  if (!d.earlier) return null;
+  const day = new Date(d.earlier.until).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  return { text: `${d.currency} from ${day}`, title: `Figures before this are in ${d.earlier.currency}: kept, and shown again if the desk's currency goes back to it.` };
+}
 /** Whose figure it is: the exchange of the market it came from. */
 export const exchangeOf = (v: Venue | null | undefined) => marketOf(v)?.exchange ?? "The exchange";
 /** "Spot", "USD-M perpetual". */
@@ -72,6 +93,7 @@ export function marketTitle(v: Venue | null | undefined): string {
 
 /** Quote assets a symbol can end in, longest first. */
 const QUOTES = ["FDUSD", "USDT", "USDC", "TUSD", "USDP", "BUSD", "USD1", "DAI"];
+const DOLLARS = ["USD", ...QUOTES];
 
 /** BTCUSDT -> USDT; "" when the symbol ends in no known quote. */
 export function quoteOf(symbol: string): string {

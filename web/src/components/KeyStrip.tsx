@@ -9,7 +9,7 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
-import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord, exchangeOf } from "../desk";
+import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord, exchangeOf, exchangeWord, notionalCur } from "../desk";
 import { hasTickerSocket } from "./ex/ticker";
 
 const betaNote = (x: Exposure) =>
@@ -70,7 +70,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     },
     { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
     { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
-    { label: "Rebates", value: m(pnl(sm?.rebates)), title: "Market-maker rebates Binance credited since the day start, hourly per account." },
+    { label: "Rebates", value: m(pnl(sm?.rebates)), title: `Market-maker rebates ${exchangeWord()} credited since the day start, per account.` },
     { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus what the parts add up to: what the split does not explain." },
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
   const facts: Fact[][] = [
@@ -131,7 +131,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
     { label: "24h", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", title: `${exchangeOf(inst.venue)}'s 24 h change` },
     { label: "High", value: price(t?.high) },
     { label: "Low", value: price(t?.low) },
-    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `${exchangeOf(inst.venue)}'s 24 h volume, ${cur()}` },
+    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `${exchangeOf(inst.venue)}'s 24 h volume, ${notionalCur()}` },
   ];
   const parts: Fact[] = [
     hedged

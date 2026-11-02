@@ -8,7 +8,7 @@ import type { OpenOrder } from "../../protocol";
 import { gridTheme } from "../../gridTheme";
 import { fBps, fPrice, fTime, fUsd, DEFAULT_COL, flexCols, maskCls, maskVF } from "../../grid";
 import { qty } from "../../format";
-import { cur, venueTag } from "../../desk";
+import { venueTag, notionalCur } from "../../desk";
 
 const rowId = (p: GetRowIdParams<OpenOrder>) => p.data.id;
 
@@ -36,7 +36,7 @@ function cols(): ColDef<OpenOrder>[] {
     },
     n({ field: "price", headerName: "Price", width: 90, valueFormatter: fPrice }),
     n({ field: "qty", headerName: "Amount", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: maskCls(), headerTooltip: "Base-asset units" }),
-    n({ field: "notional", headerName: "Notional", width: 84, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: `Price × amount, ${cur()}` }),
+    n({ field: "notional", headerName: "Notional", width: 84, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: `Price × amount, ${notionalCur()}` }),
     n({
       field: "dist_bps",
       headerName: "Dist(bps)",

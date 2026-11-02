@@ -21,7 +21,7 @@ import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../proto
 import { useStore } from "../../store";
 import { PNL_COLORS, PNL_STROKES } from "../../theme";
 import "./ops.css";
-import { cur, quoteAsset, baseOf, hedgeWord, venueTag } from "../../desk";
+import { cur, quoteAsset, baseOf, hedgeWord, venueTag, exchangeWord, cashWord, notionalCur } from "../../desk";
 
 // ---- history: the loader and the day's parts (History, Day, instrument history) ----
 
@@ -92,7 +92,7 @@ export const PART_INFO: Record<PartKey, string> = {
     return `The ${hedgeWord()} legs: price at mark, minus fees, plus funding. ${cur()}.`;
   },
   get rebates() {
-    return `Market-maker rebates Binance credited that day. ${cur()}.`;
+    return `Market-maker rebates ${exchangeWord()} credited that day. ${cur()}.`;
   },
   get other() {
     return `Day PnL minus trading PnL, the hedge legs and the rebates. ${cur()}.`;
@@ -292,7 +292,7 @@ function FillFields({ f }: { f: Fill }) {
           { label: "Role", value: f.maker ? "maker" : "taker" },
           { label: "Price", value: price(f.price) },
           { label: "Quantity", value: q(f.qty) },
-          { label: `Notional (${cur()})`, value: money(f.notional, "usd") },
+          { label: `Notional (${notionalCur()})`, value: money(f.notional, "usd") },
           { label: "Fair", value: price(f.fair) },
           { label: "Fee", value: `${f.fee_asset === quoteAsset() ? money(f.fee, "usd") : q(f.fee)} ${f.fee_asset}`, span: 2 },
         ]}
@@ -329,15 +329,19 @@ export const bandDef = (band: string) =>
 
 export const TIP = {
   get equity() {
-    return `Spot balances at mid (${quoteAsset()} at 1, other stablecoins at their ${quoteAsset()} pair) plus futures margin balance, ${cur()}.`;
+    return `Spot balances at their price plus futures margin balance, in ${cur()}.`;
   },
   get dayPnl() {
     return `Equity now − equity at the day start − net transfers in since then, ${cur()}.`;
   },
-  o10: "Orders placed in the last 10 s against the Binance limit.",
-  o1d: "Orders placed today as a share of the Binance daily limit.",
+  get o10() {
+    return `Orders placed in the last 10 s against ${exchangeWord()}'s limit.`;
+  },
+  get o1d() {
+    return `Orders placed today as a share of ${exchangeWord()}'s daily limit.`;
+  },
   get bid() {
-    return `The share of the account's ${quoteAsset()} tied up in its resting buy orders: resting bids ÷ (free ${quoteAsset()} + resting bids).`;
+    return `The share of the account's ${cashWord()} tied up in its resting buy orders: resting bids ÷ (free ${cashWord()} + resting bids).`;
   },
   get notional() {
     return `Amount × mark, ${cur()}. Negative = short.`;

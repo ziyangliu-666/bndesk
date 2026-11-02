@@ -10,7 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
-import { cur, quoteAsset, baseOf, useDesk, isSpot, hasPerps, inventoryWord, hedgeWord, roled } from "../../desk";
+import { cur, baseOf, useDesk, isSpot, hasPerps, inventoryWord, hedgeWord, roled, cashWord } from "../../desk";
 
 type Tab = "accounts" | "spot" | "futures" | "exposure";
 const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
@@ -131,8 +131,8 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
           cols={3}
           items={[
             { label: "Inventory", info: `Non-quote spot assets, free + locked, at mid, all accounts, ${cur()}.`, value: money(t.inv, "full") },
-            { label: `${quoteAsset()} free`, value: money(t.free, "full") },
-            { label: `${quoteAsset()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(t.locked, "full") },
+            { label: `${cashWord()} free`, value: money(t.free, "full") },
+            { label: `${cashWord()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(t.locked, "full") },
           ]}
         />
       </Sec>
@@ -178,7 +178,7 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
         <Stats
           cols={3}
           items={[
-            { label: "Wallet", info: `USD-M futures wallet balance, all accounts, ${cur()}.`, value: money(t.w, "full") },
+            { label: "Wallet", info: `Perp wallet balance, all accounts, ${cur()}.`, value: money(t.w, "full") },
             { label: "uPnL", info: TIP.upnl, value: <Amt v={t.u} /> },
             { label: "Available", value: money(t.av, "full") },
           ]}

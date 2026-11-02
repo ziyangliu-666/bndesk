@@ -2,7 +2,7 @@
 import type { Alert } from "../../protocol";
 import { MASK } from "../../mask";
 import { span } from "../../components/mobile/figures";
-import { cur } from "../../desk";
+import { cur, exchangeWord } from "../../desk";
 
 /** A rule in a few words, and what it means (DESIGN.md, "Alerts"). */
 export const RULES: Record<string, { name: string; means: string }> = {
@@ -24,11 +24,15 @@ export const RULES: Record<string, { name: string; means: string }> = {
   },
   orders_10s: {
     name: "Orders 10 s",
-    means: "An account's orders in the last 10 s passed 80 % of Binance's limit. At the limit the venue rejects new orders.",
+    get means() {
+      return `An account's orders in the last 10 s passed 80 % of ${exchangeWord()}'s limit. At the limit the venue rejects new orders.`;
+    },
   },
   orders_1d: {
     name: "Orders today",
-    means: "An account's orders today passed 80 % of Binance's daily limit. At the limit the venue rejects new orders until the day rolls.",
+    get means() {
+      return `An account's orders today passed 80 % of ${exchangeWord()}'s daily limit. At the limit the venue rejects new orders until the day rolls.`;
+    },
   },
   rest_ban: {
     name: "Rate limit",
