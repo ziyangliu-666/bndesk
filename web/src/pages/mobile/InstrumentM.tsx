@@ -13,6 +13,7 @@ import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
+import { cur, quoteOf, baseOf } from "../../desk";
 
 type H = "1" | "10" | "60" | "300";
 const HS: H[] = ["1", "10", "60", "300"];
@@ -84,7 +85,7 @@ export function InstrumentM({ symbol, venue }: { symbol: string; venue: Venue })
 // ---- header: the mid big (in ink: a market fact, not ours); Binance's 24 h figures at the right ----
 
 function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
-  const asset = r.symbol.replace(/USDT$/, "");
+  const asset = baseOf(r.symbol);
   const chg = t?.changePct ?? null;
   return (
     <section className="in-head">
@@ -113,7 +114,7 @@ function Header({ r, t }: { r: SymbolRow; t: Ticker24h | null }) {
           <dd>{t ? price(t.low) : "--"}</dd>
         </div>
         <div>
-          <dt>24h Vol(USDT)</dt>
+          <dt>24h Vol{quoteOf(r.symbol) ? `(${quoteOf(r.symbol)})` : ""}</dt>
           <dd>{t ? compact(t.quoteVolume) : "--"}</dd>
         </div>
       </dl>
@@ -128,7 +129,7 @@ function OurStats({ r }: { r: SymbolRow }) {
   const leg = useStore((s) => s.snap?.exposure.hedge_day?.legs.find((l) => l.symbol === r.symbol));
   const funding = useStore((s) => s.snap?.exposure.funding.find((f) => f.symbol === r.symbol));
   const hide = useHide();
-  const asset = r.symbol.replace(/USDT$/, "");
+  const asset = baseOf(r.symbol);
   const perp = r.venue === "usdm";
   const items: { label: string; value: ReactNode }[] = perp
     ? [
@@ -276,7 +277,7 @@ function FillsTab({ r }: { r: SymbolRow }) {
         items={[
           { label: "Buys", value: int(r.buys_day) },
           { label: "Sells", value: int(r.sells_day) },
-          { label: "Volume", value: <Money v={r.volume_day} kind="short" />, info: "Filled notional today, USDT." },
+          { label: "Volume", value: <Money v={r.volume_day} kind="short" />, info: `Filled notional today, ${cur()}.` },
         ]}
       />
       <div className="in-rows">
@@ -331,8 +332,8 @@ function InfoTab({ r }: { r: SymbolRow }) {
   const perp = r.venue === "usdm";
   const items: KVItem[] = [
     { label: perp ? "Notional" : "Inventory value", value: money(r.inv_value, "usd") },
-    { label: "Market making", value: <Money v={r.mm_pnl} />, info: "Each fill against the mid 60 s later, minus fees, USDT." },
-    { label: "Inventory PnL", value: <Money v={r.inv_pnl} />, info: "Trading PnL minus market making, USDT." },
+    { label: "Market making", value: <Money v={r.mm_pnl} />, info: `Each fill against the mid 60 s later, minus fees, ${cur()}.` },
+    { label: "Inventory PnL", value: <Money v={r.inv_pnl} />, info: `Trading PnL minus market making, ${cur()}.` },
     { label: "Realized", value: <Money v={r.realized_pnl} /> },
     { label: "Floating", value: <Money v={r.float_pnl} /> },
     { label: "Last fill", value: r.last_fill != null ? `${span(serverNow() - r.last_fill)} ago` : "--" },

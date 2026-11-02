@@ -1,6 +1,7 @@
 // The quote map's rows and geometry, shared by the desktop map (ECharts, QuoteMap.tsx) and the light canvas
 // maps (QuoteRows: the phone's full map, the mini map, the single-row band).
 import type { OpenOrder, SymbolRow, Venue } from "../../protocol";
+import { baseOf } from "../../desk";
 
 /** One instrument's row: the instrument and its resting orders. */
 export interface QRow {
@@ -145,7 +146,7 @@ export function rowsFor(keys: readonly string[], symbols: readonly SymbolRow[], 
 }
 
 /** BTCUSDT → BTC. */
-export const short = (s: string) => s.replace(/USDT$/, "");
+export const short = (s: string) => baseOf(s);
 /** A price's distance from fair, bps. */
 export const off = (px: number, fair: number) => ((px - fair) / fair) * 1e4;
 export const clamp = (v: number, r: number) => Math.max(-r, Math.min(r, v));

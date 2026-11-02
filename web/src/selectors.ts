@@ -5,6 +5,7 @@ import type { Fill, HedgeLeg, OpenOrder, SymbolRow, Venue } from "./protocol";
 import { serverNow, useStore } from "./store";
 import { int } from "./format";
 import { maskText, money } from "./mask";
+import { cur } from "./desk";
 
 /**
  * "Trading PnL" is market making + inventory PnL, fees included, and never the hedge, on every page and size.
@@ -125,5 +126,5 @@ export function useBusiest(n: number, venue: Venue | null = "spot"): string[] {
 export function unpriced(p: { mm_unmarked_fills: number; mm_unmarked_notional: number } | undefined, hide: boolean): string {
   const n = p?.mm_unmarked_fills ?? 0;
   if (!n) return "";
-  return ` ${int(n)} fill${n === 1 ? "" : "s"} without a 60 s price (${maskText(hide, money(p!.mm_unmarked_notional))} USDT notional) left out: none taken live, none from Binance's klines (yet).`;
+  return ` ${int(n)} fill${n === 1 ? "" : "s"} without a 60 s price (${maskText(hide, money(p!.mm_unmarked_notional))} ${cur()} notional) left out: none taken live, none from Binance's klines (yet).`;
 }

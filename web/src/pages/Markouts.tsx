@@ -17,6 +17,7 @@ import { Scatter, instKey } from "./analysis/Scatter";
 import { Spark } from "./analysis/Spark";
 import { SortTable, type SCol } from "./analysis/SortTable";
 import "./analysis/analysis.css";
+import { cur } from "../desk";
 
 const SIDES = [
   { value: "all" as SideF, label: "All" },
@@ -168,7 +169,7 @@ function Kpis({ r, side, hide }: { r: MarkoutReport | null; side: SideF; hide: b
           [
             {
               label: "Markout PnL",
-              title: "Σ notional × 60 s markout, USDT: what the fills were worth a minute later. A diagnostic, not P&L",
+              title: `Σ notional × 60 s markout, ${cur()}: what the fills were worth a minute later. A diagnostic, not P&L`,
               value: r ? maskText(hide, money(r.pnl, true)) : "--",
             },
             { label: "Adverse at 10 s", value: adv == null ? "--" : pct(adv, 1), title: "Share of the fills whose 10 s markout is below zero" },
@@ -223,7 +224,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
       sort: (x) => x.symbol,
     },
     { key: "f", label: "Fills", cell: (x) => int(x.fills), cls: () => "fig", sort: (x) => x.fills },
-    { key: "n", label: "Notional", title: "Filled notional today, USDT", cell: (x) => maskText(hide, compact(x.notional)), cls: () => "fig" + (hide ? " masked" : ""), sort: (x) => x.notional },
+    { key: "n", label: "Notional", title: `Filled notional today, ${cur()}`, cell: (x) => maskText(hide, compact(x.notional)), cls: () => "fig" + (hide ? " masked" : ""), sort: (x) => x.notional },
     { key: "e", label: "Edge", title: "Edge at fill, bps", cell: (x) => bps(x.edge), cls: () => "fig", sort: (x) => x.edge },
     ...MAIN_H.map(mkCol),
     {
@@ -237,7 +238,7 @@ function Instruments({ r, hide, hover, onHover, of }: { r: MarkoutReport | null;
     {
       key: "p",
       label: "Markout PnL",
-      title: "Σ notional × 60 s markout, USDT. A diagnostic, not P&L",
+      title: `Σ notional × 60 s markout, ${cur()}. A diagnostic, not P&L`,
       cell: (x) => maskText(hide, money(x.pnl, true)),
       cls: () => "fig" + (hide ? " masked" : ""),
       sort: hide ? undefined : (x) => x.pnl,

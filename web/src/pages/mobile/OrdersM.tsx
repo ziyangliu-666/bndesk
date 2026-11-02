@@ -12,8 +12,9 @@ import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./rest/ops.css";
+import { cur, baseOf } from "../../desk";
 
-const base = (s: string) => s.replace(/USDT$/, "");
+const base = (s: string) => baseOf(s);
 const MAX_ROWS = 200;
 const NO_ORDERS: OpenOrder[] = [];
 const NO_ACCOUNTS: Account[] = [];
@@ -124,7 +125,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
       <div className="m-hold" {...hold}>
         <Sec
           title={`${int(rows.length)} orders`}
-          info="Resting orders, newest first. At the right: the limit price, and its distance from fair in bps (positive is passive; negative is through fair, amber) with the notional, USDT."
+          info={`Resting orders, newest first. At the right: the limit price, and its distance from fair in bps (positive is passive; negative is through fair, amber) with the notional, ${cur()}.`}
           right={
             <>
               {through > 0 && <span className="warn-text">{int(through)} through</span>}
@@ -170,7 +171,7 @@ function OpenOrders({ accounts, all }: { accounts: Account[]; all: Account[] }) 
                 { label: "Fair", value: price(sel.fair) },
                 { label: "From fair", value: `${bps(sel.dist_bps)} bps`, tone: sel.dist_bps != null && sel.dist_bps < 0 ? "warn" : "" },
                 { label: "Amount", value: qOf(sel.qty) },
-                { label: "Notional (USDT)", value: money(sel.notional, "full") },
+                { label: `Notional (${cur()})`, value: money(sel.notional, "full") },
                 { label: "Account", value: labelOf(sel.account) },
                 { label: "Placed", value: sel.since != null ? hms(sel.since, tz) + (tz === "utc" ? " UTC" : "") : "--" },
                 { label: "Age", value: sel.since != null ? span(now - sel.since) : "--" },

@@ -11,6 +11,7 @@ import { fAge, fBps, fBpsU, fInt, fPnl, fPrice, fQtyS, fUsd, fVol, signCls, DEFA
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import { refLabel } from "./ui";
 import { hedgePnl, tradingPnl, useLegPnl } from "../selectors";
+import { cur } from "../desk";
 
 /** A row, with its hedge leg's P&L today (perps) put in the row: AG Grid refreshes a row whose data changed. */
 type Row = SymbolRow & { _total?: boolean; _hedge?: number | null };
@@ -138,9 +139,9 @@ function columns(hide: boolean): ColDef<Row>[] {
       sort: hide ? "asc" : null,
     },
     n({ field: "inv_qty", headerName: "Inventory", width: 92, valueFormatter: money(blankTotal(fQtyS as VF)), cellClass: plainCls, headerTooltip: "Quantity held, free + locked, base-asset units" }),
-    n({ field: "inv_value", headerName: "Value", width: 84, valueFormatter: money(fUsd as VF), cellClass: plainCls, comparator: absDesc, sort: hide ? null : "desc", headerTooltip: "Quantity × mid, USDT; sorted by size. The total counts spot only" }),
-    n({ field: "avg_cost", headerName: "Avg cost", width: 82, valueFormatter: fPrice, headerTooltip: "Average cost from today's fills, USDT per unit" }),
-    n({ field: "mid", headerName: "Mid", width: 82, valueFormatter: fPrice, headerTooltip: "(best bid + best ask) / 2, USDT" }),
+    n({ field: "inv_value", headerName: "Value", width: 84, valueFormatter: money(fUsd as VF), cellClass: plainCls, comparator: absDesc, sort: hide ? null : "desc", headerTooltip: `Quantity × mid, ${cur()}; sorted by size. The total counts spot only` }),
+    n({ field: "avg_cost", headerName: "Avg cost", width: 82, valueFormatter: fPrice, headerTooltip: "Average cost from today's fills" }),
+    n({ field: "mid", headerName: "Mid", width: 82, valueFormatter: fPrice, headerTooltip: "(best bid + best ask) / 2" }),
     n({
       colId: "pnl",
       headerName: "Trading PnL",
@@ -148,11 +149,11 @@ function columns(hide: boolean): ColDef<Row>[] {
       valueGetter: pnlOf,
       valueFormatter: money(fPnl as VF),
       cellClass: moneyCls,
-      headerTooltip: "Today, USDT: market making + inventory PnL, fees included. Spot markets only: a perp is the hedge (its P&L is under Hedge)",
+      headerTooltip: `Today, ${cur()}: market making + inventory PnL, fees included. Spot markets only: a perp is the hedge (its P&L is under Hedge)`,
       ...flashOn(fPnl),
     }),
-    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: "Each fill against the mid 60 s later, minus fees, USDT" }),
-    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: "Trading PnL minus market making, USDT" }),
+    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Each fill against the mid 60 s later, minus fees, ${cur()}` }),
+    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Trading PnL minus market making, ${cur()}` }),
     n({
       colId: "hedge",
       headerName: "Hedge",
@@ -160,11 +161,11 @@ function columns(hide: boolean): ColDef<Row>[] {
       valueGetter: hedgeOf,
       valueFormatter: money(blankTotal(fPnl as VF)),
       cellClass: moneyCls,
-      headerTooltip: "A perp's hedge leg today: price P&L at mark − fees + funding, USDT. The total is the head's Hedge",
+      headerTooltip: `A perp's hedge leg today: price P&L at mark − fees + funding, ${cur()}. The total is the head's Hedge`,
       ...flashOn(fPnl),
     }),
     n({ field: "fills_day", headerName: "Fills", width: 64, valueFormatter: fInt, headerTooltip: "Fills today", ...flashOn(fInt) }),
-    n({ field: "volume_day", headerName: "Volume", width: 74, valueFormatter: money(blankTotal(fVol as VF)), cellClass: plainCls, headerTooltip: "Filled notional today, USDT. The total is the spot markets' (the ticker's Spot volume)" }),
+    n({ field: "volume_day", headerName: "Volume", width: 74, valueFormatter: money(blankTotal(fVol as VF)), cellClass: plainCls, headerTooltip: `Filled notional today, ${cur()}. The total is the spot markets' (the ticker's Spot volume)` }),
     n({ field: "edge_bps", headerName: "Edge", width: 56, valueFormatter: fBps, headerTooltip: "Edge at fill: side × (fair − price) / fair, volume-weighted, bps" }),
     n({ field: "mk10_bps", headerName: "Markout 10 s", width: 86, valueFormatter: fBps, headerTooltip: "10 s after the fill, net of the reference move, volume-weighted, bps. Diagnostic, not PnL" }),
     n({

@@ -8,6 +8,7 @@ import type { SymbolRow } from "../../protocol";
 import { Tabs } from "../../components/ex";
 import { maskNode, useHide } from "../../mask";
 import { tradingPnl, useHedgePnl } from "../../selectors";
+import { cur } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type SortKey = "symbol" | "value" | "pnl";
@@ -86,7 +87,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         className="dk-mk-tabs"
         items={[
           { value: "all", label: "All" },
-          { value: "held", label: "Held", title: "Inventory worth 1 USDT or more" },
+          { value: "held", label: "Held", title: `Inventory worth 1 ${cur()} or more` },
           { value: "quoted", label: "Quoted", title: "With resting orders of ours" },
           { value: "perp", label: "Perp", title: "USD-M perpetuals" },
         ]}
@@ -95,8 +96,8 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       />
       <div className="dk-mk-hd">
         {head("symbol", "Symbol", "Sort by name")}
-        {head("value", "Inv value", "Inventory × mid, USDT; sorted by size")}
-        {head("pnl", "Trading PnL", "Today, USDT: market making + inventory PnL. A perp is the hedge: its leg's P&L, marked hedge")}
+        {head("value", "Inv value", `Inventory × mid, ${cur()}; sorted by size`)}
+        {head("pnl", "Trading PnL", `Today, ${cur()}: market making + inventory PnL. A perp is the hedge: its leg's P&L, marked hedge`)}
       </div>
       <div className="dk-mk-body" ref={body}>
         {list.map((r) => {

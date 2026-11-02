@@ -18,6 +18,7 @@ import { Spark } from "../analysis/Spark";
 import { Empty, Row, Sec, Stats, type Stat } from "./rest/ui";
 import "../analysis/analysis.css";
 import "./rest/ops.css";
+import { cur } from "../../desk";
 
 const SIDES: { value: SideF; label: string }[] = [
   { value: "all", label: "All" },
@@ -139,7 +140,7 @@ function kpis(r: MarkoutReport | null, side: SideF, hide: boolean): Stat[] {
     mk(300),
     {
       label: "Markout PnL",
-      info: "Σ notional × 60 s markout, USDT: what the fills were worth a minute later. A diagnostic, not P&L.",
+      info: `Σ notional × 60 s markout, ${cur()}: what the fills were worth a minute later. A diagnostic, not P&L.`,
       value: r ? maskText(hide, money(r.pnl, true)) : "--",
       tone: hide || !r ? "" : (signClass(r.pnl) as Stat["tone"]),
     },

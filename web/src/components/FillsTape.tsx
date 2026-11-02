@@ -11,6 +11,7 @@ import { fBps, fPrice, fTime, fUsd, DEFAULT_COL } from "../grid";
 import { qty } from "../format";
 import { flashOn, flexCols, maskCls, maskVF } from "../grid";
 import type { Option } from "./ex";
+import { cur } from "../desk";
 
 function SideCell(p: ICellRendererParams<Fill>) {
   const f = p.data;
@@ -78,7 +79,7 @@ export function FillsTape({ mode = "net", symbol = null }: { mode?: MarkoutBasis
       { field: "side", headerName: "Side", width: 78, cellRenderer: SideCell, headerTooltip: "Our side; taker fills are marked, the rest are maker" },
       n({ field: "price", headerName: "Price", width: 84, valueFormatter: fPrice }),
       n({ field: "qty", headerName: "Qty", width: 80, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: maskCls(), headerTooltip: "Base-asset units" }),
-      n({ field: "notional", headerName: "Notional", width: 76, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: "Price × quantity, USDT" }),
+      n({ field: "notional", headerName: "Notional", width: 76, valueFormatter: maskVF(fUsd), cellClass: maskCls(), headerTooltip: `Price × quantity, ${cur()}` }),
       { field: "account", headerName: "Account", width: 70 },
       n({ field: "edge_bps", headerName: "Edge", width: 54, valueFormatter: fBps, headerTooltip: "Edge at fill: side × (fair − price) / fair, bps" }),
       mk("1"),

@@ -12,6 +12,7 @@ import { LONG_PRESS_MS } from "../../../gesture";
 import { useExPref } from "../../../components/ex";
 import { bps, int, price } from "../../../format";
 import { Chips, Segmented, useLive, useMoney } from "../../../components/mobile";
+import { baseOf } from "../../../desk";
 
 const AXIS_H = 18;
 const PRESS_MS = LONG_PRESS_MS;
@@ -165,7 +166,7 @@ export function QuoteTouch({
   })();
   return (
     <div ref={box} className="dk-qt" onContextMenu={(e) => e.preventDefault()}>
-      <QuoteRows rows={rows} range={range} rowH={rowH} label={label} inv={inv} axis={axis} stickyAxis={stickyAxis} empty={empty} selected={row ? row.sym.symbol.replace(/USDT$/, "") : undefined} />
+      <QuoteRows rows={rows} range={range} rowH={rowH} label={label} inv={inv} axis={axis} stickyAxis={stickyAxis} empty={empty} selected={row ? baseOf(row.sym.symbol) : undefined} />
       {row && (
         <>
           <div className="dk-qt-hl" style={{ top, height: rowH }} aria-hidden />

@@ -24,6 +24,7 @@ import { C, rgba } from "../../../components/ex/palette";
 import { useLive } from "../../../components/mobile";
 import type { Venue } from "../../../protocol";
 import { maskText } from "../../../mask";
+import { cur } from "../../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -69,7 +70,7 @@ export function InstChart({ symbol, venue }: { symbol: string; venue: Venue }) {
     line
       ? { key: "k", kind: "line", label: symbol, data: closePoints(kl.bars), color: C.ink, toggle: false, format: price }
       : { key: "k", kind: "candles", label: symbol, data: kl.bars, toggle: false, format: price },
-    { key: "vol", kind: "histogram", label: "Vol(USDT)", data: volumePoints(kl.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
+    { key: "vol", kind: "histogram", label: `Vol(${cur()})`, data: volumePoints(kl.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
   ];
   const bidP = bid?.price;
   const askP = ask?.price;

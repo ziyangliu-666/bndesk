@@ -4,6 +4,7 @@ import { useStore } from "../../store";
 import { DASH, int, num } from "../../format";
 import { MASK, Money as AmountSpan, signTone, useAmount } from "../../mask";
 import { DefinedLabel, InfoLabel, defineProps } from "./Info";
+import { cur } from "../../desk";
 
 // ---- durations: one way to write a span of time on every phone page ----
 
@@ -50,7 +51,7 @@ export function Hero({
   v,
   kind = "pnl",
   value,
-  unit = "USDT",
+  unit = cur(),
   sub,
   right,
   tone,

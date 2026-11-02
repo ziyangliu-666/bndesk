@@ -7,6 +7,7 @@
 // historyMock's per-minute path, and the live loop writes its minutes back there, so the chart, the history
 // page and the websocket agree.
 import type {
+  Desk,
   Account,
   AccountSeries,
   Alert,
@@ -254,6 +255,10 @@ let dayStart = dayStartOf(now);
 let d0 = minuteOf(dayStart); // first minute of the day
 let curMin = minuteOf(now);
 const activityNow = () => minuteActivity(minuteOf(now));
+
+// ---- how the desk is set up: `?currency=USD` names the figures otherwise ----
+const params = new URLSearchParams(location.search);
+const DESK: Desk = { currency: params.get("currency") ?? "USDT", quote: "USDT", hedge: true, rebates: true, mm: true };
 
 // ---- desk state ----
 let base: DeskMinute; // the desk's cumulative values at the day start
@@ -1519,6 +1524,7 @@ function snapshot(): Snapshot {
   fundingCache = funding();
   return {
     now,
+    desk: DESK,
     summary: sum,
     accounts: acc,
     symbols: symbols(),

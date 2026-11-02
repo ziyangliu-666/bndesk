@@ -2,6 +2,7 @@
 import type { Alert } from "../../protocol";
 import { MASK } from "../../mask";
 import { span } from "../../components/mobile/figures";
+import { cur } from "../../desk";
 
 /** A rule in a few words, and what it means (DESIGN.md, "Alerts"). */
 export const RULES: Record<string, { name: string; means: string }> = {
@@ -50,7 +51,9 @@ export const RULES: Record<string, { name: string; means: string }> = {
   },
   reconcile: {
     name: "Reconcile",
-    means: "Day PnL minus trading PnL, the hedge legs and the rebates has been over 1 USDT for more than 5 minutes: a fill, transfer or asset the desk does not see.",
+    get means() {
+      return `Day PnL minus trading PnL, the hedge legs and the rebates has been over 1 ${cur()} for more than 5 minutes: a fill, transfer or asset the desk does not see.`;
+    },
   },
   markout: {
     name: "Markout",

@@ -15,8 +15,9 @@ import { TextToggle, useExPref } from "../components/ex";
 import { LimitBar, limitTone } from "./ops/LimitBar";
 import { amount, hideNow, qtyText, useAmount, useHide } from "../mask";
 import "./ops/ops.css";
+import { cur, baseOf } from "../desk";
 
-const short = (s: string) => s.replace(/USDT$/, "");
+const short = (s: string) => baseOf(s);
 
 /** The quote map's range for these orders: the smallest of RANGES over 1.05 × the 95th percentile of |distance|.
  *  It steps down only when the quotes sit well inside the next smaller range, so a live wobble does not flip it. */
@@ -74,7 +75,7 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               <span className="ops-limit-name" title={a.email}>
                 {a.label}
               </span>
-              <span className="muted fig" title="Free spot quote balance, USDT">
+              <span className="muted fig" title={`Free spot quote balance, ${cur()}`}>
                 Free {m(a.quote_free)}
               </span>
             </div>
@@ -97,7 +98,7 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               <span className={limitTone(a.utilization)}>{Number.isFinite(a.utilization) ? pct(a.utilization) : "--"}</span>
             </div>
             {/* the resting notional on each side: a quiet line under the limits */}
-            <div className="ops-limit-rest fig" title="Resting notional of our open orders, USDT">
+            <div className="ops-limit-rest fig" title={`Resting notional of our open orders, ${cur()}`}>
               <span>
                 {nb} bids <span className={"ops-v-side" + (hide ? " masked" : "")}>{m(bid)}</span>
               </span>
@@ -159,12 +160,12 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
       },
       { field: "symbol", headerName: "Symbol", width: 96, minWidth: 92, flex: 96, cellRenderer: SymbolCell },
       { field: "side", headerName: "Side", width: 44, minWidth: 40, flex: 44, cellRenderer: SideCell },
-      n({ field: "price", headerName: "Price", headerTooltip: "Limit price, USDT", width: 78, minWidth: 72, flex: 78, valueFormatter: fPrice }),
+      n({ field: "price", headerName: "Price", headerTooltip: "Limit price", width: 78, minWidth: 72, flex: 78, valueFormatter: fPrice }),
       n({ field: "qty", headerName: "Amount", headerTooltip: "Remaining quantity, base asset", width: 66, minWidth: 60, flex: 66, valueFormatter: (p) => qtyText(p.value as number, hideNow()), cellClass: hide ? "num masked" : "num" }),
       n({
         field: "notional",
         headerName: "Notional",
-        headerTooltip: "Price × remaining amount, USDT",
+        headerTooltip: `Price × remaining amount, ${cur()}`,
         width: 68,
         minWidth: 62,
         flex: 68,

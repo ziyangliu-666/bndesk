@@ -10,6 +10,7 @@ import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
 import { MASK } from "../../mask";
 import "./rest/assets.css";
 import "./history.css";
+import { cur } from "../../desk";
 
 const DEF_SE =
   "± is the likely error of the figure: its standard error, from how much the day's hourly results varied (Newey–West, lag 3).";
@@ -22,7 +23,7 @@ const PARTS = [
   { key: "rebates", label: "Rebates", color: P.reb, stroke: S.reb, sub: false },
   { key: "other", label: "Other", color: P.other, stroke: S.other, sub: false },
 ] as const satisfies readonly { key: string; label: string; color: string; stroke: Stroke; sub: boolean }[];
-const TRADING_INFO = "Market making plus inventory PnL, fees included; not hedged. USDT.";
+const tradingInfo = () => `Market making plus inventory PnL, fees included; not hedged. ${cur()}.`;
 
 /** One PnL day: its result, its path through the day on a chart, the split, the hedged views and the activity. */
 export function DayM({ date }: { date: string }) {
@@ -48,7 +49,7 @@ export function DayM({ date }: { date: string }) {
   return (
     <>
       <Big
-        label={`Day PnL${live ? ", so far" : ""} (USDT)`}
+        label={`Day PnL${live ? ", so far" : ""} (${cur()})`}
         value={<Amt v={pnl} />}
         sub={
           kept ? undefined : pnl != null ? (
@@ -62,7 +63,7 @@ export function DayM({ date }: { date: string }) {
       {!d && <div className="r-empty">Only the equity history is kept for this day.</div>}
 
       {d && kept && (
-        <Sec title="Split" right="USDT">
+        <Sec title="Split" right={cur()}>
           {PARTS.map((p) => (
             <Row
               key={p.key}
@@ -74,14 +75,14 @@ export function DayM({ date }: { date: string }) {
                 </span>
               }
               value={<Amt v={d![p.key]} />}
-              onClick={() => showInfo(p.label, p.key === "trading" ? TRADING_INFO : PART_INFO[p.key])}
+              onClick={() => showInfo(p.label, p.key === "trading" ? tradingInfo() : PART_INFO[p.key])}
             />
           ))}
         </Sec>
       )}
       {d && !kept && d.trading != null && (
-        <Sec title="Split" right="USDT">
-          <Row dense title="Trading PnL" value={<Amt v={d.trading} />} onClick={() => showInfo("Trading PnL", TRADING_INFO + " The rest of the split was not kept this day.")} />
+        <Sec title="Split" right={cur()}>
+          <Row dense title="Trading PnL" value={<Amt v={d.trading} />} onClick={() => showInfo("Trading PnL", tradingInfo() + " The rest of the split was not kept this day.")} />
         </Sec>
       )}
 
@@ -92,12 +93,12 @@ export function DayM({ date }: { date: string }) {
             { label: "Not hedged", value: <SeVal v={d.trading} se={d.trading_se} /> },
             {
               label: "On refs",
-              info: "Trading PnL minus what the inventory would have made on each instrument's own reference, hedged with a 0–1 s delay. USDT. " + DEF_SE,
+              info: `Trading PnL minus what the inventory would have made on each instrument's own reference, hedged with a 0–1 s delay. ${cur()}. ` + DEF_SE,
               value: <SeVal v={d.hedged} se={d.hedged_se} />,
             },
             {
               label: "On beta",
-              info: "Trading PnL minus what the inventory would have made on the beta instrument, each market weighted by its beta. USDT. " + DEF_SE,
+              info: `Trading PnL minus what the inventory would have made on the beta instrument, each market weighted by its beta. ${cur()}. ` + DEF_SE,
               value: <SeVal v={d.factor} se={d.factor_se} />,
             },
           ]}
@@ -109,7 +110,7 @@ export function DayM({ date }: { date: string }) {
           cols={3}
           items={[
             { label: "Fills", value: int(d.fills) },
-            { label: "Volume (USDT)", value: money(d.volume, "k") },
+            { label: `Volume (${cur()})`, value: money(d.volume, "k") },
             {
               label: "Hours covered",
               info:

@@ -26,6 +26,7 @@ import {
 } from "./rest/ui";
 import "./history.css";
 import { MASK } from "../../mask";
+import { cur } from "../../desk";
 
 // ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
 // kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
@@ -203,7 +204,7 @@ function DeskHistory() {
     ];
   };
 
-  const label = range === "all" ? "PnL, all days (USDT)" : `PnL, ${range} days (USDT)`;
+  const label = range === "all" ? `PnL, all days (${cur()})` : `PnL, ${range} days (${cur()})`;
 
   return (
     <>
@@ -280,7 +281,7 @@ function DeskHistory() {
 
       <Sec
         title="By day"
-        right={sum.missing ? `${sum.missing} without Day PnL` : "USDT"}
+        right={sum.missing ? `${sum.missing} without Day PnL` : cur()}
       >
         {days
           .slice()

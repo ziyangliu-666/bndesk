@@ -2,6 +2,7 @@ import { useElementSize } from "@mantine/hooks";
 import { pnl } from "../format";
 import { C } from "../theme";
 import type { HedgeDay } from "../protocol";
+import { cur } from "../desk";
 
 const ROW_H = 26;
 const BAR_H = 14;
@@ -42,7 +43,7 @@ export function HedgeBridge({ h, inventory }: { h: HedgeDay; inventory: number }
                 <rect x={Math.min(a, b)} y={y} width={Math.max(1, Math.abs(b - a))} height={BAR_H} rx={2} fill={r.v >= 0 ? C.up : C.down} />
                 <text x={width - PAD} y={y + BAR_H - 2} textAnchor="end" className="bridge-value fig">
                   {pnl(r.total)}
-                  <tspan className="bridge-unit"> USDT</tspan>
+                  <tspan className="bridge-unit"> {cur()}</tspan>
                 </text>
               </g>
             );

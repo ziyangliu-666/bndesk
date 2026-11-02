@@ -6,6 +6,7 @@ import { bps, MINUS, price, usd } from "../format";
 import { MASK, hideNow, maskText, useHide } from "../mask";
 import { EChart, phoneDpr, type EChartsType } from "./EChart";
 import { BAND, BAND_EDGE, DOT_MAX, INV_FILL, LADDER, THROUGH_GAP, clamp, dotSize, maxNotional, missingSide, off, quoteRows, rowStatus, short, sidesOf, wideCut, widthOf, type MapSort, type QRow } from "./quotes/model";
+import { cur } from "../desk";
 
 export type { MapSort };
 
@@ -54,7 +55,7 @@ function tipHtml(r: Row, hide: boolean): string {
   const table = (body: string, extra = "") => `<table class="fig" style="width:100%;border-collapse:collapse;${extra}">${body}</table>`;
   const orders = os.length
     ? table(
-        `<thead><tr class="muted">${th("Side")}${th("Account")}${th("Price", true)}${th("USDT", true)}${th("bps", true)}</tr></thead><tbody>` +
+        `<thead><tr class="muted">${th("Side")}${th("Account")}${th("Price", true)}${th(cur(), true)}${th("bps", true)}</tr></thead><tbody>` +
           os
             .map(
               (o) =>
@@ -80,7 +81,7 @@ function tipHtml(r: Row, hide: boolean): string {
         kv("Bid", price(s.bid)) +
         kv("Ask", price(s.ask)) +
         kv("Fair", price(s.fair)) +
-        kv("Inventory", hide ? MASK : usd(s.inv_value) + " USDT") +
+        kv("Inventory", hide ? MASK : usd(s.inv_value) + ` ${cur()}`) +
         "</tbody>",
       `border-top:1px solid ${C.rule};margin-top:4px`,
     )
@@ -289,7 +290,7 @@ export function QuoteMap({
           axisTick: { show: false },
           axisLabel: { show: false },
           splitLine: { show: false },
-          name: "Inventory (USDT)",
+          name: `Inventory (${cur()})`,
           nameLocation: "end",
           nameGap: 6,
           nameTextStyle: {

@@ -19,6 +19,7 @@ import {
 import type { Venue } from "../../protocol";
 import { Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./history.css";
+import { cur } from "../../desk";
 
 const IVS = [
   { value: "line", label: "Line" },
@@ -56,7 +57,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
       iv === "line"
         ? { key: "k", kind: "line", label: symbol, color: C.ink, data: closePoints(k.bars), toggle: false, format: price }
         : { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false, format: price },
-      { key: "vol", kind: "histogram", label: "Vol(USDT)", pane: 1, data: volumePoints(k.bars, true), format: (v) => compact(v), lastValue: false },
+      { key: "vol", kind: "histogram", label: `Vol(${cur()})`, pane: 1, data: volumePoints(k.bars, true), format: (v) => compact(v), lastValue: false },
     ],
     [iv, k.bars, symbol],
   );
@@ -112,8 +113,8 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
           items={[
             { label: "Buys", value: !ready ? "--" : sum.bn ? `${int(sum.bn)} @ ${price(sum.bv / sum.bq)}` : "0", tone: sum.bn ? "up" : "" },
             { label: "Sells", value: !ready ? "--" : sum.sn ? `${int(sum.sn)} @ ${price(sum.sv / sum.sq)}` : "0", tone: sum.sn ? "down" : "" },
-            { label: "Bought (USDT)", value: ready ? money(sum.bv, "k") : "--" },
-            { label: "Sold (USDT)", value: ready ? money(sum.sv, "k") : "--" },
+            { label: `Bought (${cur()})`, value: ready ? money(sum.bv, "k") : "--" },
+            { label: `Sold (${cur()})`, value: ready ? money(sum.sv, "k") : "--" },
           ]}
         />
       </Sec>

@@ -7,6 +7,7 @@ import { selectInstrument, useStore, type Instrument } from "../../store";
 import { bps, price, qtyDecimals, qtyFixed } from "../../format";
 import type { OpenOrder, SymbolRow } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
+import { quoteOf, baseOf } from "../../desk";
 
 interface Level {
   price: number;
@@ -82,7 +83,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
   const max = Math.max(1e-9, ...asks.map((l) => l.notional), ...bids.map((l) => l.notional));
   const fair = row?.fair ?? null;
   const mid = row?.mid ?? null;
-  const base = inst?.symbol.replace(/USDT$/, "") ?? "";
+  const base = inst ? baseOf(inst.symbol) : "";
 
   // the mid's colour follows its last move
   const prev = useRef<{ mid: number | null; dir: string }>({ mid: null, dir: "" });
@@ -152,7 +153,7 @@ export function Ladder({ inst }: { inst: Instrument | null }) {
         )}
       </div>
       <div className="dk-lad-hd">
-        <span>Price(USDT)</span>
+        <span>Price{inst && quoteOf(inst.symbol) ? `(${quoteOf(inst.symbol)})` : ""}</span>
         <span>Ours({base || "--"})</span>
         <span title="Distance from fair, bps">bps</span>
       </div>

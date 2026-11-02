@@ -9,6 +9,7 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
+import { cur, baseOf } from "../desk";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -21,7 +22,7 @@ function exposureFact(x: Exposure, m: (s: string) => ReactNode, hide: boolean): 
       label: "Hedge closing",
       value: m(pnl(x.hedge_notional)),
       tone: over ? "warn" : undefined,
-      title: `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed. USDT.`,
+      title: `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed. ${cur()}.`,
     };
   if (hasGap)
     return {
@@ -35,12 +36,12 @@ function exposureFact(x: Exposure, m: (s: string) => ReactNode, hide: boolean): 
       tone: over ? "warn" : undefined,
       title:
         `Exposure gap: hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is −${num(x.ratio, 2)} × beta-weighted spot value (${betaNote(x)}). ` +
-        `After the slash: the band, the allowed size of the gap. USDT.`,
+        `After the slash: the band, the allowed size of the gap. ${cur()}.`,
     };
   return {
     label: "Net exposure",
     value: m(pnl(x.net)),
-    title: `Net exposure: spot inventory value plus futures net notional, all accounts.${hide ? "" : ` Futures net notional ${pnl(x.futures_notional)}.`} USDT.`,
+    title: `Net exposure: spot inventory value plus futures net notional, all accounts.${hide ? "" : ` Futures net notional ${pnl(x.futures_notional)}.`} ${cur()}.`,
   };
 }
 
@@ -62,7 +63,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     {
       label: "Market making",
       value: m(pnl(p?.mm)),
-      title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} USDT.`}${unpriced(p, hide)}`,
+      title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
     },
     { label: "Inventory", value: m(pnl(p?.inventory)), title: "Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill." },
     { label: "Hedge", value: m(pnl(hedge)), title: "The futures legs since the day start: price at mark, minus fees, plus funding." },
@@ -72,13 +73,13 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const facts: Fact[][] = [
     [
       ...(exposure ? [exposureFact(exposure, m, hide)] : []),
-      { label: "Equity", value: m(num(sm?.equity, 2)), title: "All accounts: spot balances at mid plus futures margin balance, USDT" },
+      { label: "Equity", value: m(num(sm?.equity, 2)), title: `All accounts: spot balances at mid plus futures margin balance, ${cur()}` },
     ],
     [
       {
         label: "Spot volume",
         value: m(compact(sm?.volume_day)),
-        title: `Spot notional filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} (the perps' hedge fills are on their own rows). USDT.`,
+        title: `Spot notional filled since ${dayStart}${hide ? "" : `; ${compact(sm?.volume_24h)} over the last 24 hours`} (the perps' hedge fills are on their own rows). ${cur()}.`,
       },
       {
         label: "Markout 10 s",
@@ -94,10 +95,10 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       <FigureHead
         className="dk-tk"
         label="Day PnL"
-        title={`Equity change since ${dayStart}, net of transfers, USDT. Day PnL = Market making + Inventory PnL + Hedge + Rebates + Other.`}
+        title={`Equity change since ${dayStart}, net of transfers, ${cur()}. Day PnL = Market making + Inventory PnL + Hedge + Rebates + Other.`}
         value={m(pnl(sm?.pnl_day))}
         tone={tone(sm?.pnl_day)}
-        aside={[{ label: "1h", value: m(pnl(sm?.pnl_1h)), title: "The change of Day PnL over the last hour, USDT" }]}
+        aside={[{ label: "1h", value: m(pnl(sm?.pnl_1h)), title: `The change of Day PnL over the last hour, ${cur()}` }]}
         parts={parts}
         facts={facts}
       />
@@ -116,21 +117,21 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   const hedgeOf = useHedgePnl();
   const perp = inst.venue === "usdm";
   const tp = row ? (perp ? hedgeOf(row) : tradingPnl(row)) : null;
-  const base = inst.symbol.replace(/USDT$/, "");
+  const base = baseOf(inst.symbol);
   const aside: Fact[] = [
     { label: "24h", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", title: "Binance's 24 h change" },
     { label: "High", value: price(t?.high) },
     { label: "Low", value: price(t?.low) },
-    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: "Binance's 24 h volume, USDT" },
+    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `Binance's 24 h volume, ${cur()}` },
   ];
   const parts: Fact[] = [
     perp
-      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: "Today: this perp's hedge leg, price P&L at mark − fees + funding, USDT. A perp has no Trading PnL (it is not quoted)" }
-      : { label: "Trading PnL", value: m(pnl(tp)), tone: tone(tp), title: "Today: market making + inventory PnL, fees included, USDT. The desk's Day PnL adds the hedge, rebates and other" },
-    ...(perp ? [] : [{ label: "Market making", value: m(pnl(row?.mm_pnl)), title: "Each fill against the mid 60 s later, minus fees, USDT" }]),
+      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this perp's hedge leg, price P&L at mark − fees + funding, ${cur()}. A perp has no Trading PnL (it is not quoted)` }
+      : { label: "Trading PnL", value: m(pnl(tp)), tone: tone(tp), title: `Today: market making + inventory PnL, fees included, ${cur()}. The desk's Day PnL adds the hedge, rebates and other` },
+    ...(perp ? [] : [{ label: "Market making", value: m(pnl(row?.mm_pnl)), title: `Each fill against the mid 60 s later, minus fees, ${cur()}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
-    { label: "Value", value: m(usd(row?.inv_value)), title: "Inventory × mid, USDT" },
-    { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills, USDT per unit" },
+    { label: "Value", value: m(usd(row?.inv_value)), title: `Inventory × mid, ${cur()}` },
+    { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills" },
   ];
   const facts: Fact[][] = [
     [

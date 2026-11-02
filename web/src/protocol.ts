@@ -13,8 +13,18 @@ export type Msg =
  *  row as [index, the fields that changed] (the list kept its length). Unchanged rows keep their objects. */
 export type Diff = { [K in keyof Snapshot]?: Snapshot[K] extends unknown[] ? [number, Record<string, unknown>][] : Record<string, unknown> };
 
+/** How this desk is set up, so the pages draw only what applies (DESIGN.md). Nothing here changes a figure. */
+export interface Desk {
+  currency: string; // the name money figures carry: not a conversion
+  quote: string; // the asset quote_free and quote_locked are balances of
+  hedge: boolean; // futures are part of the desk
+  rebates: boolean; // a rebate has been credited, today or on a kept day
+  mm: boolean; // Trading PnL is split into market making and inventory
+}
+
 export interface Snapshot {
   now: number;
+  desk?: Desk; // absent from a server older than the field
   summary: Summary;
   accounts: Account[];
   symbols: SymbolRow[];

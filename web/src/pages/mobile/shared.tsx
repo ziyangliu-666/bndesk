@@ -21,6 +21,7 @@ import type { Alert, Engine, Feed, Fill, Markouts, SymbolRow } from "../../proto
 import { useStore } from "../../store";
 import { PNL_COLORS, PNL_STROKES } from "../../theme";
 import "./ops.css";
+import { cur, quoteAsset, baseOf } from "../../desk";
 
 // ---- history: the loader and the day's parts (History, Day, instrument history) ----
 
@@ -81,11 +82,21 @@ export const PARTS = [
 export type PartKey = (typeof PARTS)[number]["key"];
 
 export const PART_INFO: Record<PartKey, string> = {
-  mm: "Each fill against the mid 60 s after it, minus fees. USDT.",
-  inventory: "Trading PnL minus market making: what the held inventory made after the first 60 s of each fill. USDT.",
-  hedge: "The futures legs: price at mark, minus fees, plus funding. USDT.",
-  rebates: "Market-maker rebates Binance credited that day. USDT.",
-  other: "Day PnL minus trading PnL, the hedge legs and the rebates. USDT.",
+  get mm() {
+    return `Each fill against the mid 60 s after it, minus fees. ${cur()}.`;
+  },
+  get inventory() {
+    return `Trading PnL minus market making: what the held inventory made after the first 60 s of each fill. ${cur()}.`;
+  },
+  get hedge() {
+    return `The futures legs: price at mark, minus fees, plus funding. ${cur()}.`;
+  },
+  get rebates() {
+    return `Market-maker rebates Binance credited that day. ${cur()}.`;
+  },
+  get other() {
+    return `Day PnL minus trading PnL, the hedge legs and the rebates. ${cur()}.`;
+  },
 };
 
 // ---- instruments and fills (Desk, Instruments, Instrument) ----
@@ -158,7 +169,7 @@ export const FillRow = memo(function FillRow({
         <>
           {symbol && (
             <>
-              {f.symbol.replace(/USDT$/, "")}
+              {baseOf(f.symbol)}
               {f.venue === "usdm" && <Tag>Perp</Tag>}
             </>
           )}
@@ -177,7 +188,7 @@ export const FillRow = memo(function FillRow({
       secondary={
         <>
           {usdt}
-          {usdt !== "--" && <span className="m-unit">USDT</span>} · {FILL_FIG_LABEL[fig]} <Bps v={v} />
+          {usdt !== "--" && <span className="m-unit">{cur()}</span>} · {FILL_FIG_LABEL[fig]} <Bps v={v} />
         </>
       }
       onClick={() => onOpen(f)}
@@ -281,9 +292,9 @@ function FillFields({ f }: { f: Fill }) {
           { label: "Role", value: f.maker ? "maker" : "taker" },
           { label: "Price", value: price(f.price) },
           { label: "Quantity", value: q(f.qty) },
-          { label: "Notional (USDT)", value: money(f.notional, "usd") },
+          { label: `Notional (${cur()})`, value: money(f.notional, "usd") },
           { label: "Fair", value: price(f.fair) },
-          { label: "Fee", value: `${f.fee_asset === "USDT" ? money(f.fee, "usd") : q(f.fee)} ${f.fee_asset}`, span: 2 },
+          { label: "Fee", value: `${f.fee_asset === quoteAsset() ? money(f.fee, "usd") : q(f.fee)} ${f.fee_asset}`, span: 2 },
         ]}
       />
       <MkTable
@@ -317,15 +328,26 @@ export const bandDef = (band: string) =>
 // ---- accounts: definitions from the desktop's tips, figure table, positions (Accounts, Account) ----
 
 export const TIP = {
-  equity: "Spot balances at mid (USDT at 1, other stablecoins at their USDT pair) plus futures margin balance, USDT.",
-  dayPnl: "Equity now − equity at the day start − net transfers in since then, USDT.",
+  get equity() {
+    return `Spot balances at mid (${quoteAsset()} at 1, other stablecoins at their ${quoteAsset()} pair) plus futures margin balance, ${cur()}.`;
+  },
+  get dayPnl() {
+    return `Equity now − equity at the day start − net transfers in since then, ${cur()}.`;
+  },
   o10: "Orders placed in the last 10 s against the Binance limit.",
   o1d: "Orders placed today as a share of the Binance daily limit.",
-  bid: "The share of the account's USDT tied up in its resting buy orders: resting bids ÷ (free USDT + resting bids).",
-  notional: "Amount × mark, USDT. Negative = short.",
-  upnl: "Unrealized PnL at mark against the entry price, USDT. Not today's result: see Today.",
-  today:
-    "Today's P&L on the symbol: the position held at the day start and today's fills marked to mark now, minus fees, plus funding, USDT.",
+  get bid() {
+    return `The share of the account's ${quoteAsset()} tied up in its resting buy orders: resting bids ÷ (free ${quoteAsset()} + resting bids).`;
+  },
+  get notional() {
+    return `Amount × mark, ${cur()}. Negative = short.`;
+  },
+  get upnl() {
+    return `Unrealized PnL at mark against the entry price, ${cur()}. Not today's result: see Today.`;
+  },
+  get today() {
+    return `Today's P&L on the symbol: the position held at the day start and today's fills marked to mark now, minus fees, plus funding, ${cur()}.`;
+  },
 };
 
 
@@ -442,7 +464,7 @@ export function EngineFacts({ e, spike }: { e: Engine; spike?: boolean }) {
       items={[
         {
           label: "Realized",
-          info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started; Unrealized: its open position at its own marks. USDT.`,
+          info: `${ENGINE_BOOKS} Realized: what its closed trades made since it started; Unrealized: its open position at its own marks. ${cur()}.`,
           value: money(e.realized),
           v: e.realized,
         },
@@ -523,7 +545,7 @@ export function KillBar({ e }: { e: Engine }) {
   return (
     <LimitBar
       label="Loss limit"
-      info={`The engine stops itself (its kill switch) when its own loss reaches ${money(e.max_loss, "usd")} USDT. The bar is its loss now, realized plus unrealized: ${money(e.realized + e.unrealized)} USDT; empty while it is making money.`}
+      info={`The engine stops itself (its kill switch) when its own loss reaches ${money(e.max_loss, "usd")} ${cur()}. The bar is its loss now, realized plus unrealized: ${money(e.realized + e.unrealized)} ${cur()}; empty while it is making money.`}
       value={loss}
       limit={e.max_loss}
     />

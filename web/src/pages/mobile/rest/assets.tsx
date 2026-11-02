@@ -11,6 +11,7 @@ import type { Account, Position } from "../../../protocol";
 import { Amt, Row, amt } from "./ui";
 import { MASK } from "../../../mask";
 import "./assets.css";
+import { cur } from "../../../desk";
 
 /** The eye next to a hero's label: Hide amounts on and off. */
 export function Eye() {
@@ -97,8 +98,8 @@ export function DeskChart({ what }: { what: "equity" | "exposure" }) {
     <div className="r-chart">
       <ExChart
         id={what === "equity" ? "m-assets-eq" : "m-assets-exp"}
-        title={what === "equity" ? "Equity today (USDT)" : "Exposure today (USDT)"}
-        toolbarLeft={<span className="a-chart-t">{what === "equity" ? "Equity today (USDT)" : "Exposure today (USDT)"}</span>}
+        title={what === "equity" ? `Equity today (${cur()})` : `Exposure today (${cur()})`}
+        toolbarLeft={<span className="a-chart-t">{what === "equity" ? `Equity today (${cur()})` : `Exposure today (${cur()})`}</span>}
         series={series}
         height={220}
         fullscreen
@@ -128,8 +129,8 @@ export function AccountsChart({ accounts, only }: { accounts: Account[]; only?: 
     <div className="r-chart">
       <ExChart
         id={only ? "m-account-pnl" : "m-assets-accts"}
-        title={only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}
-        toolbarLeft={<span className="a-chart-t">{only ? "Day PnL today (USDT)" : "Day PnL by account (USDT)"}</span>}
+        title={only ? `Day PnL today (${cur()})` : `Day PnL by account (${cur()})`}
+        toolbarLeft={<span className="a-chart-t">{only ? `Day PnL today (${cur()})` : `Day PnL by account (${cur()})`}</span>}
         series={series}
         // 204: the chip row clears the bottom bar on the first view of Assets
         height={only ? 200 : 204}

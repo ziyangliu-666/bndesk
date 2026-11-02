@@ -11,6 +11,7 @@ import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
 import "./desk/mk.css";
+import { cur, quoteOf, baseOf } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
 type Key = "fills" | "name" | "chg" | "pnl" | "inv";
@@ -184,13 +185,13 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
   const perp = r.venue === "usdm";
   const chg = t?.changePct ?? null;
   // with amounts hidden every row reads the same ("flat" would tell which are held)
-  const inv = !hide && Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short") + (hide ? "" : " USDT");
+  const inv = !hide && Math.abs(r.inv_value) < 0.005 ? "flat" : (perp ? "pos " : "inv ") + money(r.inv_value, perp ? "pnlShort" : "short") + (hide ? "" : ` ${cur()}`);
   return (
     <UnstyledButton className="mk-row" onClick={() => selectInstrument({ symbol: r.symbol, venue: r.venue })}>
       <span className="mk-c-l">
         <span className="mk-sym">
-          {r.symbol.replace(/USDT$/, "")}
-          <span className="mk-quote">/USDT</span>
+          {baseOf(r.symbol)}
+          <span className="mk-quote">/{quoteOf(r.symbol)}</span>
         </span>
         <span className="mk-sub">
           {perp ? "Perp · " : ""}

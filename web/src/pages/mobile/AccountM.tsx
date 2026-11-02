@@ -9,6 +9,7 @@ import { FillRow, TIP, useFillSheet } from "./shared";
 import { Amt, Big, Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import { AccountsChart, Eye, PositionRow } from "./rest/assets";
 import "./accounts.css";
+import { cur, quoteAsset } from "../../desk";
 
 const FILLS = 30;
 type Tab = "balance" | "instruments" | "orders" | "fills";
@@ -38,7 +39,7 @@ export function AccountM({ id }: { id: string }) {
       <Big
         label={
           <>
-            Day PnL (USDT)
+            Day PnL ({cur()})
             <Eye />
           </>
         }
@@ -85,16 +86,16 @@ function Balance({ id }: { id: string }) {
           cols={3}
           items={[
             { label: "Equity", info: TIP.equity, value: money(a.equity, "full") },
-            { label: "Day start", info: "Equity at the day start, USDT.", value: money(a.equity_open, "full") },
+            { label: "Day start", info: `Equity at the day start, ${cur()}.`, value: money(a.equity_open, "full") },
             {
               label: a.transfers_day >= 0 ? "Transfers in" : "Transfers out",
               info: "Money moved into the account since the day start (out, if negative), net. Day PnL = equity change − transfers in.",
               value: money(Math.abs(a.transfers_day), "full"),
             },
-            { label: "USDT free", value: money(a.quote_free, "full") },
-            { label: "USDT locked", info: "Spot quote balance locked in open orders, USDT.", value: money(a.quote_locked, "full") },
-            { label: "Inventory", info: "Non-quote spot assets, free + locked, at mid, USDT.", value: money(a.inventory_value, "full") },
-            { label: "Rebates", info: "Market-maker rebates credited since the day start: already part of Day PnL, USDT.", value: <Amt v={a.rebates} /> },
+            { label: `${quoteAsset()} free`, value: money(a.quote_free, "full") },
+            { label: `${quoteAsset()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(a.quote_locked, "full") },
+            { label: "Inventory", info: `Non-quote spot assets, free + locked, at mid, ${cur()}.`, value: money(a.inventory_value, "full") },
+            { label: "Rebates", info: `Market-maker rebates credited since the day start: already part of Day PnL, ${cur()}.`, value: <Amt v={a.rebates} /> },
           ]}
         />
       </Sec>
@@ -184,15 +185,15 @@ function Orders({ id }: { id: string }) {
       <Sec flush>
         {a.orders_10s_limit > 0 && <Meter label="Orders 10 s" value={a.orders_10s} limit={a.orders_10s_limit} />}
         {a.orders_1d_limit > 0 && <Meter label="Orders today" sub={`${int(a.orders_1d)} of ${limitK(a.orders_1d_limit)}`} value={a.orders_1d} limit={a.orders_1d_limit} pct />}
-        {util != null && <Meter label="Bid use" sub="resting bids ÷ USDT" value={util} limit={1} pct digits={0} />}
+        {util != null && <Meter label="Bid use" sub={`resting bids ÷ ${cur()}`} value={util} limit={1} pct digits={0} />}
       </Sec>
       <Sec title="Resting" right={<button type="button" className="r-act" onClick={() => navigate({ page: "orders", account: id })}>Open orders</button>}>
         <Stats
           cols={3}
           items={[
             { label: "Open", value: int(a.open_orders) },
-            { label: "Bids (USDT)", value: money(a.bids_notional, "full") },
-            { label: "Asks (USDT)", value: money(a.asks_notional, "full") },
+            { label: `Bids (${cur()})`, value: money(a.bids_notional, "full") },
+            { label: `Asks (${cur()})`, value: money(a.asks_notional, "full") },
           ]}
         />
       </Sec>

@@ -40,6 +40,7 @@ import {
 } from "./history/data";
 import "./history/history.css";
 import { useInstFills } from "./desk/instFills";
+import { cur } from "../desk";
 
 const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
@@ -329,7 +330,7 @@ export function History() {
             value={tab}
             onChange={setTab}
           />
-          <span className="hx-span muted">{inst ? "Our fills" : "USDT"}</span>
+          <span className="hx-span muted">{inst ? "Our fills" : cur()}</span>
         </div>
         <div className="hx-table-body">
           {inst ? (

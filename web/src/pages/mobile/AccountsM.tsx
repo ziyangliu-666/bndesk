@@ -10,6 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
+import { cur, quoteAsset, baseOf } from "../../desk";
 
 type Tab = "accounts" | "spot" | "futures" | "exposure";
 const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
@@ -31,7 +32,7 @@ export function AccountsM() {
       <Big
         label={
           <>
-            Est. total value (USDT)
+            Est. total value ({cur()})
             <Eye />
           </>
         }
@@ -126,15 +127,15 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
         <Stats
           cols={3}
           items={[
-            { label: "Inventory", info: "Non-quote spot assets, free + locked, at mid, all accounts, USDT.", value: money(t.inv, "full") },
-            { label: "USDT free", value: money(t.free, "full") },
-            { label: "USDT locked", info: "Spot quote balance locked in open orders, USDT.", value: money(t.locked, "full") },
+            { label: "Inventory", info: `Non-quote spot assets, free + locked, at mid, all accounts, ${cur()}.`, value: money(t.inv, "full") },
+            { label: `${quoteAsset()} free`, value: money(t.free, "full") },
+            { label: `${quoteAsset()} locked`, info: `Spot quote balance locked in open orders, ${cur()}.`, value: money(t.locked, "full") },
           ]}
         />
       </Sec>
       <Sec title="Holdings" right="value · Trading PnL">
         {held.map((r) => {
-          const base = r.symbol.replace(/USDT$/, "");
+          const base = baseOf(r.symbol);
           return (
             <Row
               key={r.symbol}
@@ -174,7 +175,7 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
         <Stats
           cols={3}
           items={[
-            { label: "Wallet", info: "USD-M futures wallet balance, all accounts, USDT.", value: money(t.w, "full") },
+            { label: "Wallet", info: `USD-M futures wallet balance, all accounts, ${cur()}.`, value: money(t.w, "full") },
             { label: "uPnL", info: TIP.upnl, value: <Amt v={t.u} /> },
             { label: "Available", value: money(t.av, "full") },
           ]}
@@ -232,9 +233,9 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
   const offset = hd && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
   const gapInfo = x.paused
     ? `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed` +
-      `${x.paused_until != null ? `, until ${hms(x.paused_until, tz)}` : ""}. USDT.`
+      `${x.paused_until != null ? `, until ${hms(x.paused_until, tz)}` : ""}. ${cur()}.`
     : `Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is ` +
-      `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "full"))} USDT.`;
+      `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "full"))} ${cur()}.`;
   return (
     <>
       <Sec flush>
@@ -249,16 +250,16 @@ function ExposureTab({ accounts }: { accounts: Account[] }) {
         <Stats
           cols={3}
           items={[
-            { label: "Net exposure", info: `Spot inventory value plus futures net notional, all accounts. USDT.`, value: <Amt v={x.net} plain /> },
+            { label: "Net exposure", info: `Spot inventory value plus futures net notional, all accounts. ${cur()}.`, value: <Amt v={x.net} plain /> },
             {
               label: "Hedge target",
-              info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} USDT.`,
+              info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} ${cur()}.`,
               value: <Amt v={x.target} plain />,
             },
-            { label: "Hedge", info: "Futures notional of the hedge symbols, USDT.", value: <Amt v={x.hedge_notional} plain /> },
+            { label: "Hedge", info: `Futures notional of the hedge symbols, ${cur()}.`, value: <Amt v={x.hedge_notional} plain /> },
             { label: "Spot value", value: money(x.spot_value, "full") },
             ...(Math.abs(x.futures_notional - x.hedge_notional) > 0.005
-              ? [{ label: "All futures", info: "Futures net notional of every symbol, hedge or not, USDT.", value: <Amt v={x.futures_notional} plain /> }]
+              ? [{ label: "All futures", info: `Futures net notional of every symbol, hedge or not, ${cur()}.`, value: <Amt v={x.futures_notional} plain /> }]
               : []),
           ]}
         />

@@ -14,6 +14,7 @@ import { useExPref } from "../ex/prefs";
 import { QuoteRows } from "./QuoteRows";
 import { RANGES, SORTS, mapCounts, quoteRows, rowsFor, type MapSort, type QRow } from "./model";
 import "./quotes.css";
+import { baseOf } from "../../desk";
 
 export { QuoteRows, type QuoteRowsProps } from "./QuoteRows";
 export { quoteRows, rowsFor, short, mapCounts, sidesOf, widthOf, RANGES, LADDER, SORTS, type QRow, type MapSort } from "./model";
@@ -192,7 +193,7 @@ function PhoneMap({ st, onSelect, selected }: { st: QuoteMapState; onSelect?: On
       rowH={28}
       label={52}
       inv
-      selected={selected ? selected.replace(/USDT$/, "") : undefined}
+      selected={selected ? baseOf(selected) : undefined}
       onRow={onSelect ? (r) => onSelect(r.sym.symbol, r.sym.venue) : undefined}
     />
   );

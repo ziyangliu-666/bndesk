@@ -9,6 +9,7 @@ import { flexCols } from "../grid";
 import { int, num, pct } from "../format";
 import { Meter, StateTag } from "./ui";
 import { amount, hideNow, money } from "../mask";
+import { cur, quoteAsset } from "../desk";
 
 type Row = Account & { _total?: boolean };
 
@@ -56,7 +57,7 @@ function UtilCell(p: ICellRendererParams<Row>) {
   return (
     <span
       className="meter-cell"
-      title={hide ? "Resting bid notional / (free quote + resting bid notional)" : `resting bids ${money(a.bids_notional)} of ${money(a.bids_notional + a.quote_free)} USDT quote`}
+      title={hide ? "Resting bid notional / (free quote + resting bid notional)" : `resting bids ${money(a.bids_notional)} of ${money(a.bids_notional + a.quote_free)} ${cur()} quote`}
     >
       <Meter value={r} limit={1} />
       <span className={"fig meter-num " + (r > 0.8 ? "warn-text" : "")}>{pct(r, 0)}</span>
@@ -140,22 +141,22 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
     const futOnly = (p: ValueFormatterParams<Row>) => (p.data?.fut_wallet || p.data?._total ? fMoney(p) : "--");
     const account: ColDef<Row> = { field: "label", headerName: "Account", headerTooltip: "Account label; hover a name for its email", width: 112, pinned: "left", cellRenderer: AccountCell };
     const stream: ColDef<Row> = { field: "user_stream", headerName: "Stream", headerTooltip: "User data stream state (fills, orders, balances)", width: 76, cellRenderer: StreamCell };
-    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: "Spot balances at mid (USDT at 1, other stablecoins at their USDT pair) plus futures margin balance, USDT", width: 92, valueFormatter: fMoney });
-    const day = n({ field: "pnl_day", headerName: "Day PnL", headerTooltip: "Equity now − equity at the day start − net transfers in since then, USDT", width: 80, valueFormatter: fSigned, cellClass: signedCls(hide) });
+    const equity = n({ field: "equity", headerName: "Equity", headerTooltip: `Spot balances at mid (${quoteAsset()} at 1, other stablecoins at their ${quoteAsset()} pair) plus futures margin balance, ${cur()}`, width: 92, valueFormatter: fMoney });
+    const day = n({ field: "pnl_day", headerName: "Day PnL", headerTooltip: `Equity now − equity at the day start − net transfers in since then, ${cur()}`, width: 80, valueFormatter: fSigned, cellClass: signedCls(hide) });
     const open = n({ field: "open_orders", headerName: "Open", headerTooltip: "Number of open orders", width: 56, valueFormatter: fInt, cellClass: "num" });
     if (full) {
       const c: ColDef<Row>[] = [
         account,
         equity,
         day,
-        n({ field: "transfers_day", headerName: "Transfers", headerTooltip: "Net transfers in since the day start, USDT", width: 86, valueFormatter: fSigned }),
-        n({ field: "rebates", headerName: "Rebates", headerTooltip: "Market-maker rebates credited since the day start, part of Day PnL, USDT", width: 76, valueFormatter: fSigned }),
-        n({ field: "equity_open", headerName: "Equity open", headerTooltip: "Equity at the day start, USDT", width: 92, valueFormatter: fMoney, hide: !wide }),
-        n({ field: "quote_free", headerName: "USDT free", headerTooltip: "Free spot quote balance, USDT", width: 86, valueFormatter: fMoney }),
-        n({ field: "quote_locked", headerName: "In orders", headerTooltip: "Spot quote balance locked in open bids, USDT", width: 80, valueFormatter: fMoney }),
-        n({ field: "inventory_value", headerName: "Inventory", headerTooltip: "Non-quote spot assets, free + locked, at mid, USDT", width: 86, valueFormatter: fMoney }),
-        n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: "USD-M futures wallet balance, USDT", width: 100, valueFormatter: futOnly }),
-        n({ field: "fut_upnl", headerName: "Futures uPnL", headerTooltip: "Unrealized PnL of futures positions at mark, USDT", width: 96, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
+        n({ field: "transfers_day", headerName: "Transfers", headerTooltip: `Net transfers in since the day start, ${cur()}`, width: 86, valueFormatter: fSigned }),
+        n({ field: "rebates", headerName: "Rebates", headerTooltip: `Market-maker rebates credited since the day start, part of Day PnL, ${cur()}`, width: 76, valueFormatter: fSigned }),
+        n({ field: "equity_open", headerName: "Equity open", headerTooltip: `Equity at the day start, ${cur()}`, width: 92, valueFormatter: fMoney, hide: !wide }),
+        n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 86, valueFormatter: fMoney }),
+        n({ field: "quote_locked", headerName: "In orders", headerTooltip: `Spot quote balance locked in open bids, ${cur()}`, width: 80, valueFormatter: fMoney }),
+        n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 86, valueFormatter: fMoney }),
+        n({ field: "fut_wallet", headerName: "Futures wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 100, valueFormatter: futOnly }),
+        n({ field: "fut_upnl", headerName: "Futures uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 96, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
         open,
         { colId: "fee_spot", headerName: "Spot fee (bps)", width: 96, cellRenderer: FeeSpot, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "Spot commission, maker / taker, bps of notional" },
         { colId: "fee_usdm", headerName: "USD-M fee (bps)", width: 104, cellRenderer: FeeUsdm, sortable: false, cellClass: "num", type: "rightAligned", headerTooltip: "USD-M futures commission, maker / taker, bps of notional" },
@@ -169,11 +170,11 @@ export function AccountsGrid({ full = false, wide = true, totals = !full }: { fu
       stream,
       equity,
       day,
-      n({ field: "quote_free", headerName: "USDT free", headerTooltip: "Free spot quote balance, USDT", width: 80, valueFormatter: fMoney }),
-      n({ field: "quote_locked", headerName: "Locked", headerTooltip: "Spot quote balance locked in open orders, USDT", width: 70, valueFormatter: fMoney }),
-      n({ field: "inventory_value", headerName: "Inventory", headerTooltip: "Non-quote spot assets, free + locked, at mid, USDT", width: 80, valueFormatter: fMoney }),
-      n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: "USD-M futures wallet balance, USDT", width: 78, valueFormatter: futOnly }),
-      n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: "Unrealized PnL of futures positions at mark, USDT", width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
+      n({ field: "quote_free", headerName: `${quoteAsset()} free`, headerTooltip: `Free spot quote balance, ${cur()}`, width: 80, valueFormatter: fMoney }),
+      n({ field: "quote_locked", headerName: "Locked", headerTooltip: `Spot quote balance locked in open orders, ${cur()}`, width: 70, valueFormatter: fMoney }),
+      n({ field: "inventory_value", headerName: "Inventory", headerTooltip: `Non-quote spot assets, free + locked, at mid, ${cur()}`, width: 80, valueFormatter: fMoney }),
+      n({ field: "fut_wallet", headerName: "Fut wallet", headerTooltip: `USD-M futures wallet balance, ${cur()}`, width: 78, valueFormatter: futOnly }),
+      n({ field: "fut_upnl", headerName: "Fut uPnL", headerTooltip: `Unrealized PnL of futures positions at mark, ${cur()}`, width: 72, valueFormatter: (p) => (p.data?.fut_wallet || p.data?._total ? fSigned(p) : "--") }),
       { colId: "o10", headerName: "Orders 10 s", headerTooltip: "Orders placed in the last 10 s / Binance limit", width: 104, cellRenderer: M10, valueGetter: (p) => (p.data ? p.data.orders_10s / (p.data.orders_10s_limit || 1) : 0) },
       { colId: "o1d", headerName: "Orders today", headerTooltip: "Orders placed today as a share of the Binance daily limit, %", width: 90, cellRenderer: M1d, valueGetter: (p) => (p.data ? p.data.orders_1d / (p.data.orders_1d_limit || 1) : 0) },
       { colId: "util", headerName: "Bid use", width: 90, cellRenderer: UtilCell, valueGetter: (p) => p.data?.utilization ?? 0, headerTooltip: "Resting bid notional / (free quote + resting bid notional), %" },

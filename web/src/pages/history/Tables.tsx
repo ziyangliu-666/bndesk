@@ -6,6 +6,7 @@ import { compact, hm, int, num, price, qtyDecimals, se, signClass, type TzMode }
 import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
 import { dayOf, type DayRow, type Row } from "./data";
+import { cur } from "../../desk";
 
 export interface Col<R> {
   key: string;
@@ -142,7 +143,7 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     p("reb", "Rebates"),
     p("other", "Other", PART_META.other.title),
     { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills },
-    { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : ""), sort: hide ? undefined : (r) => r.volume },
+    { key: "v", label: "Volume", title: `Filled notional, ${cur()}`, cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : ""), sort: hide ? undefined : (r) => r.volume },
   ];
 }
 
@@ -222,7 +223,7 @@ const fillCols = (first: string, title: string, hide: boolean, nd: number): Col<
   { key: "f", label: "Fills", cell: (g) => int(g.fills), cls: () => "fig", sort: (g) => g.fills },
   { key: "b", label: "Buys", cell: (g) => int(g.buys), cls: () => "fig", sort: (g) => g.buys },
   { key: "s", label: "Sells", cell: (g) => int(g.sells), cls: () => "fig", sort: (g) => g.sells },
-  { key: "v", label: "Volume", title: "Filled notional, USDT", cell: (g) => maskText(hide, compact(g.bn + g.sn)), cls: () => "fig" + (hide ? " masked" : "") },
+  { key: "v", label: "Volume", title: `Filled notional, ${cur()}`, cell: (g) => maskText(hide, compact(g.bn + g.sn)), cls: () => "fig" + (hide ? " masked" : "") },
   { key: "ab", label: "Avg buy", cell: (g) => (g.bq > 0 ? price(g.bn / g.bq) : "--"), cls: () => "fig" },
   { key: "as", label: "Avg sell", cell: (g) => (g.sq > 0 ? price(g.sn / g.sq) : "--"), cls: () => "fig" },
   { key: "n", label: "Net qty", title: "Bought minus sold, base asset", cell: (g) => qtyText(g.bq - g.sq, hide, true, nd), cls: () => "fig" + (hide ? " masked" : "") },

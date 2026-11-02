@@ -9,6 +9,7 @@ import { C, SANS } from "../../theme";
 import { MINUS } from "../../format";
 import { BAND, BAND_EDGE, DOT_MAX, INV_FILL, THROUGH_GAP, clamp, dotSize, maxNotional, missingSide, off, rowStatus, short, wideCut, type QRow } from "./model";
 import { MASK, useHide } from "../../mask";
+import { cur } from "../../desk";
 
 export interface QuoteRowsProps {
   rows: readonly QRow[];
@@ -181,7 +182,7 @@ function draw(
   }
   if (inv && top) {
     g.textAlign = "right";
-    g.fillText(w < 520 ? "USDT" : "Inventory (USDT)", w - PAD / 2, top / 2);
+    g.fillText(w < 520 ? cur() : `Inventory (${cur()})`, w - PAD / 2, top / 2);
   }
   if (p.part === "axis") return;
 

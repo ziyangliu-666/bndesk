@@ -27,6 +27,7 @@ import {
 } from "../../components/ex";
 import { refLabel } from "../../components/ui";
 import { maskFormat, maskNode, useHide } from "../../mask";
+import { cur, baseOf } from "../../desk";
 
 // research §3.2: Line 1s 1m 5m 15m 1H 4H 1D ▾(30m 1W), 1m first. No 1s: the server's kline proxy has no 1 s
 // bars (spec, Data), and the Line already draws the 1 m closes.
@@ -171,18 +172,18 @@ function Klines({ inst }: { inst: Instrument }) {
   const stable = useRef(new Stable()).current;
   const oursPts = useMemo(() => k.bars.map((b) => ({ time: b.time, value: oursByBar.get(b.time) ?? 0, color: OURS })), [k.bars, oursByBar]);
   const series: ExSeries[] = useMemo(() => {
-    const base = symbol.replace(/USDT$/, "");
+    const base = baseOf(symbol);
     const out: ExSeries[] = [
       line
         ? { key: "k", kind: "line", label: symbol, data: closePoints(k.bars), color: C.ink, toggle: false, format: price }
         : { key: "k", kind: "candles", label: symbol, data: k.bars, toggle: false },
       // the market's volume, not ours: never masked
-      { key: "vol", kind: "histogram", label: "Vol(USDT)", data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
+      { key: "vol", kind: "histogram", label: `Vol(${cur()})`, data: volumePoints(k.bars, true), pane: 1, format: (v) => compact(v), lastValue: false },
       // ours on its own scale in the same pane (a sliver next to the market's otherwise); the legend has the figure
       {
         key: "ours",
         kind: "histogram",
-        label: "Ours(USDT)",
+        label: `Ours(${cur()})`,
         data: stable.get("ours" + kIv, oursPts, sameValue),
         pane: 1,
         scale: "ours",

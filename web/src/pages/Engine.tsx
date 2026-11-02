@@ -16,6 +16,7 @@ import { TextToggle, useExPref } from "../components/ex";
 import { Money } from "../mask";
 import { RULES } from "./mobile/rules";
 import "./ops/ops.css";
+import { cur } from "../desk";
 
 /** A latency in one unit down the page: µs (a decimal under 100 µs). */
 function us(v: number | null): string {
@@ -285,7 +286,7 @@ export function Engine() {
           <span className="ops-title">
             Engines {engDown > 0 && <span className="ops-count fig warn-text">{engDown} down</span>}
           </span>
-          <span className="ops-head-right muted">Money in USDT</span>
+          <span className="ops-head-right muted">Money in {cur()}</span>
         </header>
         <div className="ops-sys-scroll">
           {engines?.length ? (

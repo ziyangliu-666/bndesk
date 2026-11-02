@@ -17,6 +17,7 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesMini } from "./desk/QuoteTouch";
 import { QuoteLegend } from "../../components/quotes";
 import "./desk.css";
+import { cur } from "../../desk";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
@@ -79,10 +80,10 @@ export function DeskM() {
         {chartEl}
       </section>
 
-      <Section title="Day PnL split" right="USDT">
+      <Section title="Day PnL split" right={cur()}>
         <PartRows
           rows={[
-            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, sub: p.mm_unmarked_fills ? `${int(p.mm_unmarked_fills)} without a 60 s price` : undefined, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} USDT.${unpriced(p, hide)}` },
+            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, sub: p.mm_unmarked_fills ? `${int(p.mm_unmarked_fills)} without a 60 s price` : undefined, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} ${cur()}.${unpriced(p, hide)}` },
             { key: "inv", label: "Inventory PnL", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
             { key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge },
             { key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates },
@@ -162,7 +163,7 @@ function DeskHero({ v, since, h1, equity }: { v: number; since: string; h1: numb
         <span className="dk-hero-v">
           <Money v={v} />
         </span>
-        <span className="dk-hero-unit">USDT</span>
+        <span className="dk-hero-unit">{cur()}</span>
         <UnstyledButton
           className="dk-eye"
           aria-label={hide ? "Show amounts" : "Hide amounts"}
@@ -279,7 +280,7 @@ const Movers = memo(function Movers({ symbols }: { symbols: SymbolRow[] | undefi
             subtitle={
               perp
                 ? `Hedge leg · ${int(r.fills_day)} fills`
-                : `${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + " USDT"} · ${int(r.fills_day)} fills`
+                : `${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + ` ${cur()}`} · ${int(r.fills_day)} fills`
             }
             primary={
               <>
@@ -334,7 +335,7 @@ function ExposureBar({ x }: { x: Exposure }) {
       return (
         <LimitBar
           label="Hedge off"
-          info={`${x.paused}: the hedge is off and its target is 0; the figure is the hedge symbols' futures notional still open, to be closed, against the band ±${money(x.band, "usd")}. USDT.`}
+          info={`${x.paused}: the hedge is off and its target is 0; the figure is the hedge symbols' futures notional still open, to be closed, against the band ±${money(x.band, "usd")}. ${cur()}.`}
           value={x.hedge_notional}
           limit={x.band}
           centered
@@ -353,7 +354,7 @@ function ExposureBar({ x }: { x: Exposure }) {
         info={
           `Hedge target minus the futures notional of the hedge symbols: the trade that closes it (negative = sell more). ` +
           `The target, ${money(x.target, "pnl")}, is −${num(x.ratio, 2)} × the beta-weighted spot value ${money(x.beta_value, "usd")}; ${beta}. ` +
-          `The band, ±${money(x.band, "usd")}, is the allowed size of the gap. USDT.`
+          `The band, ±${money(x.band, "usd")}, is the allowed size of the gap. ${cur()}.`
         }
         value={x.gap}
         limit={x.band}
@@ -364,7 +365,7 @@ function ExposureBar({ x }: { x: Exposure }) {
   return (
     <LimitBar
       label="Net exposure"
-      info={`Spot inventory value ${money(x.spot_value, "usd")} plus futures net notional ${money(x.futures_notional, "pnl")}, all accounts. No hedge band is set. USDT.`}
+      info={`Spot inventory value ${money(x.spot_value, "usd")} plus futures net notional ${money(x.futures_notional, "pnl")}, all accounts. No hedge band is set. ${cur()}.`}
       value={x.net}
       limit={0}
       text={<Money v={x.net} color={false} />}

@@ -6,6 +6,7 @@ import { useInstFills } from "./instFills";
 import { bps, compact, hms, int, price, qtyDecimals, qtyFixed } from "../../format";
 import type { Fill } from "../../protocol";
 import { maskNode, qtyText, useHide } from "../../mask";
+import { quoteOf, baseOf } from "../../desk";
 
 const N = 80;
 
@@ -65,7 +66,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
   }, [list]);
   const fresh = freshAt.current;
 
-  const base = inst?.symbol.replace(/USDT$/, "");
+  const base = inst ? baseOf(inst.symbol) : undefined;
   // one precision down the quantities (fixed: they line up), the largest one's
   const qd = qtyDecimals(Math.max(0, ...list.map((f) => f.qty)));
   return (
@@ -78,7 +79,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
       <div className={"dk-tr-hd" + (inst ? " inst" : "")}>
         {inst ? (
           <>
-            <span>Price(USDT)</span>
+            <span>Price{inst && quoteOf(inst.symbol) ? `(${quoteOf(inst.symbol)})` : ""}</span>
             <span>Qty({base})</span>
           </>
         ) : (
@@ -103,7 +104,7 @@ export function LatestFills({ inst }: { inst: Instrument | null }) {
 
 const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: ShownFill; inst: boolean; fresh: boolean; hide: boolean; time: string; qd: number }) {
   const side = f.side === "buy" ? "up" : "down";
-  const tip = `${f.side === "buy" ? "Buy" : "Sell"} ${qtyText(f.qty, hide)} ${f.symbol.replace(/USDT$/, "")} at ${price(f.price)}, ${f.account}${f.maker ? "" : ", taker"}`;
+  const tip = `${f.side === "buy" ? "Buy" : "Sell"} ${qtyText(f.qty, hide)} ${baseOf(f.symbol)} at ${price(f.price)}, ${f.account}${f.maker ? "" : ", taker"}`;
   return (
     <div
       className={"dk-tr-row" + (inst ? " inst" : " click") + (fresh ? " fresh" : "")}
@@ -118,7 +119,7 @@ const FillRow = memo(function FillRow({ f, inst, fresh, hide, time, qd }: { f: S
       ) : (
         <>
           <span className="dk-tr-sym">
-            {f.symbol.replace(/USDT$/, "")}
+            {baseOf(f.symbol)}
             {f.venue === "usdm" && <span className="dk-tag">Perp</span>}
             {f.conversion && <span className="dk-tag" title="A trade between two stablecoins: left out of every fill statistic">Conv</span>}
           </span>

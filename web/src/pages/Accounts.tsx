@@ -18,6 +18,7 @@ import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../componen
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
 import { IVS, IV_KEYS, STEP, useBucketed } from "./ops/series";
 import "./ops/ops.css";
+import { cur, quoteAsset, baseOf } from "../desk";
 
 type AssetTab = "overview" | "spot" | "futures" | "exposure";
 
@@ -68,7 +69,7 @@ function Hero() {
       <FigureHead
         label={
           <span className="ops-hero-label">
-            Total value (USDT)
+            Total value ({cur()})
             <button className="ops-eye" type="button" onClick={() => setHide(!hide)} aria-label={hide ? "Show amounts" : "Hide amounts"} title={hide ? "Show amounts" : "Hide amounts"}>
               {hide ? <IconEyeOff size={14} /> : <IconEye size={14} />}
             </button>
@@ -90,7 +91,7 @@ function Hero() {
           },
         ]}
         parts={[
-          { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: "Spot: USDT free and in orders plus the other assets at mid" },
+          { label: "Spot", value: t ? <Money v={t.spot} /> : "--", title: `Spot: ${quoteAsset()} free and in orders plus the other assets at mid` },
           { label: "Futures", value: t ? <Money v={t.fut} /> : "--", title: "USD-M futures: wallet balance plus unrealized PnL" },
         ]}
         facts={[
@@ -185,7 +186,7 @@ function AccountChart() {
     <section className="ops-panel ops-chart-panel">
       <ExChart
         id="assets-acc"
-        title={mode === "pnl" ? "Day PnL by account (USDT)" : "Desk equity (USDT)"}
+        title={mode === "pnl" ? `Day PnL by account (${cur()})` : `Desk equity (${cur()})`}
         series={lines}
         intervals={IVS}
         interval={iv}
@@ -243,12 +244,12 @@ function SideChart({ id, title, field, color }: { id: string; title: string; fie
     <section className="ops-panel ops-chart-panel">
       <ExChart
         id={id}
-        title={`${title} (USDT)`}
+        title={`${title} (${cur()})`}
         series={[{ key: field, kind: field === "inventory" ? "area" : "line", label: title, color, data: pts(field, cols.t, cols.v, STEP[iv] ?? 0), format: fmt, toggle: false }]}
         intervals={IVS}
         interval={iv}
         onInterval={setIv}
-        toolbarLeft={<span className="ops-chart-title">{title} (USDT)</span>}
+        toolbarLeft={<span className="ops-chart-title">{title} ({cur()})</span>}
         fill
         fullscreen
         emptyText="No series yet"
@@ -275,7 +276,7 @@ interface SpotRow {
 }
 
 const rowIdSpot = (p: GetRowIdParams<SpotRow>) => p.data.symbol;
-const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== "USDT" && selectInstrument({ symbol: e.data.symbol, venue: "spot" });
+const openSpot = (e: RowClickedEvent<SpotRow>) => e.data && e.data.asset !== quoteAsset() && selectInstrument({ symbol: e.data.symbol, venue: "spot" });
 
 function useSpotRows() {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -290,7 +291,7 @@ function useSpotRows() {
         const l = Math.min(locked.get(s.symbol) ?? 0, s.inv_qty);
         return {
           symbol: s.symbol,
-          asset: s.symbol.replace(/USDT$/, ""),
+          asset: baseOf(s.symbol),
           venue: "spot" as const,
           amount: s.inv_qty,
           locked: l,
@@ -306,7 +307,7 @@ function useSpotRows() {
       .sort((a, b) => b.value - a.value);
     const free = (accounts ?? []).reduce((k, a) => k + a.quote_free, 0);
     const inOrders = (accounts ?? []).reduce((k, a) => k + a.quote_locked, 0);
-    const usdt: SpotRow = { symbol: "USDT", asset: "USDT", venue: "spot", amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
+    const usdt: SpotRow = { symbol: quoteAsset(), asset: quoteAsset(), venue: "spot", amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
     return { rows, usdt };
   }, [symbols, orders, accounts]);
 }
@@ -331,9 +332,9 @@ function SpotAccounts() {
           <thead>
             <tr>
               <th className="l">Account</th>
-              <th title="Free spot quote balance, USDT">USDT free</th>
-              <th title="Spot quote balance locked in open bids, USDT">In orders</th>
-              <th title="Non-quote spot assets at mid, USDT">Inventory</th>
+              <th title={`Free spot quote balance, ${cur()}`}>{quoteAsset()} free</th>
+              <th title={`Spot quote balance locked in open bids, ${cur()}`}>In orders</th>
+              <th title={`Non-quote spot assets at mid, ${cur()}`}>Inventory</th>
               <th title="Resting bid notional / (free quote + resting bid notional)">Bid use</th>
             </tr>
           </thead>
@@ -366,11 +367,11 @@ function Spot() {
       n({ field: "amount", headerName: "Amount", headerTooltip: "Held across the accounts, free + in orders", width: 100, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "locked", headerName: "In orders", headerTooltip: "Held in resting sell orders", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
       n({ field: "free", headerName: "Available", width: 90, valueFormatter: maskVF((p) => qty(p.value as number)), cellClass: mCls(hide) }),
-      n({ field: "mid", headerName: "Price", headerTooltip: "Mid, USDT", width: 90, valueFormatter: fPrice }),
-      n({ field: "avg", headerName: "Avg cost", headerTooltip: "Average cost of what is held, USDT", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : price(p.value as number)) }),
-      n({ field: "value", headerName: "Value (USDT)", headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), sort: hide ? null : "desc", sortable: !hide }),
-      n({ field: "upnl", headerName: "uPnL", headerTooltip: "Value − amount × avg cost, USDT", width: 84, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
-      n({ field: "today", headerName: "Trading PnL", headerTooltip: "Today, USDT: market making + inventory PnL (realized + float), fees included", width: 90, valueFormatter: (p) => (p.data?.asset === "USDT" ? "" : fSigned(p)), cellClass: sCls(hide) }),
+      n({ field: "mid", headerName: "Price", headerTooltip: "Mid", width: 90, valueFormatter: fPrice }),
+      n({ field: "avg", headerName: "Avg cost", headerTooltip: "Average cost of what is held", width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : price(p.value as number)) }),
+      n({ field: "value", headerName: `Value (${cur()})`, headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), sort: hide ? null : "desc", sortable: !hide }),
+      n({ field: "upnl", headerName: "uPnL", headerTooltip: `Value − amount × avg cost, ${cur()}`, width: 84, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+      n({ field: "today", headerName: "Trading PnL", headerTooltip: `Today, ${cur()}: market making + inventory PnL (realized + float), fees included`, width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
     ]);
   }, [hide]);
   const pinned = useMemo(() => [usdt], [usdt]);
@@ -431,9 +432,9 @@ function FuturesAccounts() {
             <thead>
               <tr>
                 <th className="l">Account</th>
-                <th title="USD-M futures wallet balance, USDT">Wallet</th>
-                <th title="Unrealized PnL of the positions at mark, USDT">uPnL</th>
-                <th title="Futures available balance, USDT">Available</th>
+                <th title={`USD-M futures wallet balance, ${cur()}`}>Wallet</th>
+                <th title={`Unrealized PnL of the positions at mark, ${cur()}`}>uPnL</th>
+                <th title={`Futures available balance, ${cur()}`}>Available</th>
                 <th title="Open positions">Positions</th>
               </tr>
             </thead>
@@ -469,14 +470,14 @@ function Futures() {
     return flexCols([
       { field: "symbol", headerName: "Symbol", headerTooltip: "USD-M perpetual", width: 120, cellRenderer: SymCell },
       n({ field: "amt", headerName: "Size", headerTooltip: "Position size, base asset; negative = short", width: 96, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
-      n({ field: "notional", headerName: "Notional", headerTooltip: "Size × mark, USDT", width: 96, valueFormatter: fSigned, cellClass: sCls(hide) }),
-      n({ field: "entry", headerName: "Entry price", headerTooltip: "Average entry price, USDT", width: 96, valueFormatter: fPrice }),
-      n({ field: "mark", headerName: "Mark price", headerTooltip: "Mark price, USDT", width: 96, valueFormatter: fPrice }),
-      n({ field: "upnl", headerName: "uPnL", headerTooltip: "Unrealized PnL at mark against the entry price, USDT. Not today's result: see Today", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "notional", headerName: "Notional", headerTooltip: `Size × mark, ${cur()}`, width: 96, valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "entry", headerName: "Entry price", headerTooltip: "Average entry price", width: 96, valueFormatter: fPrice }),
+      n({ field: "mark", headerName: "Mark price", headerTooltip: "Mark price", width: 96, valueFormatter: fPrice }),
+      n({ field: "upnl", headerName: "uPnL", headerTooltip: `Unrealized PnL at mark against the entry price, ${cur()}. Not today's result: see Today`, width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
       n({
         field: "pnl_day",
         headerName: "Hedge",
-        headerTooltip: "Today, USDT: the hedge leg, the position held at the day start and today's fills marked to mark now, minus fees, plus funding. A perp has no Trading PnL",
+        headerTooltip: `Today, ${cur()}: the hedge leg, the position held at the day start and today's fills marked to mark now, minus fees, plus funding. A perp has no Trading PnL`,
         width: 90,
         valueFormatter: fSigned,
         cellClass: sCls(hide),
@@ -533,7 +534,7 @@ function ExposureTable() {
   return (
     <section className="ops-panel">
       <header className="ops-head">
-        <span className="ops-title">Exposure (USDT)</span>
+        <span className="ops-title">Exposure ({cur()})</span>
         {x.target != null && (
           <span className="ops-head-right">
             {x.paused ? (
@@ -545,7 +546,7 @@ function ExposureTable() {
               <span
                 className={"ops-target fig" + (over ? " warn-text" : "")}
                 title={
-                  `Hedge target: −${x.ratio} × beta-weighted spot value; band: allowed |gap|, USDT. ` +
+                  `Hedge target: −${x.ratio} × beta-weighted spot value; band: allowed |gap|, ${cur()}. ` +
                   (x.beta_source === "estimate" ? "β: the desk's own estimate, may differ from the engine's." : "β: configured per market.")
                 }
               >
@@ -560,9 +561,9 @@ function ExposureTable() {
           <thead>
             <tr>
               <th className="l">Account</th>
-              <th title="Spot inventory value at mid, USDT">Spot value</th>
-              <th title="Futures net notional, signed, USDT">Futures notional</th>
-              <th title="Spot value + futures notional, USDT">Net</th>
+              <th title={`Spot inventory value at mid, ${cur()}`}>Spot value</th>
+              <th title={`Futures net notional, signed, ${cur()}`}>Futures notional</th>
+              <th title={`Spot value + futures notional, ${cur()}`}>Net</th>
             </tr>
           </thead>
           <tbody>
@@ -595,7 +596,7 @@ function ExposureTable() {
             {x.gap != null && (
               <>
                 <tr className="sub">
-                  <td className="l" title="Beta-weighted spot value and hedge symbols' futures notional, USDT">
+                  <td className="l" title={`Beta-weighted spot value and hedge symbols' futures notional, ${cur()}`}>
                     Hedge (β-weighted)
                   </td>
                   <td>
@@ -607,7 +608,7 @@ function ExposureTable() {
                   <td />
                 </tr>
                 <tr className={over ? "warn-row" : "sub"}>
-                  <td className="l" title={x.paused ? "Hedge off: futures notional still open, to be closed, USDT" : "Target − hedge futures notional: the trade that closes the gap, USDT"}>
+                  <td className="l" title={x.paused ? `Hedge off: futures notional still open, to be closed, ${cur()}` : `Target − hedge futures notional: the trade that closes the gap, ${cur()}`}>
                     {x.paused ? "To close" : "Gap vs target"}
                   </td>
                   <td />
@@ -695,9 +696,9 @@ function HedgePanel() {
       n({ field: "qty0", headerName: "Start", headerTooltip: "Position at the day start, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "qty", headerName: "Now", headerTooltip: "Position now, base asset", width: 76, valueFormatter: maskVF(fQtyS), cellClass: hide ? "num masked" : signCls }),
       n({ field: "fills", headerName: "Fills", headerTooltip: "Futures fills today", width: 52 }),
-      n({ field: "mark", headerName: "Mark", headerTooltip: "Mark price now, USDT", width: 84, valueFormatter: fPrice }),
-      n({ colId: "fees", headerName: "Fees", headerTooltip: "Fees today, a cost, USDT", width: 64, valueGetter: (p) => (p.data ? -p.data.fees : null), valueFormatter: fSigned, cellClass: sCls(hide) }),
-      n({ field: "pnl", headerName: "Hedge PnL", headerTooltip: "Today: price P&L at mark − fees + funding, USDT", width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "mark", headerName: "Mark", headerTooltip: "Mark price now", width: 84, valueFormatter: fPrice }),
+      n({ colId: "fees", headerName: "Fees", headerTooltip: `Fees today, a cost, ${cur()}`, width: 64, valueGetter: (p) => (p.data ? -p.data.fees : null), valueFormatter: fSigned, cellClass: sCls(hide) }),
+      n({ field: "pnl", headerName: "Hedge PnL", headerTooltip: `Today: price P&L at mark − fees + funding, ${cur()}`, width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
     ]);
   }, [hide]);
   const offset = h && inv != null && h.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -h.hedge_pnl / inv : null;

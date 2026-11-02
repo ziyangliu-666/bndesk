@@ -11,6 +11,7 @@ import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
 import { Sec, Stats } from "./rest/ui";
+import { cur, quoteAsset, baseOf } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
 export function AlertM({ id }: { id: string }) {
@@ -93,7 +94,7 @@ function instrumentsOf(a: Alert, snap: Snapshot): { list: { symbol: string; venu
     if (snap.symbols.some((s) => s.symbol === symbol && s.venue === venue)) list.push({ symbol, venue });
     else {
       // dust and the mock name the asset ("0.31 DOT"); find its USDT pair
-      const hit = snap.symbols.find((s) => s.venue === "spot" && part.split(" ").some((w) => w && s.symbol === w + "USDT"));
+      const hit = snap.symbols.find((s) => s.venue === "spot" && part.split(" ").some((w) => w && s.symbol === w + quoteAsset()));
       if (hit) list.push({ symbol: hit.symbol, venue: "spot" });
     }
   }
@@ -287,11 +288,11 @@ function ExposureEv({ a }: { a: Alert }) {
   if (!e) return null;
   const band = e.band;
   return (
-    <Section title="Now, USDT" link={{ label: "Assets", to: { page: "assets" } }}>
+    <Section title={`Now, ${cur()}`} link={{ label: "Assets", to: { page: "assets" } }}>
       {e.gap != null && band != null && !e.paused ? (
         <LimitBar
           label="Exposure gap"
-          info={`Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more). ${bandDef(money(band, "usd"))} USDT.`}
+          info={`Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more). ${bandDef(money(band, "usd"))} ${cur()}.`}
           value={e.gap}
           limit={band}
           centered
@@ -299,7 +300,7 @@ function ExposureEv({ a }: { a: Alert }) {
       ) : e.paused && band != null ? (
         <LimitBar
           label="Hedge to close"
-          info={`${e.paused}: the hedge is off and its target is 0; this is the hedge symbols' futures notional still open, against the band ±${money(band, "usd")}. USDT.`}
+          info={`${e.paused}: the hedge is off and its target is 0; this is the hedge symbols' futures notional still open, against the band ±${money(band, "usd")}. ${cur()}.`}
           value={e.hedge_notional}
           limit={band}
           centered
@@ -428,7 +429,7 @@ function InstrumentsEv({ a, snap, dust }: { a: Alert; snap: Snapshot; dust: bool
             }
             subtitle={
               dust
-                ? `${qOf(s?.inv_qty)} ${symbol.replace(/USDT$/, "")}`
+                ? `${qOf(s?.inv_qty)} ${baseOf(symbol)}`
                 : `bid ${price(s?.bid)} · ask ${price(s?.ask)}`
             }
             primary={
@@ -500,7 +501,7 @@ function PnlEv({ a }: { a: Alert }) {
   const ref = near && at != null ? [at] : undefined;
   const limLabel = at == null ? null : `limit ${money(at, "pnlShort")}${near ? " dashed" : at < lo ? " below the chart" : " above the chart"}`;
   return (
-    <Section title="Now, USDT" link={{ label: "Desk", to: { page: "desk" } }}>
+    <Section title={`Now, ${cur()}`} link={{ label: "Desk", to: { page: "desk" } }}>
       {lim != null && (
         <LimitBar
           label={hour ? "Last hour" : "Day PnL"}
@@ -582,7 +583,7 @@ function ReconcileEv() {
   const hedge = useStore((s) => s.snap?.exposure.hedge_day?.hedge_pnl ?? null);
   if (!sm) return null;
   return (
-    <Section title="Day PnL split, USDT" link={{ label: "Desk", to: { page: "desk" } }}>
+    <Section title={`Day PnL split, ${cur()}`} link={{ label: "Desk", to: { page: "desk" } }}>
       <SplitRows
         rows={[
           { key: "mm", label: "Market making", v: sm.pnl.mm },
@@ -674,7 +675,7 @@ function QuoteIdleEv({ acct }: { acct: Account }) {
           { label: "Resting bids", value: money(acct.bids_notional, "usd") },
           {
             label: "Bid use",
-            info: "The share of the account's USDT tied up in its resting buy orders: resting bids ÷ (free USDT + resting bids). Near 100 %, there is little left to bid with.",
+            info: `The share of the account's ${quoteAsset()} tied up in its resting buy orders: resting bids ÷ (free ${quoteAsset()} + resting bids). Near 100 %, there is little left to bid with.`,
             value: pct(acct.utilization),
           },
         ]}
