@@ -1,4 +1,4 @@
-//! Backfill of the P&L grid's gaps from 1 min klines, M_k(D) for names held at the day start, and the
+//! Backfill of the P&L grid's gaps from 1 min bars, M_k(D) for names held at the day start, and the
 //! fills' marks the desk did not take live (it was down at t + h).
 //!
 //! Requests are few (only names with inventory or fills in a gap, at most 1000 bars each) and paced well
@@ -12,86 +12,16 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::binance::rest::Rest;
-use crate::connector::RestError;
+use crate::connector::{Connector, RestError};
 use crate::fills::{FillBook, HORIZONS};
 use crate::market::Market;
-use crate::params;
 use crate::pnl::{Bars, PnlBook};
+use crate::protocol::Venue;
 
-/// Request weight per minute this task may spend, per API family.
-pub fn budget(venue: &str) -> f64 {
-    if venue == "spot" { 300.0 } else { 120.0 }
-}
-
+/// Bars a window of prices asks for at most.
 pub const MAX_BARS: i64 = 1000;
 
-pub fn kline_weight(venue: &str, limit: i64) -> i64 {
-    if venue == "spot" {
-        return 2;
-    }
-    if limit < 100 {
-        1
-    } else if limit < 500 {
-        2
-    } else if limit <= 1000 {
-        5
-    } else {
-        10
-    }
-}
-
-fn num(v: &serde_json::Value) -> anyhow::Result<f64> {
-    match v {
-        serde_json::Value::String(s) => Ok(s.trim().parse()?),
-        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| anyhow::anyhow!("bad number")),
-        _ => anyhow::bail!("bad kline field {v}"),
-    }
-}
-
-/// (open time, open, close) of the 1 min bars of an instrument key ("venue:SYMBOL") opening in [start, end].
-pub async fn klines(rest: &Rest, key: &str, start: i64, end: i64) -> anyhow::Result<Vec<(i64, f64, f64)>> {
-    klines_iv(rest, key, "1m", start, end).await
-}
-
-fn interval_ms(interval: &str) -> i64 {
-    if interval == "1s" { 1000 } else { 60_000 }
-}
-
-/// Wait out a request's share of the budget.
-async fn pace(venue: &str, weight: i64) {
-    sleep(Duration::from_secs_f64(weight as f64 * 60.0 / budget(venue))).await;
-}
-
-/// As `klines`, for bars of `interval` ("1s": spot only, "1m").
-pub async fn klines_iv(rest: &Rest, key: &str, interval: &str, start: i64, end: i64) -> anyhow::Result<Vec<(i64, f64, f64)>> {
-    let (venue, sym) = key.split_once(':').ok_or_else(|| anyhow::anyhow!("bad key {key}"))?;
-    let path = if venue == "spot" { "/api/v3/klines" } else { "/fapi/v1/klines" };
-    let step = interval_ms(interval);
-    let mut out = vec![];
-    let mut t = start;
-    while t <= end {
-        let limit = MAX_BARS.min((end - t).div_euclid(step) + 1);
-        let w = kline_weight(venue, limit);
-        let rows: Vec<Vec<serde_json::Value>> = rest
-            .get(path, &params! {"symbol" => sym, "interval" => interval, "startTime" => t, "endTime" => end, "limit" => limit}, w, false)
-            .await?;
-        pace(venue, w).await;
-        for r in &rows {
-            let ot = r.first().and_then(|x| x.as_i64()).ok_or_else(|| anyhow::anyhow!("bad kline"))?;
-            let o = num(r.get(1).ok_or_else(|| anyhow::anyhow!("short kline"))?)?;
-            let c = num(r.get(4).ok_or_else(|| anyhow::anyhow!("short kline"))?)?;
-            out.push((ot, o, c));
-        }
-        if (rows.len() as i64) < limit {
-            break;
-        }
-        t = out.last().map_or(end, |x| x.0) + step;
-    }
-    Ok(out)
-}
-
-/// Where backfilled prices come from: Binance's public REST, a mock in the tests.
+/// Where backfilled prices come from: a connector, a mock in the tests.
 pub trait Prices {
     /// (open time, open, close) of the bars of `interval` ("1s", "1m") of `key` opening in [start, end].
     fn bars(&self, key: &str, interval: &str, start: i64, end: i64) -> impl Future<Output = anyhow::Result<Vec<(i64, f64, f64)>>>;
@@ -99,23 +29,17 @@ pub trait Prices {
     fn trade_at(&self, key: &str, t: i64) -> impl Future<Output = anyhow::Result<Option<f64>>>;
 }
 
-impl Prices for Rest {
+impl Prices for Rc<dyn Connector> {
     async fn bars(&self, key: &str, interval: &str, start: i64, end: i64) -> anyhow::Result<Vec<(i64, f64, f64)>> {
-        klines_iv(self, key, interval, start, end).await
+        Connector::bars(&**self, key, interval, start, end).await
     }
 
     async fn trade_at(&self, key: &str, t: i64) -> anyhow::Result<Option<f64>> {
-        let (venue, sym) = key.split_once(':').ok_or_else(|| anyhow::anyhow!("bad key {key}"))?;
-        let (path, w) = if venue == "spot" { ("/api/v3/aggTrades", 4) } else { ("/fapi/v1/aggTrades", 20) };
-        let rows: Vec<serde_json::Value> = self
-            .get(path, &params! {"symbol" => sym, "startTime" => t, "endTime" => t + 60_000, "limit" => 1}, w, false)
-            .await?;
-        pace(venue, w).await;
-        rows.first().and_then(|r| r.get("p")).map(num).transpose()
+        Connector::trade_at(&**self, key, t).await
     }
 }
 
-/// A request Binance refuses as such (an unknown symbol, an interval it does not have) has no data, for good.
+/// A request the exchange refuses as such (an unknown symbol, an interval it does not have) has no data, for good.
 pub(crate) fn none_on_400<T: Default>(r: anyhow::Result<T>) -> anyhow::Result<T> {
     match r {
         Err(e) if e.downcast_ref::<RestError>().is_some_and(|re| re.status == 400) => Ok(T::default()),
@@ -147,11 +71,12 @@ pub struct Px {
     pub fine: bool,
 }
 
-/// The prices of `key` at times `ts` (sorted): spot from 1 s klines in windows of MAX_BARS seconds, else from
-/// 1 min klines; USD-M (no 1 s klines) from the first aggregate trade at or after each time.
+/// The prices of `key` at times `ts` (sorted): a market with 1 s bars from those in windows of MAX_BARS seconds, else
+/// from 1 min bars; a market without them from the first trade at or after each time.
 pub async fn prices_at(src: &impl Prices, key: &str, ts: &[i64]) -> anyhow::Result<Vec<Option<Px>>> {
     let mut out = vec![None; ts.len()];
-    if !key.starts_with("spot:") {
+    let second_bars = key.split_once(':').and_then(|(v, _)| v.parse::<Venue>().ok()).is_some_and(|v| v.market().second_bars);
+    if !second_bars {
         for (k, &t) in ts.iter().enumerate() {
             out[k] = none_on_400(src.trade_at(key, t).await)?.map(|v| Px { v, fine: true });
         }
@@ -253,7 +178,7 @@ impl BookAccess for (Rc<RefCell<PnlBook>>, Rc<RefCell<Market>>) {
     }
 }
 
-async fn work(book: &impl BookAccess, fills: &impl FillAccess, rest: &Rest, now: &impl Fn() -> i64,
+async fn work(book: &impl BookAccess, fills: &impl FillAccess, src: &impl Prices, now: &impl Fn() -> i64,
               on_booked: &mut impl FnMut()) -> anyhow::Result<()> {
     while let Some((g, plan)) = book.with(|b, m| b.gaps.first().cloned().map(|g| {
         let p = b.plan(m, &g);
@@ -261,7 +186,7 @@ async fn work(book: &impl BookAccess, fills: &impl FillAccess, rest: &Rest, now:
     })) {
         let mut bars = HashMap::new();
         for (key, lo, hi) in &plan.fetch {
-            bars.insert(key.clone(), Bars::new(klines(rest, key, *lo, *hi).await?));
+            bars.insert(key.clone(), Bars::new(src.bars(key, "1m", *lo, *hi).await?));
         }
         let booked = book.with(|b, m| {
             if b.gaps.first().is_some_and(|x| x.id == g.id) {
@@ -289,7 +214,7 @@ async fn work(book: &impl BookAccess, fills: &impl FillAccess, rest: &Rest, now:
             _ => None,
         });
         let Some((key, ds)) = key else { continue };
-        let rows = klines(rest, &key, ds, ds).await?;
+        let rows = src.bars(&key, "1m", ds, ds).await?;
         book.with(|b, _| {
             if let Some(px) = Bars::new(rows).at(b.day_start).filter(|v| *v != 0.0) {
                 b.m0.insert(base.clone(), px);
@@ -300,19 +225,19 @@ async fn work(book: &impl BookAccess, fills: &impl FillAccess, rest: &Rest, now:
         info!("day-start prices for {} names", need.len());
         on_booked();
     }
-    backfill_marks(fills, rest, now()).await?;
+    backfill_marks(fills, src, now()).await?;
     Ok(())
 }
 
 /// Works the book's gap queue, then fetches M_k(D) still missing, then the fills' missing marks (`now`: the
 /// exchange-synced clock, ms; the fills write themselves out as changed); retries on errors, backs off on 418 / 429.
-pub async fn run(book: impl BookAccess, fills: impl FillAccess, rest: Rest, now: impl Fn() -> i64, mut on_booked: impl FnMut()) {
+pub async fn run(book: impl BookAccess, fills: impl FillAccess, src: impl Prices, now: impl Fn() -> i64, mut on_booked: impl FnMut()) {
     loop {
         sleep(Duration::from_secs(5)).await;
         if !book.with(|b, _| b.started()) {
             continue;
         }
-        if let Err(e) = work(&book, &fills, &rest, &now, &mut on_booked).await {
+        if let Err(e) = work(&book, &fills, &src, &now, &mut on_booked).await {
             if let Some(re) = e.downcast_ref::<RestError>() {
                 warn!("backfill: {re}");
                 sleep(Duration::from_secs(if matches!(re.status, 418 | 429) { 300 } else { 60 })).await;
@@ -423,12 +348,5 @@ mod tests {
         src.log.borrow_mut().clear();
         assert_eq!(backfill_marks(&fills, &src, now).await.unwrap(), 0);
         assert!(src.log.borrow().is_empty());
-    }
-
-    #[test]
-    fn kline_weights() {
-        assert_eq!(kline_weight("spot", 1000), 2);
-        assert_eq!((kline_weight("usdm", 99), kline_weight("usdm", 100), kline_weight("usdm", 500)), (1, 2, 5));
-        assert_eq!((kline_weight("usdm", 1000), kline_weight("usdm", 1001)), (5, 10));
     }
 }

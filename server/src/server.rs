@@ -900,7 +900,7 @@ mod tests {
                 let n = std::rc::Rc::new(std::cell::Cell::new(1));
                 tokio::task::spawn_local(answer(hub.take_requests().unwrap(), Fake(n.clone())));
                 let h = hub.handle();
-                let srv = serve(&h, make_app(&h, None, dir.path().to_path_buf(), crate::history::Api::new(dir.path().join("d.db"), 0)), "127.0.0.1:0").await.unwrap();
+                let srv = serve(&h, make_app(&h, None, dir.path().to_path_buf(), crate::history::Api::new(dir.path().join("d.db"), 0, std::sync::Arc::new(crate::binance::klines::KlineProxy::new()))), "127.0.0.1:0").await.unwrap();
                 let base = format!("http://{}", srv.addr);
                 let get = |p: &str| reqwest::get(format!("{base}{p}"));
                 assert_eq!(get("/healthz").await.unwrap().text().await.unwrap(), "ok");
@@ -960,7 +960,7 @@ mod tests {
         let hub = Hub::new();
         let h = hub.handle();
         let srv = serve(&h, make_app(&h, Some(auth), dir.path().to_path_buf(),
-                                       crate::history::Api::new(dir.path().join("d.db"), 0)), "127.0.0.1:0").await.unwrap();
+                                       crate::history::Api::new(dir.path().join("d.db"), 0, std::sync::Arc::new(crate::binance::klines::KlineProxy::new()))), "127.0.0.1:0").await.unwrap();
         let c = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
         let base = format!("http://{}", srv.addr);
         assert_eq!(c.get(format!("{base}/healthz")).send().await.unwrap().status(), 200);

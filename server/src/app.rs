@@ -1397,7 +1397,6 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         let d = desk.borrow();
         (d.cfg.simulate, d.cfg.listen.clone())
     };
-    let public = crate::binance::rest::Rest::new(http.clone(), crate::binance::rest::governors(), None, Some(public_feed.clone()));
     {
         let d = desk.borrow();
         if simulate {
@@ -1424,7 +1423,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         let d = desk.borrow();
         let (pnl, store) = (d.pnl.clone(), d.store.clone());
         tasks.push(tokio::task::spawn_local(backfill::run((d.pnl.clone(), d.market.clone()), (d.fills.clone(), d.market.clone()),
-                                                          public.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
+                                                          exchange.clone(), || CLOCK.now(), move || pnl_flush(&pnl, &store))));
     }
     if desk.borrow().betas.is_some() {
         tasks.push(tokio::task::spawn_local(beta_loop(desk.clone())));
@@ -1434,7 +1433,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     let handle = desk.borrow().hub.borrow().handle();
     let history = {
         let d = desk.borrow();
-        crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min)
+        crate::history::Api::new(d.cfg.db.clone(), d.cfg.day_start_min, d.connector.kline_source())
             .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
     };
     history.warm();

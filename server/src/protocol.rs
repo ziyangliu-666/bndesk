@@ -49,12 +49,15 @@ pub struct Market {
     pub name: &'static str,
     #[serde(skip)]
     pub aliases: &'static [&'static str],
+    /// It has 1 s bars: a backfilled price comes from those, not from a trade.
+    #[serde(skip)]
+    pub second_bars: bool,
 }
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
 pub static MARKETS: [Market; 2] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"] },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"] },
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.

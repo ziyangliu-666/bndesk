@@ -4,7 +4,7 @@
 //! db (one per blocking thread, kept; WAL lets it read while the store writes). The desk's P&L rows and each
 //! fill's time and notional are kept in memory once read, and each request reads only what was written since:
 //! on a small machine the db does not stay in the page cache, and reading the whole range from disk took half
-//! a minute. Klines are Binance's public ones, proxied in chunks of `CHUNK` bars; a chunk whose bars have all
+//! a minute. Klines are a connector's, proxied in chunks of `CHUNK` bars; a chunk whose bars have all
 //! closed is cached in memory.
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use axum::routing::get;
 use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde::Serialize;
 
-use crate::binance::rest::{FAPI, SPOT};
+use crate::connector::{Kline, KlineError, KlineSource};
 use crate::protocol as P;
 use crate::sessions;
 
@@ -35,13 +35,10 @@ pub const INTERVALS: [(&str, i64); 8] = [
     ("1m", 60_000), ("5m", 300_000), ("15m", 900_000), ("30m", 1_800_000), ("1h", 3_600_000), ("4h", 14_400_000),
     ("1d", 86_400_000), ("1w", 604_800_000),
 ];
-/// Klines per Binance request and per cache entry (spot allows 1000, USD-M 1500; 1000 costs USD-M weight 5, not 10).
+/// Klines per request and per cache entry (spot allows 1000, USD-M 1500; 1000 costs USD-M weight 5, not 10).
 const CHUNK: i64 = 1000;
 const CACHE_MAX: usize = 512;
 const DAY: i64 = 86_400_000;
-
-/// (open time, open, high, low, close, base volume): serialized as `[t, o, h, l, c, v]`.
-pub type Kline = (i64, f64, f64, f64, f64, f64);
 
 type ApiError = (StatusCode, String);
 
@@ -53,7 +50,7 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-type CacheKey = (String, &'static str, i64, i64); // symbol, venue, interval ms, chunk start
+type CacheKey = (String, P::Venue, i64, i64); // symbol, venue, interval ms, chunk start
 
 #[derive(Default)]
 struct Cache {
@@ -64,9 +61,7 @@ struct Cache {
 pub struct Api {
     db: PathBuf,
     day_start_min: i64,
-    http: reqwest::Client,
-    spot: String,
-    fapi: String,
+    klines: Arc<dyn KlineSource>,
     cache: Mutex<Cache>,
     /// After a 429 / 418: no kline request before this (epoch ms).
     blocked_until: AtomicI64,
@@ -160,18 +155,11 @@ impl Mem {
 }
 
 impl Api {
-    pub fn new(db: PathBuf, day_start_min: i64) -> Arc<Api> {
-        Api::with_bases(db, day_start_min, SPOT, FAPI)
-    }
-
-    /// `spot` / `fapi`: base URLs of the kline endpoints (a stand-in server in tests).
-    pub fn with_bases(db: PathBuf, day_start_min: i64, spot: &str, fapi: &str) -> Arc<Api> {
+    pub fn new(db: PathBuf, day_start_min: i64, klines: Arc<dyn KlineSource>) -> Arc<Api> {
         Arc::new(Api {
             db,
             day_start_min,
-            http: crate::connector::client(),
-            spot: spot.into(),
-            fapi: fapi.into(),
+            klines,
             cache: Mutex::default(),
             blocked_until: AtomicI64::new(0),
             mem: Arc::default(),
@@ -234,7 +222,7 @@ impl Api {
     }
 
     /// The `CHUNK` bars of `iv` from `cs` (a multiple of CHUNK × iv); cached once all have closed.
-    async fn chunk(&self, sym: &str, venue: &'static str, name: &str, iv: i64, cs: i64, now: i64)
+    async fn chunk(&self, sym: &str, venue: P::Venue, name: &str, iv: i64, cs: i64, now: i64)
                    -> Result<Arc<Vec<Kline>>, ApiError> {
         let key = (sym.to_string(), venue, iv, cs);
         if let Some(v) = self.cache_get(&key) {
@@ -242,30 +230,17 @@ impl Api {
         }
         let until = self.blocked_until.load(Ordering::Relaxed);
         if now < until {
-            return Err((StatusCode::SERVICE_UNAVAILABLE, format!("binance rate limit: retry in {} s", (until - now) / 1000 + 1)));
+            return Err((StatusCode::SERVICE_UNAVAILABLE, format!("{} rate limit: retry in {} s", self.klines.id(), (until - now) / 1000 + 1)));
         }
-        let (base, path) = if venue == "spot" { (&self.spot, "/api/v3/klines") } else { (&self.fapi, "/fapi/v1/klines") };
         let end = cs + CHUNK * iv - 1;
-        let r = self
-            .http
-            .get(format!("{base}{path}"))
-            .query(&[("symbol", sym), ("interval", name), ("startTime", &cs.to_string()), ("endTime", &end.to_string()),
-                     ("limit", &CHUNK.to_string())])
-            .send()
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("binance: {e}")))?;
-        let st = r.status();
-        if st.as_u16() == 429 || st.as_u16() == 418 {
-            let wait = r.headers().get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()?.parse::<i64>().ok()).unwrap_or(60);
-            self.blocked_until.store(now + wait * 1000, Ordering::Relaxed);
-            return Err((StatusCode::SERVICE_UNAVAILABLE, format!("binance {st}: retry in {wait} s")));
-        }
-        let body = r.text().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("binance: {e}")))?;
-        if !st.is_success() {
-            let code = if st.is_client_error() { StatusCode::BAD_REQUEST } else { StatusCode::BAD_GATEWAY };
-            return Err((code, format!("binance {st}: {body}")));
-        }
-        let rows = parse_klines(&body).map_err(|e| (StatusCode::BAD_GATEWAY, format!("binance klines: {e}")))?;
+        let rows = self.klines.bars(sym, venue, name, cs, end, CHUNK).await.map_err(|e| match e {
+            KlineError::Throttled { wait_s, text } => {
+                self.blocked_until.store(now + wait_s * 1000, Ordering::Relaxed);
+                (StatusCode::SERVICE_UNAVAILABLE, text)
+            }
+            KlineError::Refused(text) => (StatusCode::BAD_REQUEST, text),
+            KlineError::Failed(text) => (StatusCode::BAD_GATEWAY, text),
+        })?;
         let v = Arc::new(rows);
         if end + 5_000 < now {
             self.cache_insert(key, v.clone());
@@ -274,7 +249,7 @@ impl Api {
     }
 
     /// Bars of `iv` opening in [from, to], the latest MAX_BARS.
-    async fn klines(&self, sym: &str, venue: &'static str, name: &str, iv: i64, from: i64, to: i64)
+    async fn klines(&self, sym: &str, venue: P::Venue, name: &str, iv: i64, from: i64, to: i64)
                     -> Result<Vec<Kline>, ApiError> {
         let now = now_ms();
         let span = CHUNK * iv;
@@ -290,25 +265,6 @@ impl Api {
         }
         Ok(out)
     }
-}
-
-fn num(v: &serde_json::Value) -> anyhow::Result<f64> {
-    match v {
-        serde_json::Value::String(s) => Ok(s.trim().parse()?),
-        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| anyhow::anyhow!("bad number")),
-        _ => anyhow::bail!("bad kline field {v}"),
-    }
-}
-
-fn parse_klines(body: &str) -> anyhow::Result<Vec<Kline>> {
-    let raw: Vec<Vec<serde_json::Value>> = serde_json::from_str(body)?;
-    raw.iter()
-        .map(|r| {
-            let f = |i: usize| r.get(i).ok_or_else(|| anyhow::anyhow!("short kline")).and_then(num);
-            let t = r.first().and_then(|x| x.as_i64()).ok_or_else(|| anyhow::anyhow!("bad kline time"))?;
-            Ok((t, f(1)?, f(2)?, f(3)?, f(4)?, f(5)?))
-        })
-        .collect()
 }
 
 // --- SQLite, read-only -------------------------------------------------------------------------------
@@ -607,7 +563,7 @@ async fn fills_handler(State(api): State<Arc<Api>>, Query(q): Params) -> Result<
 
 async fn klines(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Response, ApiError> {
     let sym = symbol(&q)?.ok_or_else(|| bad("symbol required"))?;
-    let venue = q.get("venue").map_or(Ok(P::Venue::SPOT), |v| venue_of(v))?.as_str();
+    let venue = q.get("venue").map_or(Ok(P::Venue::SPOT), |v| venue_of(v))?;
     let name = q.get("interval").map_or("1m", String::as_str);
     let (name, iv) = *INTERVALS.iter().find(|i| i.0 == name).ok_or_else(|| bad(format!("bad interval {name:?}")))?;
     let (from, to) = range(&q, DAY)?;
@@ -790,7 +746,7 @@ mod tests {
         let fake = fake_binance(hits.clone()).await;
         let hub = Hub::new();
         let h = hub.handle();
-        let api = Api::with_bases(db.clone(), 0, &fake, &fake).retention(3650.0, 3650.0);
+        let api = Api::new(db.clone(), 0, Arc::new(crate::binance::klines::KlineProxy::with_bases(&fake, &fake))).retention(3650.0, 3650.0);
         let srv = serve(&h, make_app(&h, None, dir.path().to_path_buf(), api), "127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", srv.addr);
         let get = |p: String| reqwest::get(format!("{base}{p}"));

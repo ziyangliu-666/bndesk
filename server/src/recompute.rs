@@ -23,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::backfill::{Prices, backfill_marks_with, interp_at, none_on_400};
 use crate::fills::{FillBook, FillRec, HK, MARK_GRACE_MS};
 use crate::market::{Market, STABLES};
-use crate::protocol::{Side, Venue};
+use crate::protocol::Side;
 use crate::store::{FILL_COLS, SQL_FILL, fill_params, row_fill};
 
 pub const DAY: i64 = 86_400_000;
@@ -262,18 +262,12 @@ pub const FIRST_FIXED_DAY: &str = "2026-10-17";
 /// `desk recompute-mm --from --to [--dry-run]`: each day in [from, to] (UTC dates) before today and before
 /// FIRST_FIXED_DAY, on the configured db; prints the table.
 pub async fn run(cfg: &crate::config::Config, from: &str, to: &str, dry_run: bool) -> anyhow::Result<Vec<DayReport>> {
-    use crate::binance::rest::{Rest, governors};
-    use crate::connector::client;
     let (a, b) = (day_start_of(from, cfg.day_start_min)?, day_start_of(to, cfg.day_start_min)?);
     let now = crate::clock::now_ms();
     let today = crate::sessions::day_start(now, cfg.day_start_min);
     let fixed = day_start_of(FIRST_FIXED_DAY, cfg.day_start_min)?;
-    let rest = Rest::new(client(), governors(), None, None);
-    let spot: serde_json::Value = rest.get("/api/v3/exchangeInfo", &[], 20, false).await?;
-    let usdm: serde_json::Value = rest.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
-    let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::SPOT, crate::binance::public::parse_exchange_info(&spot));
-    info.insert(Venue::USDM, crate::binance::public::parse_exchange_info(&usdm));
+    let rest = crate::connector::open("binance", crate::connector::client(), None)?;
+    let info = rest.instruments().await?;
     let market = Rc::new(RefCell::new(Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps)));
     {
         let mut m = market.borrow_mut();
@@ -325,6 +319,7 @@ pub fn table(reps: &[DayReport]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::Venue;
     use crate::market::{Info, SymbolInfo};
     use crate::store::{EquityRow, Row, Store};
     use approx::assert_relative_eq;

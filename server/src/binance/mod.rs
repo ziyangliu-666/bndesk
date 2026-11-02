@@ -5,10 +5,13 @@ pub mod ws;
 pub mod json;
 pub mod events;
 pub mod public;
+pub mod klines;
+pub mod reader;
 pub mod account;
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use futures_util::FutureExt;
 use serde_json::Value;
@@ -16,7 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::accounts::{AccountRef, Dividend, MarketRef, TransfersRef};
 use crate::config::AccountCfg;
-use crate::connector::{Connector, PublicFeed, Reply, RestBan};
+use crate::connector::{AccountReader, Connector, KlineSource, PublicFeed, Reply, RestBan};
 use crate::feeds::FeedRef;
 use crate::market::Info;
 use crate::protocol::Venue;
@@ -111,6 +114,22 @@ impl Connector for Binance {
         .boxed_local()
     }
 
+    fn bars<'a>(&'a self, key: &'a str, interval: &'a str, start: i64, end: i64) -> Reply<'a, Vec<(i64, f64, f64)>> {
+        klines::klines_iv(&self.public, key, interval, start, end).boxed_local()
+    }
+
+    fn trade_at<'a>(&'a self, key: &'a str, t: i64) -> Reply<'a, Option<f64>> {
+        klines::trade_at(&self.public, key, t).boxed_local()
+    }
+
+    fn mark_bars<'a>(&'a self, symbol: &'a str, from: i64, until: i64) -> Reply<'a, Vec<(i64, f64, f64)>> {
+        klines::mark_bars(&self.public, symbol, from, until).boxed_local()
+    }
+
+    fn kline_source(&self) -> Arc<dyn KlineSource> {
+        Arc::new(klines::KlineProxy::new())
+    }
+
     fn rest_bans(&self) -> Vec<RestBan> {
         self.govs
             .iter()
@@ -143,6 +162,11 @@ impl Connector for Binance {
             tasks.push(tokio::task::spawn_local(account::run_transfers(transfers.clone(), rest, move || day_start.get())));
         }
         tasks
+    }
+
+    fn reader(&self, cfg: &AccountCfg) -> Result<Box<dyn AccountReader>, String> {
+        let creds = self.credentials(cfg)?;
+        Ok(Box::new(reader::Reader(Rest::new(self.http.clone(), governors(), Some(creds), None))))
     }
 
     fn is_rebate(&self, info: &str) -> bool {

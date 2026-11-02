@@ -23,18 +23,15 @@
 //! and the kept day's Other that follows; the rest stays what the desk had live.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
-use crate::backfill::{interp_at, klines};
+use crate::backfill::{Prices, interp_at};
 use crate::beta::Betas;
-use crate::binance::rest::{Rest, governors, sync_time};
 use crate::clock::CLOCK;
-use crate::connector::client;
-use crate::sign::credentials;
+use crate::connector::{self, PerpTrade};
 use crate::config::Config;
 use crate::fills::FillRec;
 use crate::market::{Book, Market, STABLES};
@@ -347,19 +344,6 @@ fn fills_between(c: &Connection, a: i64, b: i64) -> Result<Vec<FillRec>> {
     Ok(st.query_map([a, b], row_fill)?.collect::<Result<_, _>>()?)
 }
 
-fn num(v: &Value, k: &str) -> Result<f64> {
-    let x = v.get(k).ok_or_else(|| anyhow!("no {k} in {v}"))?;
-    match x {
-        Value::String(s) => Ok(s.parse()?),
-        Value::Number(n) => n.as_f64().ok_or_else(|| anyhow!("bad {k}")),
-        _ => bail!("bad {k}: {x}"),
-    }
-}
-
-fn int(v: &Value, k: &str) -> Result<i64> {
-    v.get(k).and_then(Value::as_i64).ok_or_else(|| anyhow!("no {k} in {v}"))
-}
-
 /// `HH:MM` of the day starting at `ds` (24:00 the day's end).
 fn hhmm(ds: i64, s: &str) -> Result<i64> {
     let (h, m) = s.split_once(':').ok_or_else(|| anyhow!("bad time {s:?}"))?;
@@ -388,37 +372,31 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let (from, to) = (hhmm(ds, from)?, hhmm(ds, to)?);
     let now = crate::clock::now_ms();
     anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min), "{day} is not over yet");
-    let public = Rest::new(client(), governors(), None, None);
-    sync_time(&public).await.context("time sync")?;
+    let public = connector::open("binance", connector::client(), None)?;
+    public.sync_clock().await.context("time sync")?;
     let t_bal = CLOCK.now();
 
     // the balances now and the futures legs, with each account's key
     let mut bal: HashMap<String, f64> = HashMap::new();
     let mut read_at: HashMap<String, i64> = HashMap::new();
     let mut pos: HashMap<String, f64> = HashMap::new();
-    // symbol -> (trades (t, s q, price, fee, fee asset), funding (t, amount))
-    type Raw = (Vec<(i64, f64, f64, f64, String)>, Vec<(i64, f64)>);
+    // symbol -> (trades, funding (t, amount))
+    type Raw = (Vec<PerpTrade>, Vec<(i64, f64)>);
     let mut legs_raw: HashMap<String, Raw> = HashMap::new();
     let c = crate::store::open(&cfg.db)?;
     for ac in &cfg.accounts {
-        let creds = credentials(&ac.api_key_env, &ac.private_key_env, &ac.secret_env)
-            .map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
-        let rest = Rest::new(client(), governors(), Some(Rc::new(creds)), None);
-        let r: Value = rest.get("/api/v3/account", &crate::params! {"omitZeroBalances" => "true"}, 20, true).await?;
-        // when this account's balances stood (its fills up to then are in them); "updateTime" is Binance's
-        read_at.insert(ac.id.clone(), r.get("updateTime").and_then(Value::as_i64).unwrap_or_else(|| CLOCK.now()));
-        for b in r.get("balances").and_then(Value::as_array).into_iter().flatten() {
-            let a = b.get("asset").and_then(Value::as_str).unwrap_or_default().to_string();
-            *bal.entry(a).or_default() += num(b, "free")? + num(b, "locked")?;
+        let reader = public.reader(ac).map_err(|e| anyhow!("account {}: {e} (the repair reads its balances)", ac.id))?;
+        // when this account's balances stood (its fills up to then are in them)
+        let balances = reader.balances().await?;
+        read_at.insert(ac.id.clone(), balances.updated.unwrap_or_else(|| CLOCK.now()));
+        for (a, q) in balances.rows {
+            *bal.entry(a).or_default() += q;
         }
         if !ac.futures {
             continue;
         }
-        let r: Value = rest.get("/fapi/v3/positionRisk", &[], 5, true).await?;
         let mut held = vec![];
-        for p in r.as_array().into_iter().flatten() {
-            let s = p.get("symbol").and_then(Value::as_str).unwrap_or_default().to_string();
-            let q = num(p, "positionAmt")?;
+        for (s, q) in reader.perp_positions().await? {
             if q != 0.0 {
                 held.push(s.clone());
             }
@@ -426,31 +404,10 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         }
         for sym in &leg_symbols(&c, cfg, &ac.id, ds, &held)? {
             let e = legs_raw.entry(sym.clone()).or_default();
-            let mut frm: Option<i64> = None;
-            loop {
-                let mut q = crate::params! {"symbol" => sym, "limit" => 1000};
-                match frm {
-                    Some(id) => q.push(("fromId".into(), id.to_string())),
-                    None => q.push(("startTime".into(), ds.to_string())),
-                }
-                let rows: Value = rest.get("/fapi/v1/userTrades", &q, 5, true).await?;
-                let rows = rows.as_array().cloned().unwrap_or_default();
-                for x in &rows {
-                    let qty = num(x, "qty")?;
-                    let sq = if x.get("side").and_then(Value::as_str) == Some("BUY") { qty } else { -qty };
-                    let asset = x.get("commissionAsset").and_then(Value::as_str).unwrap_or("USDT").to_string();
-                    e.0.push((int(x, "time")?, sq, num(x, "price")?, num(x, "commission")?, asset));
-                }
-                match rows.last() {
-                    Some(l) if rows.len() >= 1000 => frm = Some(int(l, "id")? + 1),
-                    _ => break,
-                }
+            for t in reader.perp_trades(sym, ds).await? {
+                e.0.push(t);
             }
-            let q = crate::params! {"symbol" => sym, "incomeType" => "FUNDING_FEE", "startTime" => ds, "endTime" => ds + DAY - 1, "limit" => 1000};
-            let rows: Value = rest.get("/fapi/v1/income", &q, 30, true).await?;
-            for x in rows.as_array().into_iter().flatten() {
-                e.1.push((int(x, "time")?, num(x, "income")?));
-            }
+            e.1.extend(reader.perp_funding(sym, ds, ds + DAY - 1).await?);
         }
     }
     let fills = fills_between(&c, ds, ds + DAY)?;
@@ -469,11 +426,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     anyhow::ensure!(n_transfers == 0, "{n_transfers} transfers of a non-stable asset since {day}: the repair does not book them");
 
     // the market: the configured instruments and every one filled
-    let spot: Value = public.get("/api/v3/exchangeInfo", &[], 20, false).await?;
-    let usdm: Value = public.get("/fapi/v1/exchangeInfo", &[], 1, false).await?;
-    let mut info: crate::market::Info = HashMap::new();
-    info.insert(Venue::SPOT, crate::binance::public::parse_exchange_info(&spot));
-    info.insert(Venue::USDM, crate::binance::public::parse_exchange_info(&usdm));
+    let info = public.instruments().await?;
     let mut m = Market::new(info, cfg.fair_halflife_s, cfg.mark_max_spread_bps);
     for mc in &cfg.markets {
         m.ensure(&mc.symbol, mc.venue, mc.reference.as_ref().map(|r| (r.symbol.as_str(), r.venue)));
@@ -505,7 +458,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
         let rows = st.query_map([ds, ds + DAY], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?, r.get::<_, String>(3)?)))?;
         for r in rows {
             let (ts, a, x, info) = r?;
-            if info.contains("MM Rebate") {
+            if public.is_rebate(&info) {
                 rebates.push((ts, a, x));
             }
         }
@@ -539,34 +492,18 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     want.dedup();
     let mut bars = HashMap::new();
     for k in &want {
-        let v = crate::backfill::none_on_400(klines(&public, k, ds - MIN, ds + DAY).await)?;
+        let v = crate::backfill::none_on_400(public.bars(k, "1m", ds - MIN, ds + DAY).await)?;
         bars.insert(k.clone(), v);
     }
     eprintln!("{} kline series", bars.len());
     // the legs: mark price klines, the quantity at the day start
     let mut legs = vec![];
     for (sym, (trades, funding)) in legs_raw {
-        let mut marks = vec![];
-        let mut t = ds - MIN;
-        while t < ds + DAY {
-            let q = crate::params! {"symbol" => sym, "interval" => "1m", "startTime" => t, "endTime" => ds + DAY, "limit" => 1000};
-            let rows: Vec<Vec<Value>> = public.get("/fapi/v1/markPriceKlines", &q, 5, false).await?;
-            let n = rows.len();
-            for r in rows {
-                let f = |i: usize| r.get(i).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok());
-                if let (Some(ot), Some(o), Some(cl)) = (r.first().and_then(Value::as_i64), f(1), f(4)) {
-                    marks.push((ot, o, cl));
-                }
-            }
-            if n < 1000 {
-                break;
-            }
-            t = marks.last().map_or(ds + DAY, |x| x.0 + MIN);
-        }
+        let marks = public.mark_bars(&sym, ds - MIN, ds + DAY).await?;
         let q_now = pos.get(&sym).copied().unwrap_or(0.0);
         let mut day_trades = vec![];
         let mut q_after = 0.0;
-        for (ts, sq, px, fee, asset) in trades {
+        for PerpTrade { ts, sq, price: px, fee, fee_asset: asset } in trades {
             if ts >= ds + DAY {
                 if ts <= t_bal {
                     q_after += sq;
