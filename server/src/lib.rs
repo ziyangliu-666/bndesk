@@ -6,6 +6,7 @@ pub mod beta;
 pub mod config;
 pub mod sessions;
 pub mod sign;
+pub mod ws;
 pub mod connector;
 pub mod binance;
 pub mod market;
