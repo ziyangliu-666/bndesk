@@ -1,8 +1,10 @@
-// Binance's rolling 24 h stats per instrument (last, open, high, low, volume), from its public `<sym>@miniTicker`
+// An instrument's rolling 24 h stats (last, open, high, low, volume). On Binance, from its public `<sym>@miniTicker`
 // stream, straight from the browser: one combined-stream socket per venue, shared by every subscriber, which
-// subscribes and unsubscribes instruments as components come and go. In mock mode the stats come from the
+// subscribes and unsubscribes instruments as components come and go. On any other market, from the server's
+// /api/ticker every few seconds. In mock mode the stats come from the
 // mock's minute path (historyMock), once a second.
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { getJSON } from "../../api";
 import type { Venue } from "../../protocol";
 
 export interface Ticker24h {
@@ -25,12 +27,14 @@ export interface Ticker24h {
 }
 
 const MOCK = import.meta.env.VITE_MOCK === "1";
-/** Binance's own sockets, for its two markets: a market with none shows `--`. */
+/** Binance's own sockets, for its two markets: a market with none asks the server. */
 const URL: Partial<Record<Venue, string>> = {
   spot: "wss://stream.binance.com:9443/stream",
   // USD-M market streams live under /market (DESIGN.md); verified with SUBSCRIBE on 2026-10-16
   usdm: "wss://fstream.binance.com/market/stream",
 };
+
+export const hasTickerSocket = (v: Venue) => !!URL[v];
 
 const keyOf = (symbol: string, venue: Venue) => `${venue}:${symbol}`;
 const streamOf = (symbol: string) => `${symbol.toLowerCase()}@miniTicker`;
@@ -171,6 +175,44 @@ function sync(venue: Venue) {
   }, 50);
 }
 
+// ---- a market with no socket: the server's figures, one instrument at a time ----
+
+const POLL_MS = 5000;
+let polling = false;
+
+interface ServerTicker {
+  last: number;
+  open: number;
+  high: number | null;
+  low: number | null;
+  volume: number;
+  quote_volume: number;
+  t: number;
+}
+
+async function poll() {
+  if (polling) return;
+  polling = true;
+  try {
+    for (;;) {
+      const keys = [...refs.keys()].filter((k) => !URL[k.split(":")[0] as Venue]);
+      if (!keys.length) return;
+      for (const k of keys) {
+        const i = k.indexOf(":");
+        try {
+          const x = await getJSON<ServerTicker | null>("/api/ticker", { venue: k.slice(0, i), symbol: k.slice(i + 1) });
+          if (x && refs.has(k)) put(k, { c: x.last, o: x.open, h: x.high ?? x.last, l: x.low ?? x.last, v: x.volume, q: x.quote_volume, E: x.t });
+        } catch {
+          /* shown as -- once stale */
+        }
+      }
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+  } finally {
+    polling = false;
+  }
+}
+
 // ---- mock: the stats of the mock's minute path, each second ----
 
 let mockTimer: ReturnType<typeof setInterval> | undefined;
@@ -192,7 +234,8 @@ function retain(k: string) {
     if (!data.has(k)) mockTick();
     return;
   }
-  sync(k.split(":")[0] as Venue);
+  if (URL[k.split(":")[0] as Venue]) sync(k.split(":")[0] as Venue);
+  else void poll();
 }
 
 function release(k: string) {
@@ -232,8 +275,8 @@ function subscribe(keys: readonly string[], fn: () => void): () => void {
 }
 
 /**
- * An instrument's Binance 24 h stats (`<sym>@miniTicker`), live (about once a second), or null until the first
- * message (and when Binance is unreachable from the browser: show `--`). `symbol` null: nothing.
+ * An instrument's 24 h stats (on Binance `<sym>@miniTicker`, about once a second; elsewhere every few seconds), or null
+ * until the first (and when its source is unreachable: show `--`). `symbol` null: nothing.
  *
  *   const t = useTicker24h("ETHUSDT", "spot");   // t?.changePct, t?.high, t?.low, t?.quoteVolume
  */

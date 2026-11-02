@@ -9,7 +9,8 @@ import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
-import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord } from "../desk";
+import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord, exchangeOf } from "../desk";
+import { hasTickerSocket } from "./ex/ticker";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -108,6 +109,12 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   );
 }
 
+/** What "Last" is: a trade where the exchange's ticker has one, else its mark. */
+const lastTitle = (v: Instrument["venue"]) =>
+  hasTickerSocket(v)
+    ? `${exchangeOf(v)}'s last trade price, from its 24 h ticker (the ladder's middle row is the mid)`
+    : `${exchangeOf(v)}'s mark price, from its 24 h figures (the ladder's middle row is the mid)`;
+
 /** An instrument's head: Binance's last price large with its 24 h figures beside it; our position and P&L in a
  *  line under it (Trading PnL coloured: ours); spread, edge and fills quieter at the right. */
 export function InstrumentTicker({ inst, name }: { inst: Instrument; name: ReactNode }) {
@@ -121,10 +128,10 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   const tp = row ? (hedged ? hedgeOf(row) : tradingPnl(row)) : null;
   const base = baseOf(inst.symbol);
   const aside: Fact[] = [
-    { label: "24h", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", title: "Binance's 24 h change" },
+    { label: "24h", value: t ? `${num(t.change, decimals(t.last), true)} ${pctText(t.changePct)}` : "--", title: `${exchangeOf(inst.venue)}'s 24 h change` },
     { label: "High", value: price(t?.high) },
     { label: "Low", value: price(t?.low) },
-    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `Binance's 24 h volume, ${cur()}` },
+    { label: "Vol", value: t ? compact(t.quoteVolume) : "--", title: `${exchangeOf(inst.venue)}'s 24 h volume, ${cur()}` },
   ];
   const parts: Fact[] = [
     hedged
@@ -149,7 +156,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
         className="dk-tk"
         // Binance's last trade: the one market price up here; the ladder's middle row is our mid and fair
         label="Last"
-        title="Binance's last trade price, from its 24 h ticker (the ladder's middle row is the mid)"
+        title={lastTitle(inst.venue)}
         value={price(t?.last)}
         aside={aside}
         parts={parts}
