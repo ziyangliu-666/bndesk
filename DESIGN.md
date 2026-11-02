@@ -1,9 +1,8 @@
 # Design
 
-A real-time, read-only monitor for a set of Binance accounts (a master account and its
-sub-accounts): equity and PnL, inventory and exposure, fills with markouts, order-rate usage
-against Binance limits, fees, stream health, and optional metrics scraped from a trading engine.
-It never places, cancels or transfers.
+A real-time, read-only monitor for a set of accounts on one or more exchanges: equity and PnL in the desk's
+currency, inventory and exposure, fills with markouts, order-rate usage where the exchange limits it, fees, stream
+health, and optional metrics scraped from a trading engine. It never places, cancels or transfers.
 
 Binance counts REST weight per IP. If your trading processes share an IP, run the monitor from a
 different host with its own read-only keys, so its requests never consume the trading IP's weight.
@@ -85,8 +84,7 @@ reading.
   withdrawal, a spot to futures move inside one account, which nets out there).
 - Transfer values: each move and each record is valued once, when first seen: the asset's mid at the end
   of the last whole second before it (1 s ring, 10 min; the price at first sight when the ring does not
-  reach back); USDT at 1, another stablecoin the same way at its USDT pair (USDCUSDT), 1 only while that
-  pair has no price. A record that confirms a move takes the move's value. The value is
+  reach back), in the desk's currency (Valuation, below). A record that confirms a move takes the move's value. The value is
   stored (`transfers.usd`) and kept across restarts; a row stored without one is valued at first sight
   after the start.
 - Balance ordering: a REST snapshot can be read before a fill and applied after the stream reported
@@ -99,8 +97,12 @@ reading.
 - Klines (public, for the P&L backfill only): spot `/api/v3/klines` (weight 2) and USD-M
   `/fapi/v1/klines` (1 to 5 by size), 1 min bars, at most 1000 a request, paced to 300 / 120 weight a
   minute on top of the governor.
-- Engines (optional): Prometheus text from `[[engines]] url`, every 2 s (FastMM's
-  `fastmm-top --metrics` exposes one; any exporter with the same metric names works).
+- Engines (optional): Prometheus text from `[[engines]] url`, every 2 s. `format = "fastmm"`, the default, reads FastMM's
+  own names (`fastmm-top --metrics`). `format = "generic"` reads any exporter by the names `[engines.metrics]` gives for
+  `up`, `orders`, `cancels`, `fills`, `rejects` and `latency`: counters summed over their labels, rejects a row per label
+  set, latency a row per summary (`quantile` label, per other label) or histogram (`<name>_bucket`, quantiles interpolated
+  in the bucket as Prometheus does). What is not named is null and has no place on the page; a name the scrape lacks is
+  logged. With no `up` an engine is up while its metrics answer.
 
 Weight governor: track `X-MBX-USED-WEIGHT-1M`, stay under 50 % of the limit, and stop REST for
 `Retry-After` on 429/418.
@@ -135,7 +137,7 @@ with a wallet signature; that path is not in the source. The socket sends `subsc
   reward or leader's commission is not money moved and stays in P&L. The day opens once every address's ledger is in.
 - Fees and rebates: `userFees`. A maker rebate is a negative fee on the fill, in Π, so there are no distributions and no
   Rebates line. There are no order windows, so `no_order_limits` is set and no meter is drawn.
-- Valuation: USDC at 1 where no `USDCUSDT` is read, and an asset at its pair on `hlspot` in USDC, else a stablecoin.
+- Valuation: as on any exchange (below): its perps settle in USDC, and a desk in anything else converts them.
 
 ### Derived state
 
@@ -151,7 +153,7 @@ All times are exchange event times (ms).
 - A traded perp is booked by Π like an asset, with these differences: its position is kept under its instrument key
   (`usdm:BTCUSDT`), since a base can have several; Q_k is the position across the accounts, M_k its mark (the mid until
   the first one), as equity has it, so Π moves with equity; held with no fill today it is in scope; M_k(D) is the day's
-  kept mark, else the mark kline the accounts' sweep read; its price is USD. Π_k adds its funding today (in inventory,
+  kept mark, else the mark kline the accounts' sweep read, in the desk's currency at what it settles in. Π_k adds its funding today (in inventory,
   `funding_day`; realized in the split, not on the hour blocks, which are fills and marks). In the split a fill closes
   today's opposite lots first, then the opening position; what is left opens a lot, long or short. Market making is at
   its own mid. A spot asset that hedges is kept the same way as a traded one, and adds to Hedge: Π_k's closed form is
@@ -169,10 +171,10 @@ All times are exchange event times (ms).
   like a fill of s·q at p = its transfer value per unit, no fee, not counted in fills or volume, and left
   out of markouts and the market-making split; an asset Π holds no position in yet gets one. Stablecoins are
   cash, never a position: their flows and their conversions (below) stay out of Π, and Day PnL alone carries
-  what holding or converting them made (their USDT pair's moves, the spread and fee of a conversion). A move that drops unconfirmed is taken back as it was booked, so
+  what holding or converting them made (their moves against the desk's currency, the spread and fee of a conversion). A move that drops unconfirmed is taken back as it was booked, so
   Π, like Day PnL, is as if it had never been seen.
   - Π for the day has a closed form, so it covers the whole day whenever the monitor started:
-    Π_k = Q0_k·(M_k(T) − M_k(D)) + Σ_fills+flows [s·q·(M_k(T) − p) − fee], fees in USDT. M_k(D) is the open of
+    Π_k = Q0_k·(M_k(T) − M_k(D)) + Σ_fills+flows [s·q·(M_k(T) − p) − fee], all in the desk's currency. M_k(D) is the open of
     the 1 min kline at D (fetched once for names held at D, kept across restarts), or the last mark at
     the day roll.
   - H and Hm depend on the path, booked on a live 1 s grid of exchange-clock seconds; a fill at t_f
@@ -198,20 +200,34 @@ All times are exchange event times (ms).
   from a ms-resolution ring of every change (7 min).
 - Toxicity D(h) = −s × (R(t+h) / R(t−5 s) − 1) × 1e4 for h ∈ {0, 0.2, 1, 60, 300} s, notional
   weighted over today's fills with a reference: positive = the reference moved against the fill.
-- Stablecoin prices: USDT is 1; every other stablecoin (USDC, FDUSD, TUSD, USDP, DAI, BUSD, USD1) is worth
-  its USDT pair's valuation price (mid, or fair while the book gapes), 1 only while the pair is listed but not
-  quoted yet (an account holding one is not valued for its first 30 s, as for any asset) or not listed at all.
-  The pairs are subscribed at the start. Equity, the opening equity, transfers, moves and rebates all take
-  this price, so a stablecoin sent in and converted makes no Day PnL beyond the conversion's own spread and
-  fee. The futures wallet is Binance's own USD total (`totalWalletBalance`), not revalued.
+- Valuation: every money figure is in `Market::numeraire`, the asset `[desk] currency` names. An asset's price is the
+  product of the pairs on its way there (`Market::path`): its direct pair with the currency on a spot market, else the
+  shortest way through the spot listings, at most three pairs, turned over where needed, by a market's own quote first,
+  then a stablecoin. A desk in dollars stops at a stablecoin, whose own way is its pair with the currency or nothing; it
+  counts 1 with no pair or none quoted yet (an account holding one is not valued for its first 30 s, as for any asset).
+  A desk in anything else assumes nothing, and refuses to start if an exchange's quote or a wallet's asset has no way there.
+  A perp's position, unrealized P&L, funding and price P&L are in what it is quoted in, a perp wallet in its market's
+  `settle`, each converted at that asset's price now (`Market::unit`). Equity, the opening equity, transfers, moves and
+  rebates take these prices, so a stablecoin sent in and converted makes no Day PnL beyond the conversion's own spread
+  and fee. What cash and opening balances make against the currency is real money with no part of its own: it is in Other.
+- Par: a desk on Binance alone with `currency` unset (or `USD`) keeps what it has always done, `Numeraire::par`: an asset
+  is priced only on `<asset>USDT`, and a dollar a perp settles in is 1 (`usdm:BTCUSDC`'s P&L and fees), so its figures and
+  requests stay the golden file's. Naming any asset, `USDT` included, or reading a second exchange, ends par.
+- A change of currency: rows carry no currency, so kv `currency` lists spans (from, asset) and the desk reads only those in
+  its asset now (`store::Series`): equity rows and hour blocks by time, and `open:`, `pnlstate:`, `dayreal:` by key, those
+  of a later span written `<key>#<span>`. A change opens a span at that start and rewrites nothing; changing back reads the
+  old span again. The day of a change is a desk started then: Day PnL from that moment, today's fills still in Π, so Other
+  holds the difference until the roll. `repair-day` and `recompute-mm` refuse a day that is not wholly in the currency.
+  What is not converted is what stays in each fill's quote: `Fill.notional`, order and markout notionals, the day bars'
+  and History's volume, which the page names by `notionalCur` (about a dollar on a desk in dollars, else the first
+  exchange's quote). Live day volume (`volume_day`, a symbol's) is in the currency.
 - Conversions: a trade between two stablecoins (base and quote both stablecoins: USDCUSDT, FDUSDUSDT) is a
   conversion, not market making. It stays on the fills tape and in the raw fills (`Fill.conversion`, tagged
   "Conv"), and is left out of everything fill-based: the fill aggregate (counts, volume, edge, markouts, the
   per-hour and toxicity stats, the alerts on them), `/api/markouts`, market making, Π and its scope, the day
   and History volume bars, `/api/fills` across all instruments (asked for by name it is shown), and the
   instrument rows (`symbols`: so no quote map, movers, footer or picker entry for the pair).
-- Account equity (quote USDT) = spot balances at mid (stablecoins at their USDT pair, above) + futures margin
-  balance.
+- Account equity = spot balances at their price + perp wallet + unrealized P&L, in the desk's currency (above).
   Day PnL = equity − equity at the day start − net transfers in since then, at their values when they
   happened (day start configurable, default 00:00 UTC). An asset that leaves carries no price exposure
   after it has gone, in Day PnL or in Π.
@@ -288,7 +304,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   Days before 2026-10-17 valued such fills at the mid now; `desk recompute-mm --from D --to D [--dry-run]`
   backfills their marks as above and corrects the stored `mm` of the desk equity rows and `kv dayreal:<day>`
   (mm, inventory = trading − mm) by each fill's mark less the mid the row had (1 min klines); past days only.
-- Real-money split of Π, per base and summed, over today's spot fills in time order (USD at the quote
+- Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
   realized_old: sells from the opening inventory (or beyond it), against M_k(D); floating: what is left, at
@@ -298,7 +314,7 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
 ## Wire protocol (server -> web)
 
 `GET /api/snapshot` returns the `Snapshot` in full. `GET /ws` sends one `snapshot` on connect, then
-messages at most every 125 ms. JSON; money valued at USDT = 1, named by `desk.currency`; times in epoch ms.
+messages at most every 125 ms. JSON; money in the desk's currency, named by `desk.currency`; times in epoch ms.
 `web/src/protocol.ts` mirrors these names exactly.
 
 The WebSocket's snapshot carries what the first screen draws, so it is small (tens of KB deflated at the end
@@ -383,8 +399,8 @@ interface Snapshot {
 // How this desk is set up, so the pages draw only what applies. Nothing here changes a figure: Day PnL, its parts
 // and Other are computed the same way whatever it says.
 interface Desk {
-  currency: string;   // [desk] currency: the name money figures carry, USD or a USD stablecoin; not a conversion
-  quote: string;      // the desk's first exchange's: what accounts' quote_free and quote_locked are balances of, and the quote of the markets assets are valued on
+  currency: string;   // [desk] currency, what money figures are in, an asset; USD or unset means the first exchange's quote
+  quote: string;      // the first exchange's quote: what a market name's suffix is stripped by. quote_free and quote_locked are every stablecoin's and the currency's, in the currency
   markets: { id: string; exchange: string; kind: "spot" | "perp"; name: string }[];   // what every venue field can say: id is the venue, name the interface's word for it
   roles: {            // what instruments are for, as configured: an instrument's own, else its market's, else spot is traded and a perp hedges. Empty on a desk that sets none
     markets: Record<string, "traded" | "hedge">;       // [roles]: by market id
@@ -394,6 +410,7 @@ interface Desk {
   hedge: boolean;     // the Hedge figure shows (a perp account whose market hedges, an instrument with that role, [exposure] target_ratio, a position or spot asset in the role now, a kept day's hedge P&L)
   rebates: boolean;   // a rebate has been credited: today, or on a kept day (so it can turn true during a run)
   mm: boolean;        // [desk] market_making: split Trading PnL into market making and inventory on the pages
+  earlier: { until: number; currency: string };   // absent unless the currency changed: figures before this are in that one, stored and not shown
 }
 
 // Today's desk at one minute, as columns: each minute's last series point (t = the minute's start), with market
@@ -631,7 +648,7 @@ cue. Spot inventory takes the inventory hue and futures the hedge hue wherever t
 
 A desk draws what it has (`Snapshot.desk`): no hedge means no Hedge figure, line, column or chip, no Futures or Exposure
 & hedge tab, no futures columns; no rebates, the same for Rebates; `mm` false, Trading PnL without its two parts. No
-engine configured means no Engines section or tab. Other stays: it is what keeps the split adding up to Day PnL. While
+engine configured means no Engines section or tab, and an engine shows the figures its metrics say. Other stays: it is what keeps the split adding up to Day PnL. While
 the snapshot has not come, or from a server without `desk`, everything is drawn, in USDT.
 
 Hiding an alert: a warning or info alert can be hidden on this browser (localStorage `desk.hiddenAlerts`),

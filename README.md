@@ -2,7 +2,7 @@
 
 **[Online Demo](https://ziy.bio/bndesk/)**
 
-A real-time, read-only dashboard for high-frequency market making on Binance and Hyperliquid, alone or together, written in Rust and React and designed for [FastMM](https://github.com/ziyangliu-666/FastMM). It looks like an exchange's trade page, on a pure-black ground.
+A real-time, read-only dashboard for market making on perps or spot, on Binance and Hyperliquid, alone or together, valued in any currency their markets reach. Rust and React, on a pure-black ground like an exchange's trade page. Engine metrics come from [FastMM](https://github.com/ziyangliu-666/FastMM) or any Prometheus exporter.
 
 ![Desk](docs/screenshots/desk.gif)
 
@@ -12,12 +12,12 @@ A real-time, read-only dashboard for high-frequency market making on Binance and
 
 ## Features
 
-- Day P&L split into market making, inventory, hedge, rebates and other
+- Day P&L split into market making, inventory, hedge, rebates and other, by what each instrument is for, in your currency
 - P&L, equity and exposure charts with intervals from 1 minute to 1 day that pan back over earlier days
 - Quote map: every resting order against fair value and the market's bid and ask, per account
 - Analysis: the price path around our fills from −10 s to 5 min with ±2 standard-error bands, the markout distribution, markouts through the day, by instrument, and edge against markout
-- History by day, week or 15 minutes, for the desk or one instrument with Binance's klines and our fills on them
-- Inventory, exposure and hedge across spot and USD-M futures, master and sub-accounts in one view
+- History by day, week or 15 minutes, for the desk or one instrument with the exchange's klines and our fills on them
+- Inventory, exposure and hedge across spot and perps, every account in one view
 - Trading engine metrics over Prometheus, feed health and alerts
 - Hide amounts masks every money figure for screen sharing
 - A phone layout of its own: Desk, Markets, History, Assets and More, with alerts under a bell

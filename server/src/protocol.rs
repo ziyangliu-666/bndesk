@@ -996,7 +996,7 @@ mod tests {
         let ifaces = interfaces();
         let cases: Vec<(&str, Vec<String>)> = vec![
             ("Snapshot", struct_fields(&Snapshot::default())),
-            ("Desk", struct_fields(&Desk::default())),
+            ("Desk", struct_fields(&Desk { earlier: Some(Earlier::default()), ..Default::default() })),
             ("Summary", struct_fields(&Summary::default())),
             ("Account", struct_fields(&Account { no_order_limits: true, ..Default::default() })),
             ("SymbolRow", struct_fields(&SymbolRow::default())),

@@ -14,7 +14,7 @@ Days, weeks or 15-minute bars of P&L for the whole desk, as daily bars, a cumula
 
 ![History](screenshots/history.webp)
 
-Switched to one instrument, it shows Binance's klines with our fills on them, our average cost and net quantity, and our fills by day. Here too a range is what the chart opens on: every bar at days and weeks, and at finer intervals more than the range, loading further back as you reach the first bar. Our fills follow the view back; the summary and the table stay with the range.
+Switched to one instrument, it shows the exchange's klines with our fills on them, our average cost and net quantity, and our fills by day. Here too a range is what the chart opens on: every bar at days and weeks, and at finer intervals more than the range, loading further back as you reach the first bar. Our fills follow the view back; the summary and the table stay with the range.
 
 ![An instrument with its fills](screenshots/history-instrument.webp)
 
@@ -26,13 +26,13 @@ How the price moved around our fills, from 10 seconds before to 5 minutes after,
 
 ## Orders
 
-Each account's order rates against Binance's limits, then the quote map: every resting order against fair value and the market's bid and ask, sized by amount and sortable by activity, width, one-sided quotes or inventory. The open orders sit beside it. Picking an account narrows both.
+Each account's order rates against its exchange's limits where it has them, then the quote map: every resting order against fair value and the market's bid and ask, sized by amount and sortable by activity, width, one-sided quotes or inventory. The open orders sit beside it. Picking an account narrows both.
 
 ![Orders](screenshots/orders.gif)
 
 ## Assets
 
-Total value and today's P&L, the accounts with their equity, transfers, rebates, free USDT and fees, and Day P&L or equity by account on one chart. Spot, Futures and Exposure & hedge have tabs of their own.
+Total value and today's P&L, the accounts with their equity, transfers, rebates, free cash and fees, and Day P&L or equity by account on one chart. Spot, Futures and Exposure & hedge have tabs of their own.
 
 ![Assets](screenshots/assets.webp)
 

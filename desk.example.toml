@@ -12,9 +12,11 @@ mark_max_spread_bps = 100  # wider books are valued at the reference-implied fai
 # keep_days = 365
 # mm_horizon_s = 60         # market making marks each fill this long after it: 1, 10, 60 or 300
 
-# How the pages describe this desk; figures are the same whatever is set here.
+# What the desk's figures are in, and how the pages describe it.
 # [desk]
-# currency = "USD"          # the name on money figures (default USDT); USD or a USD stablecoin: not a conversion
+# currency = "EUR"          # an asset every figure is converted to, along its pairs; refused at the start if nothing listed
+#                           # reaches it. Default, or "USD": the first exchange's quote (USDT on Binance). Changing it starts
+#                           # a new series: figures in the old one stay stored and are shown again if it changes back.
 # market_making = false     # show Trading PnL without its market making and inventory parts
 # The Hedge and Rebates parts need no setting: they show when something hedges, or once a rebate is credited.
 
