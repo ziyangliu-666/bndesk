@@ -1,12 +1,13 @@
 // The Desk's centre chart with nothing picked: tabs P&L | Equity | Exposure on ExChart. Today from the snapshot
-// (minute bars, 5 s on Line), the days before from /api/history at the interval, loaded further back as the
-// view nears the first bar; Day PnL and its parts restart at each day start, marked by a faint rule. The view
-// opens on today. The legend names the lines at rest (the header has the figures) and reads a hovered bar.
+// (minute bars, 5 s on Line), the days before from /api/history at the interval, arriving behind the view (past.ts);
+// Day PnL and its parts restart at each day start, marked by a faint rule. The view opens on today. The legend
+// names the lines at rest (the header has the figures) and reads a hovered bar. What is drawn splits at today:
+// the days before are built once per load, however many, and only today's bars are built again on a tick.
 import { useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from "../../theme";
-import { ExChart, GAP, Tabs, TextToggle, rgba, useExPref, type ExLegendItem, type ExSeries } from "../../components/ex";
+import { ExChart, GAP, Tabs, TextToggle, rgba, useExPref, type ExLegendItem, type ExOhlc, type ExPoint, type ExSeries } from "../../components/ex";
 import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
@@ -40,6 +41,22 @@ const NO_ENDS = new Set<number>();
 const NO_ROWS: Row[] = [];
 const NET = C.ink;
 
+/** One series' points: the head built once per `head` array, the tail each tick, joined only when either changed. */
+class Joined {
+  private m = new Map<string, { src: Row[]; head: object[]; tail: object[] | null; out: object[] | null }>();
+  constructor(private stable: Stable) {}
+  get<T extends { time: number }>(key: string, head: Row[], tail: Row[], f: (r: Row) => T, same: (a: T, b: T) => boolean): T[] {
+    let e = this.m.get(key);
+    if (!e || e.src !== head) this.m.set(key, (e = { src: head, head: head.map(f), tail: null, out: null }));
+    const t = this.stable.get(key, tail.map(f), same);
+    if (e.tail !== t || !e.out) {
+      e.tail = t;
+      e.out = e.head.length ? e.head.concat(t) : t;
+    }
+    return e.out as T[];
+  }
+}
+
 export function DeskChart({ head }: { head?: ReactNode }) {
   const [tab, setTab] = useExPref<Tab>("desk", "tab", "pnl", ["pnl", "equity", "exposure"]);
   const hide = useHide();
@@ -67,6 +84,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const exposure = useStore((s) => (tab === "exposure" ? s.snap?.exposure : undefined));
   const step = STEP[iv] ?? MIN;
   const stable = useRef(new Stable()).current;
+  const joined = useRef(new Joined(stable)).current;
   // today's rebates and fill counts by minute (the snapshot's minute bars do not carry them)
   const mins = useTodayMinutes(tab === "pnl" ? dayStart : null);
   // the days before today at the interval (Line: minutes)
@@ -80,11 +98,14 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   );
   // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
   const offAt = useDayOffsets(tab === "pnl" ? dayStart : null);
-  const perDay = useMemo(() => (past.rows.length ? past.rows.concat(today) : today), [past.rows, today]);
   // until the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
-  const rows = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? perDay.map((r) => runOn(r, offAt(r.t))) : perDay), [perDay, offAt]);
-  const volRows = useMemo(() => (step === 0 ? (past.rows.length ? past.rows.concat(minRows) : minRows) : rows), [step, past.rows, minRows, rows]);
-  const volByT = useMemo(() => new Map(volRows.map((r) => [r.t, r])), [volRows]);
+  const head = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? past.rows.map((r) => runOn(r, offAt(r.t))) : past.rows), [past.rows, offAt]);
+  const tail = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? today.map((r) => runOn(r, offAt(r.t))) : today), [today, offAt]);
+  const rows = useMemo(() => (head.length ? head.concat(tail) : tail), [head, tail]);
+  // the volume pane's bars: minutes under the 5 s Line, else the chart's own
+  const volTail = step === 0 ? minRows : tail;
+  const pastByT = useMemo(() => new Map(past.rows.map((r) => [r.t, r])), [past.rows]);
+  const volByT = useMemo(() => new Map(volTail.map((r) => [r.t, r])), [volTail]);
 
   // the axis, tags and legend read ••• with Hide amounts (ExChart re-reads a format that prints otherwise)
   const money = (f: (v: number) => string) => maskFormat(hide, f);
@@ -94,12 +115,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const fSigned = money((v) => compact(v, 2, true));
   // P&L lines stop at each day's last bar: the figures restart at 0 with the next day (step < 1 day)
   const ends = useMemo(() => (tab === "pnl" && !offAt && step < 1440 * MIN ? dayEnds(rows.map((r) => r.t), dayStart) : NO_ENDS), [tab, offAt, step, rows, dayStart]);
-  const pts = (k: string, pick: (r: Row) => number | null, list: Row[] = rows) =>
-    stable.get(
-      k + iv,
-      list.map((r) => (list === rows && ends.has(r.t) ? { time: r.t, value: pick(r), color: GAP } : { time: r.t, value: pick(r) })),
-      sameValue,
-    );
+  const pts = (k: string, pick: (r: Row) => number | null, h: Row[] = head, t: Row[] = tail) =>
+    joined.get<ExPoint>(k + iv, h, t, (r) => (ends.has(r.t) ? { time: r.t, value: pick(r), color: GAP } : { time: r.t, value: pick(r) }), sameValue);
 
   const vol: ExSeries = {
     key: "vol",
@@ -107,13 +124,16 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     label: "Vol(USDT)",
     color: VOL,
     pane: 1,
-    data: pts("vol", (r) => r.vol, volRows),
+    data: pts("vol", (r) => r.vol, step === 0 ? past.rows : head, volTail),
     format: fBig,
     lastValue: false,
     // on Line the bars are 5 s and the volume minutes: its legend reads the minute of the bar (below)
     legend: step === 0 ? false : undefined,
   };
-  const volAt = (t: number) => volByT.get(step === 0 ? Math.floor(t / MIN) * MIN : t);
+  const volAt = (t: number) => {
+    const m = step === 0 ? Math.floor(t / MIN) * MIN : t;
+    return volByT.get(m) ?? pastByT.get(m);
+  };
   const volLegend: ExLegendItem[] =
     step === 0 && tab !== "equity" && tab !== "exposure"
       ? [{ pane: 1, key: "vol", label: "Vol(USDT)", value: (t) => { const r = volAt(t); return r ? [fBig(r.vol), C.ink] : "--"; } }]
@@ -134,14 +154,10 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
             label: dayLabel,
             toggle: false,
             format: fPnl,
-            data: stable.get(
-              "dayc" + iv,
-              rows.map((r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c })),
-              sameOhlc,
-            ),
+            data: joined.get<ExOhlc>("dayc" + iv, head, tail, (r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c }), sameOhlc),
           }
         : { key: "day", kind: "baseline", label: dayLabel, toggle: false, format: fPnl, signColor: true, data: pts("day", (r) => r.c) };
-    const has = (k: "mm" | "hedge") => rows.some((r) => r[k] != null);
+    const has = (k: "mm" | "hedge") => tail.some((r) => r[k] != null) || head.some((r) => r[k] != null);
     // rebates at a row: the last minute's figure inside it; Other is what the parts leave of Day PnL
     const rebAt = (r: Row) => {
       if (r.reb !== undefined) return r.reb;
@@ -214,7 +230,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         format: fPnl,
         lastValue: false,
         // on the main pane's bar times: the legend then has each account's value at every bar, at rest too
-        data: stable.get("acc" + a.account + iv, accountOnGrid(a, rows, dayStart), sameValue),
+        // today's only: blank over the days before
+        data: pts("acc" + a.account, ((byT) => (r: Row) => byT.get(r.t) ?? null)(new Map(accountOnGrid(a, tail, dayStart).map((p) => [p.time, p.value])))),
       });
     });
     stretch = [1, 0.6];

@@ -119,7 +119,7 @@ export function keep<T extends ExPoint | ExOhlc>(prev: readonly T[] | undefined,
 }
 
 /** ExChart's series data from the bars; `line`: Day PnL as a line on the finest points (`fine`). */
-export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: number; v: number }[] | null, prev: PnlData | null, volColor: string, ends?: ReadonlySet<number>): PnlData {
+export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: number; v: number }[] | null, prev: PnlData | null, volColor: string, ends?: ReadonlySet<number>, reb?: boolean): PnlData {
   if (!bars.length) return EMPTY;
   // a line stops at each day's last bar (`ends`): the figures restart at 0 with the next day
   const pts = (f: (b: PnlBar) => number | null) =>
@@ -129,7 +129,7 @@ export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: numbe
       ? fine.map((p) => ({ time: p.t, value: p.v }))
       : pts((b) => b.close)
     : bars.map((b) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close }));
-  const hasReb = bars.some((b) => b.rebates != null);
+  const hasReb = reb ?? bars.some((b) => b.rebates != null);
   const d: PnlData = {
     main: keep(prev?.main as (ExPoint | ExOhlc)[] | undefined, main as (ExPoint | ExOhlc)[]) as ExPoint[] | ExOhlc[],
     trading: keep(prev?.trading, pts((b) => b.trading)),
@@ -142,4 +142,22 @@ export function toChart(bars: PnlBar[], line: boolean, fine: readonly { t: numbe
     bars,
   };
   return d;
+}
+
+/** The days before today's points (built once per load) with today's (built each tick) after them. */
+export function joinChart(a: PnlData, b: PnlData): PnlData {
+  if (!a.bars.length) return b;
+  if (!b.bars.length) return a;
+  const j = <T,>(x: readonly T[], y: readonly T[]) => x.concat(y as T[]);
+  return {
+    main: j<ExPoint | ExOhlc>(a.main, b.main) as ExPoint[] | ExOhlc[],
+    trading: j(a.trading, b.trading),
+    mm: j(a.mm, b.mm),
+    inv: j(a.inv, b.inv),
+    hedge: j(a.hedge, b.hedge),
+    rebates: j(a.rebates, b.rebates),
+    other: j(a.other, b.other),
+    vol: j(a.vol, b.vol),
+    bars: j(a.bars, b.bars),
+  };
 }

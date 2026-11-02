@@ -1,8 +1,8 @@
 // The phone Desk's P&L chart: Day PnL (a baseline at zero for Line, candles for 1m 5m 15m) with the split as
 // lines (Trading, market making, inventory PnL, the hedge, rebates, other: the desktop's palette and strokes),
-// notional filled in a volume pane. Today from the store; the days before from /api/history, a pan away (loaded
-// further back as the view nears the first bar), each day from its own start with a faint rule between days.
-// Long-press reads a bar, ⤢ opens #/chart/m-desk.
+// notional filled in a volume pane. Today from the store; the days before from /api/history, arriving behind the
+// view (desk/past.ts), each day from its own start with a faint rule between days. The days before are built once
+// per load and only today's bars each tick. Long-press reads a bar, ⤢ opens #/chart/m-desk.
 import { useMemo, useRef } from "react";
 import { compact, pnl } from "../../../format";
 import { ExChart, useExPref, type ExSeries } from "../../../components/ex";
@@ -11,8 +11,8 @@ import { useLive } from "../../../components/mobile";
 import { useStore } from "../../../store";
 import { maskFormat } from "../../../mask";
 import { useTodayMinutes } from "../../desk/pnlData";
-import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
-import { PNL_STEP, histBars, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
+import { PAST_BARS_PHONE, dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
+import { PNL_STEP, histBars, joinChart, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
 
 const IVS: { value: PnlIv; label: string }[] = [
   { value: "line", label: "Line" },
@@ -36,25 +36,36 @@ export function DeskChart({ ms }: { ms: number }) {
   const step = PNL_STEP[iv];
   // today's rebates and fill counts by minute; the days before at the interval
   const mins = useTodayMinutes(dayStart);
-  const past = usePast(pastStep(step), dayStart ?? 0);
-  const pastBars = useMemo(() => histBars(past.bars), [past.bars]);
+  const past = usePast(pastStep(step), dayStart ?? 0, PAST_BARS_PHONE);
   // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
   const offAt = useDayOffsets(dayStart);
+
+  // the P&L runs on over the days; until the closes are in, nothing: the day's own figures first would jump to the
+  // running ones a moment later
+  const pastData = useMemo(() => {
+    if (offAt === undefined) return null;
+    const bars = histBars(past.bars);
+    return toChart(offAt ? bars.map((b) => runOn(b, offAt(b.time))) : bars, iv === "line", null, null, VOL, undefined, true);
+  }, [past.bars, offAt, iv]);
+
+  const pastReb = useMemo(() => past.bars.some((b) => b.rebates != null), [past.bars]);
 
   const prev = useRef<{ k: string; d: PnlData } | null>(null);
   const k = iv;
   const nToday = useRef(0);
+  const todayFirst = useRef<number | "">("");
   const data = useMemo(() => {
     const today = dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : [];
     nToday.current = today.length;
-    const perDay = pastBars.length ? pastBars.concat(today) : today;
-    // until the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
-    const all = offAt === undefined ? [] : offAt ? perDay.map((b) => runOn(b, offAt(b.time))) : perDay;
-    const ends = offAt ? new Set<number>() : dayEnds(all.map((b) => b.time), dayStart ?? 0);
-    const d = toChart(all, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL, ends);
+    todayFirst.current = today[0]?.time ?? "";
+    const on = offAt === undefined ? [] : offAt ? today.map((b) => runOn(b, offAt(b.time))) : today;
+    const ends = offAt ? new Set<number>() : dayEnds(on.map((b) => b.time), dayStart ?? 0);
+    // the rebates' lines run the whole chart once either side has any
+    const reb = pastReb || on.some((b) => b.rebates != null);
+    const d = toChart(on, iv === "line", null, prev.current?.k === k ? prev.current.d : null, VOL, ends, reb);
     prev.current = { k, d };
-    return d;
-  }, [dayStart, bars, series, fills, step, pastBars, iv, k, mins, offAt]);
+    return pastData ? joinChart(reb ? pastData : { ...pastData, rebates: [], other: [] }, d) : d;
+  }, [dayStart, bars, series, fills, step, pastReb, pastData, iv, k, mins, offAt]);
 
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
@@ -90,7 +101,6 @@ export function DeskChart({ ms }: { ms: number }) {
   ];
   // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)
   const view = Math.max(Math.min(VIEW[iv] ?? Infinity, nToday.current), 30);
-  const todayFirst = data.bars.find((b) => b.time >= (dayStart ?? 0))?.time ?? "";
 
   return (
     <ExChart
@@ -105,7 +115,7 @@ export function DeskChart({ ms }: { ms: number }) {
       emptyText="No P&L yet today"
       height={360}
       initialBars={view}
-      resetKey={`${k}:${todayFirst}:${past.bars.length > 0}`}
+      resetKey={`${k}:${todayFirst.current}:${past.bars.length > 0}`}
       dividers={past.days}
       onNearStart={past.loadOlder}
       legendRest="names"

@@ -1,57 +1,100 @@
 // The days before today on the Desk charts (desktop and phone): /api/history's bars at the chart's interval,
-// each day's figures as stored (`per=day`: Day PnL and its parts restart at each day start), loaded a span at a
-// time from today's start backwards. The first span loads with the chart; an older one when the view nears the
-// first bar (loadOlder), as an exchange chart loads older candles. The days before today never change, so a
-// span is fetched once and kept for the session.
+// each day's figures as stored (`per=day`: Day PnL and its parts restart at each day start). The chart opens with
+// today and the bars before it keep arriving behind the view, nearest first, up to a budget of bars: a request
+// for the most recent few thousand, then doubling, so the first bars are quick and the earlier ones are there
+// by the time the view pans to them. Past the budget a page loads when the view nears the first bar. The days
+// before today never change, so a page is fetched once and kept for the session; a new day only asks for the
+// day that ended.
+//
+// The budget is memory, not bytes on the wire: a chart holds about 5 KB of the browser's memory per bar of the Desk
+// chart (measured: 125 000 bars took 660 MB, most of it Lightweight Charts' own). A year kept is 8 760 bars at 1h,
+// 35 040 at 15m, 105 120 at 5m and 525 600 at 1m, so the budget holds the year at 15m and above, seven months at 5m
+// and six weeks at 1m; the phone, with more series on less memory, a year at 1h and five days at 1m.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getJSON, type HistBar, type History } from "../../api";
 import { MIN, type Row } from "./model";
 
 const DAY = 86_400_000;
-/** History kept by the server at most (keep_days is a year): no span is asked for before this. */
-const MAX_BACK = 400 * DAY;
-
-/** Days of history per request, by bar size (s): a few thousand bars each. */
-function spanFor(stepS: number): number {
-  if (stepS <= 60) return 2 * DAY;
-  if (stepS <= 300) return 8 * DAY;
-  if (stepS <= 900) return 24 * DAY;
-  if (stepS <= 3600) return 90 * DAY;
-  return MAX_BACK;
-}
+/** Nothing is asked for before this; the first kept day (`firstDay`) usually ends the walk long before. */
+const MAX_BACK = 3650 * DAY;
+/** /api/history answers at most this many bars (server history.rs MAX_BARS). */
+const MAX_PAGE = 40_000;
+/** Bars in the first request; each later one asks for twice as many, up to MAX_PAGE. */
+const FIRST_PAGE = 3_000;
+/** Bars kept loading behind the view without being asked for. */
+export const PAST_BARS = 60_000;
+/** The same on a phone. */
+export const PAST_BARS_PHONE = 8_000;
+const RETRY_MS = 15_000;
 
 interface Past {
+  stepS: number;
+  dayStart: number;
   /** Bars before today, oldest first. */
   bars: HistBar[];
   /** The earliest time asked for so far. */
   from: number;
+  /** Bars to ask for next. */
+  page: number;
+  /** Bars to load without being asked. */
+  budget: number;
+  /** Start of the days between an earlier load's end and this one's (carried over from the day before). */
+  gap: number | null;
   /** Nothing older to ask for. */
   done: boolean;
   busy: boolean;
   error: string | null;
   subs: Set<() => void>;
+  retry: ReturnType<typeof setTimeout> | null;
 }
 const loads = new Map<string, Past>();
 const NO_BARS: HistBar[] = [];
 
-async function older(key: string, stepS: number, dayStart: number) {
+/** The kept days' closes before `dayStart`, one request whoever asks (the walk below and the charts' offsets). */
+const dayBars = new Map<number, Promise<HistBar[]>>();
+function daysBefore(dayStart: number): Promise<HistBar[]> {
+  let q = dayBars.get(dayStart);
+  if (!q) {
+    q = getJSON<History>("/api/history", { from: dayStart - MAX_BACK, to: dayStart, step: 86_400, per: "day" }).then((h) =>
+      h.bars.filter((x) => x.t < dayStart).sort((x, y) => x.t - y.t),
+    );
+    q.catch(() => dayBars.delete(dayStart));
+    dayBars.set(dayStart, q);
+  }
+  return q;
+}
+
+async function fetchBars(stepS: number, from: number, to: number, dayStart: number): Promise<HistBar[]> {
+  const h = await getJSON<History>("/api/history", { from, to, step: stepS, per: "day" });
+  return h.bars.filter((b) => b.t >= from && b.t < to && b.t < dayStart);
+}
+
+async function older(key: string) {
   const p = loads.get(key)!;
-  if (p.busy || p.done) return;
+  if (p.busy || (p.done && p.gap == null)) return;
   p.busy = true;
   try {
-    let span = spanFor(stepS);
-    // a gap (no desk rows for a while) gives an empty span: look further back until there is something or the
-    // server's retention is passed
-    for (;;) {
+    const stepMs = p.stepS * 1000;
+    if (p.gap != null) {
+      p.bars = p.bars.concat(await fetchBars(p.stepS, p.gap, p.dayStart, p.dayStart));
+      p.gap = null;
+    }
+    const days = p.done ? [] : await daysBefore(p.dayStart);
+    // the first kept day ends the walk, so a young desk asks for no more than it holds
+    const floor = days.length ? Math.max(days[0]!.t, p.dayStart - MAX_BACK) : p.dayStart;
+    if (p.from <= floor) p.done = true;
+    // a gap (no desk rows for a while) gives an empty page: keep going back
+    while (!p.done) {
       const to = p.from;
-      const from = Math.max(dayStart - MAX_BACK, to - span);
-      const h = await getJSON<History>("/api/history", { from, to, step: stepS, per: "day" });
-      const got = h.bars.filter((b) => b.t >= from && b.t < to && b.t < dayStart);
+      const from = Math.max(floor, to - Math.min(p.page, MAX_PAGE) * stepMs);
+      const got = await fetchBars(p.stepS, from, to, p.dayStart);
       p.from = from;
-      if (got.length) p.bars = got.concat(p.bars.filter((b) => b.t >= to));
-      if (from <= dayStart - MAX_BACK) p.done = true;
-      if (got.length || p.done) break;
-      span *= 2;
+      if (got.length) p.bars = got.concat(p.bars);
+      if (from <= floor) p.done = true;
+      if (got.length) {
+        p.page = Math.min(p.page * 2, MAX_PAGE);
+        break;
+      }
     }
     p.error = null;
   } catch (e) {
@@ -62,31 +105,65 @@ async function older(key: string, stepS: number, dayStart: number) {
   for (const f of p.subs) f();
 }
 
+/** Keep loading behind the view while someone watches, up to the budget. */
+function walk(key: string) {
+  const p = loads.get(key);
+  if (!p || !p.subs.size || p.busy || p.retry) return;
+  if (p.error) {
+    p.error = null;
+    p.retry = setTimeout(() => {
+      p.retry = null;
+      walk(key);
+    }, RETRY_MS);
+    return;
+  }
+  if (p.gap == null && (p.done || p.bars.length >= p.budget)) return;
+  void older(key).then(() => walk(key));
+}
+
+/** A load for a new day takes over the last day's bars, and only asks for the day between. */
+function open(key: string, stepS: number, dayStart: number, budget: number): Past {
+  let last: Past | null = null;
+  for (const p of loads.values())
+    if (p.stepS === stepS && p.dayStart < dayStart && !p.subs.size && !p.busy && p.gap == null && (!last || p.dayStart > last.dayStart)) last = p;
+  if (last) loads.delete(`${stepS}|${last.dayStart}`);
+  const p: Past = last
+    ? { ...last, dayStart, budget, gap: last.dayStart, subs: new Set(), retry: null, error: null }
+    : { stepS, dayStart, bars: [], from: dayStart, page: FIRST_PAGE, budget, gap: null, done: false, busy: false, error: null, subs: new Set(), retry: null };
+  loads.set(key, p);
+  return p;
+}
+
 export interface PastRows {
   /** The days before today as chart rows, oldest first. */
   rows: Row[];
   /** The same as /api/history's bars. */
   bars: HistBar[];
-  /** Ask for the span before the earliest loaded (no-op while one is loading or nothing older is kept). */
+  /** Ask for the page before the earliest loaded (no-op while one is loading or nothing older is kept). */
   loadOlder: () => void;
   loading: boolean;
   /** The day starts within the loaded range and today's (for the chart's day rules). */
   days: number[];
 }
 
-/** The days before `dayStart` in bars of `stepS` seconds (null: not wanted). */
-export function usePast(stepS: number | null, dayStart: number): PastRows {
+/** The days before `dayStart` in bars of `stepS` seconds (null: not wanted). `budget`: bars to load unasked. */
+export function usePast(stepS: number | null, dayStart: number, budget = PAST_BARS): PastRows {
   const key = stepS && dayStart ? `${stepS}|${dayStart}` : "";
   const [, bump] = useState(0);
   useEffect(() => {
     if (!key) return;
-    let p = loads.get(key);
-    if (!p) loads.set(key, (p = { bars: [], from: dayStart, done: false, busy: false, error: null, subs: new Set() }));
+    const p = loads.get(key) ?? open(key, stepS!, dayStart, budget);
     const cb = () => bump((n) => n + 1);
     p.subs.add(cb);
-    if (!p.bars.length && !p.done && !p.busy) void older(key, stepS!, dayStart);
-    return () => void p.subs.delete(cb);
-  }, [key, stepS, dayStart]);
+    walk(key);
+    return () => {
+      p.subs.delete(cb);
+      if (!p.subs.size && p.retry) {
+        clearTimeout(p.retry);
+        p.retry = null;
+      }
+    };
+  }, [key, stepS, dayStart, budget]);
   const p = key ? loads.get(key) : undefined;
   const bars = p?.bars;
   const rows = useMemo(() => (bars ? bars.map(pastRow) : []), [bars]);
@@ -97,8 +174,8 @@ export function usePast(stepS: number | null, dayStart: number): PastRows {
     return out;
   }, [rows, dayStart]);
   const loadOlder = useCallback(() => {
-    if (key && stepS) void older(key, stepS, dayStart);
-  }, [key, stepS, dayStart]);
+    if (key) void older(key);
+  }, [key]);
   return { rows, bars: bars ?? NO_BARS, loadOlder, loading: !!p?.busy, days };
 }
 
@@ -159,10 +236,9 @@ async function loadCloses(dayStart: number) {
   const c = closes.get(dayStart)!;
   c.busy = true;
   try {
-    const h = await getJSON<History>("/api/history", { from: dayStart - MAX_BACK, to: dayStart, step: 86_400, per: "day" });
     const run = { ...ZERO };
     const days: [number, DayOffset][] = [];
-    for (const b of h.bars.filter((x) => x.t < dayStart).sort((x, y) => x.t - y.t)) {
+    for (const b of await daysBefore(dayStart)) {
       days.push([b.t, { ...run }]);
       run.c += b.c;
       run.trading += b.pi ?? 0;

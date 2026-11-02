@@ -27,8 +27,8 @@ use crate::sessions;
 
 /// Bar sizes of `/api/history`, seconds.
 pub const STEPS: [i64; 6] = [60, 300, 900, 3600, 14400, 86400];
-/// Bars at most per response (history and klines); a longer range keeps its latest part.
-pub const MAX_BARS: i64 = 25_000;
+/// Bars at most per response (history and klines): a year at 15 min fits; a longer range keeps its latest part.
+pub const MAX_BARS: i64 = 40_000;
 pub const MAX_FILLS: i64 = 20000;
 /// Kline intervals `/api/klines` proxies (Binance's names; a week opens on Monday 00:00 UTC, which Binance aligns).
 pub const INTERVALS: [(&str, i64); 8] = [

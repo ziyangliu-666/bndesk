@@ -245,8 +245,8 @@ whatever came since the snapshot is newer and stays. After a day roll the server
 History, read from `desk.db` off the desk's thread (a read-only connection) and behind the same login;
 `from` / `to` epoch ms UTC (`to` defaults to now, `from` to a day before it), a bad parameter is a 400:
 - `GET /api/history?from&to&step` -> `History`. `step` seconds, one of 60, 300, 900, 3600, 14400, 86400
-  (default 300); bars start at multiples of `step` from the day start; at most 5000 bars (a longer range
-  keeps its latest part). From the desk's equity rows in [from, to): each P&L day's series restarts at
+  (default 300); bars start at multiples of `step` from the day start; at most 40 000 bars (a longer range
+  keeps its latest part: a year at 15 min fits, and the page asks for finer bars a span at a time). From the desk's equity rows in [from, to): each P&L day's series restarts at
   the day start, so within a day the value is the sum of the earlier days' final values in the range plus
   its value now (days without rows add nothing), less each series' first value in the range, so it starts
   at 0 even when the range starts mid-day. o/h/l/c of that cumulative day PnL; pi (Π), realized,
@@ -257,7 +257,7 @@ History, read from `desk.db` off the desk's thread (a read-only connection) and 
   the page cache, and a month of rows took 30 s from disk.
 - `GET /api/fills?symbol&venue&from&to` -> `HistoryFill[]`, oldest first, at most 20000; `symbol` and `venue` (`spot` | `usdm`) optional.
 - `GET /api/klines?symbol&venue&interval&from&to` -> `[t, o, h, l, c, volume][]`: Binance's public klines
-  (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 5000 (the latest).
+  (spot `/api/v3/klines`, USD-M `/fapi/v1/klines`) opening in [from, to], at most 40 000 (the latest).
   `venue` spot (default) or usdm; `interval` 1m (default), 5m, 15m, 30m, 1h, 4h, 1d, 1w; `symbol` [A-Z0-9]{2,20}.
   Fetched 1000 bars a request; chunks whose bars have all closed are cached in memory. Binance's 4xx is a
   400, a 429 / 418 a 503 until its Retry-After.
