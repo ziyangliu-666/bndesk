@@ -1,9 +1,9 @@
 //! Simulated accounts on top of real public market data: run the full UI without keys.
 //!
-//! Two spot market makers quote around fair (reference mid x EWMA ratio) and get maker fills when the
-//! real book trades through their quote, or with a probability that grows with the real mid move; a
-//! third account keeps a futures position offsetting the spot inventory. Markouts come from the real
-//! mids that follow.
+//! Two market makers quote around fair (reference mid x EWMA ratio) and get maker fills when the real book trades
+//! through their quote, or with a probability that grows with the real mid move; where they make markets on spot, a
+//! third account keeps a futures position offsetting the inventory, and where on perps, each has its own position and
+//! nothing hedges. Markouts come from the real mids that follow. The desk's first exchange is the one simulated.
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -16,10 +16,35 @@ use crate::clock::CLOCK;
 use crate::config::{AccountCfg, MarketCfg, Ref};
 use crate::feeds::now_ms;
 use crate::fills::FillRec;
-use crate::protocol::{Role, Side, Venue};
+use crate::protocol::{InstRole, Role, Side, Venue};
 
 pub const SYMBOLS: [&str; 12] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
                                  "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "TRXUSDT", "SUIUSDT"];
+pub const PERP_SYMBOLS: [&str; 12] = ["BTC", "ETH", "SOL", "HYPE", "XRP", "DOGE", "ADA", "LINK", "AVAX", "LTC", "BNB", "SUI"];
+
+/// What is simulated on an exchange.
+#[derive(Debug, Clone, Copy)]
+pub struct Plan {
+    /// The market the makers quote.
+    pub maker: Venue,
+    /// The market the third account hedges on, where they quote spot.
+    pub hedge: Option<Venue>,
+    pub quote: &'static str,
+    pub symbols: &'static [&'static str],
+    /// A small balance discovered from the account, and priced like any.
+    pub dust: (&'static str, f64),
+}
+
+impl Plan {
+    pub fn of(exchange: &str) -> Plan {
+        let wallet = Venue::of(exchange).find(|v| v.market().wallet);
+        let perp = crate::config::perp_of(exchange);
+        match wallet {
+            Some(spot) => Plan { maker: spot, hedge: Some(perp), quote: spot.market().quote, symbols: &SYMBOLS, dust: ("DOT", 0.5) },
+            None => Plan { maker: perp, hedge: None, quote: perp.market().quote, symbols: &PERP_SYMBOLS, dust: ("HYPE", 0.05) },
+        }
+    }
+}
 pub const CLIP_USD: f64 = 60.0;
 pub const SPOT_MAKER: f64 = 0.0001;
 pub const SPOT_TAKER: f64 = 0.0002;
@@ -35,24 +60,40 @@ fn start(id: &str) -> f64 {
     }
 }
 
-pub fn markets() -> Vec<MarketCfg> {
-    SYMBOLS
+/// What the plan asks of the config: markets, and on perps a role for them, or their fills would read as a hedge.
+pub fn set_up(cfg: &mut crate::config::Config, plan: Plan) {
+    cfg.markets.extend(markets(plan));
+    if plan.hedge.is_some() {
+        if cfg.target_ratio.is_none() {
+            cfg.target_ratio = Some(1.0);
+            cfg.band_usd = Some(cfg.band_usd.filter(|b| *b != 0.0).unwrap_or(250.0));
+        }
+    } else {
+        cfg.roles.set_market(plan.maker, InstRole::Traded);
+    }
+}
+
+pub fn markets(plan: Plan) -> Vec<MarketCfg> {
+    plan.symbols
         .iter()
         .map(|s| {
-            let mut m = MarketCfg::new(*s, Venue::SPOT);
-            m.reference = Some(Ref { symbol: s.to_string(), venue: Venue::USDM });
+            let mut m = MarketCfg::new(*s, plan.maker);
+            m.reference = plan.hedge.map(|venue| Ref { symbol: s.to_string(), venue });
             m
         })
         .collect()
 }
 
-pub fn accounts() -> Vec<Account> {
+pub fn accounts(plan: Plan) -> Vec<Account> {
     let mut out = vec![];
+    let third = plan.hedge.map(|_| ("sub-3", Role::Sub, "sim futures", true));
     for (aid, role, label, fut) in [("master", Role::Master, "master", false), ("sub-1", Role::Sub, "sim mm 1", false),
-                                    ("sub-2", Role::Sub, "sim mm 2", false), ("sub-3", Role::Sub, "sim futures", true)] {
+                                    ("sub-2", Role::Sub, "sim mm 2", false)].into_iter().chain(third) {
         let mut c = AccountCfg::new(aid, label, &format!("{aid}@sim.invalid"), role);
-        if fut {
-            c.markets.push(Venue::USDM);
+        c.exchange = plan.maker.exchange();
+        c.markets = vec![plan.maker];
+        if let (Some(perp), true) = (plan.hedge, fut) {
+            c.markets.push(perp);
         }
         let a = Account::new(c, None, "");
         for f in a.feeds.iter().chain([&a.rest_feed]) {
@@ -73,10 +114,11 @@ fn qty(price: f64) -> f64 {
 }
 
 pub struct Sim {
+    plan: Plan,
     accounts: Vec<AccountRef>,
     by_id: HashMap<String, AccountRef>,
     makers: [AccountRef; 2],
-    fut: AccountRef,
+    fut: Option<AccountRef>,
     market: MarketRef,
     transfers: TransfersRef,
     on_fill: OnFill,
@@ -91,12 +133,13 @@ pub struct Sim {
 }
 
 impl Sim {
-    pub fn new(desk: &Desk) -> Self {
+    pub fn new(desk: &Desk, plan: Plan) -> Self {
         let by_id: HashMap<String, AccountRef> = desk.accounts.iter().map(|a| (a.borrow().id.clone(), a.clone())).collect();
         Sim {
+            plan,
             accounts: desk.accounts.clone(),
             makers: [by_id["sub-1"].clone(), by_id["sub-2"].clone()],
-            fut: by_id["sub-3"].clone(),
+            fut: by_id.get("sub-3").cloned(),
             by_id,
             market: desk.market.clone(),
             transfers: desk.transfers.clone(),
@@ -117,17 +160,24 @@ impl Sim {
         for a in &self.accounts {
             let mut a = a.borrow_mut();
             let s = start(&a.id);
-            a.set_balances([("USDT", s, 0.0)], true);
+            let on_perps = !self.plan.maker.is_spot() && a.id != "master";
+            a.set_balances([(self.plan.quote, if on_perps { 0.0 } else { s }, 0.0)], true);
             (a.spot_loaded, a.fut_loaded) = (true, true);
-            (a.orders_10s_limit, a.orders_1d_limit) = (100, 200_000);
-            a.set_fee(Venue::SPOT, "*", SPOT_MAKER, SPOT_TAKER, CLOCK.now());
+            if self.plan.maker.is_spot() {
+                (a.orders_10s_limit, a.orders_1d_limit) = (100, 200_000);
+                a.set_fee(self.plan.maker, "*", SPOT_MAKER, SPOT_TAKER, CLOCK.now());
+            } else {
+                // one margin account: what the others keep in a spot wallet is its margin
+                (a.fut_wallet, a.fut_available) = (if on_perps { s } else { 0.0 }, if on_perps { s } else { 0.0 });
+                a.set_fee(self.plan.maker, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
+            }
         }
-        {
-            let mut f = self.fut.borrow_mut();
+        if let (Some(f), Some(perp)) = (&self.fut, self.plan.hedge) {
+            let mut f = f.borrow_mut();
             (f.fut_wallet, f.fut_available) = (FUT_WALLET, FUT_WALLET);
-            f.set_fee(Venue::USDM, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
+            f.set_fee(perp, "*", FUT_MAKER, FUT_TAKER, CLOCK.now());
         }
-        self.by_id["sub-2"].borrow_mut().set_balances([("DOT", 0.5, 0.0)], false);   // a dust lot, discovered from the balance
+        self.by_id["sub-2"].borrow_mut().set_balances([(self.plan.dust.0, self.plan.dust.1, 0.0)], false);   // a dust lot, discovered from the balance
         let fills: Vec<FillRec> = desk.fills.borrow().fills.iter().filter(|f| f.id.starts_with("sim")).cloned().collect();
         for f in fills {
             self.seq += 1;
@@ -156,13 +206,13 @@ impl Sim {
         if f.venue.is_spot() {
             let base = {
                 let mut m = self.market.borrow_mut();
-                let i = m.ensure(&f.symbol, Venue::SPOT, None);
+                let i = m.ensure(&f.symbol, f.venue, None);
                 m.insts[i].base.clone()
             };
             let mut a = a.borrow_mut();
             let (q, _) = a.balances.get(&base).copied().unwrap_or((0.0, 0.0));
-            let (u, _) = a.balances.get("USDT").copied().unwrap_or((0.0, 0.0));
-            a.set_balances([(base.as_str(), (q + sgn * f.qty).max(0.0), 0.0), ("USDT", u - sgn * f.notional() - f.fee, 0.0)], false);
+            let (u, _) = a.balances.get(self.plan.quote).copied().unwrap_or((0.0, 0.0));
+            a.set_balances([(base.as_str(), (q + sgn * f.qty).max(0.0), 0.0), (self.plan.quote, u - sgn * f.notional() - f.fee, 0.0)], false);
         } else {
             let mut a = a.borrow_mut();
             let (amt, mut entry) = a.positions.get(&f.symbol).copied().unwrap_or((0.0, 0.0));
@@ -194,7 +244,7 @@ impl Sim {
         let mut f = FillRec::new(format!("sim:{id}:{venue}:{symbol}:{}:{}", CLOCK.now(), self.seq), t.unwrap_or_else(|| CLOCK.now()),
                                  id, symbol, venue, side, price, q);
         f.fee = price * q * fee_rate;
-        f.fee_asset = "USDT".into();
+        f.fee_asset = self.plan.quote.into();
         f.maker = maker;
         self.book(a, &f);
         (self.on_fill)(f);
@@ -202,10 +252,11 @@ impl Sim {
 
     fn maker_step(&mut self, now: i64) {
         let cap = self.asset_cap_usd * 0.45;
-        for s in SYMBOLS {
+        let venue = self.plan.maker;
+        for &s in self.plan.symbols {
             let (fair, mid, ibid, iask, base, min_notional, t) = {
                 let m = self.market.borrow();
-                let Some(i) = m.find(s, Venue::SPOT) else { continue };
+                let Some(i) = m.find(s, venue) else { continue };
                 let inst = &m.insts[i];
                 (m.fair(i), inst.mid(), inst.bid, inst.ask, inst.base.clone(), inst.min_notional, inst.t)
             };
@@ -221,13 +272,18 @@ impl Sim {
                 }
                 let d = self.quote_bps[&k] / 1e4;
                 let (bid, ask) = (fair * (1.0 - d), fair * (1.0 + d));
-                Self::quotes(&a, s, bid, ask);
+                Self::quotes(&a, s, venue, bid, ask);
                 if now < self.cool.get(&k).copied().unwrap_or(0) {
                     continue;
                 }
-                let (held, usdt) = {
+                // spot is a balance that cannot go below zero, a perp a position either way
+                let (held, floor, cash) = {
                     let ab = a.borrow();
-                    (ab.balances.get(&base).map_or(0.0, |x| x.0), ab.balances.get("USDT").map_or(0.0, |x| x.0))
+                    if venue.is_spot() {
+                        (ab.balances.get(&base).map_or(0.0, |x| x.0), min_notional, ab.balances.get(self.plan.quote).map_or(0.0, |x| x.0))
+                    } else {
+                        (ab.positions.get(s).map_or(0.0, |x| x.0), -cap, ab.fut_available)
+                    }
                 };
                 let p = 0.004 + 0.03 * move_bps.abs().min(10.0);
                 let side = if iask <= bid || (move_bps < 0.0 && self.rng.random::<f64>() < p) {
@@ -239,11 +295,11 @@ impl Sim {
                 } else {
                     None
                 };
-                if side == Some(Side::Buy) && held * mid < cap && usdt > CLIP_USD * 2.0 {
-                    self.fill(&a, s, Venue::SPOT, t, Side::Buy, bid, qty(bid), true);
-                } else if side == Some(Side::Sell) && held * mid > min_notional {
+                if side == Some(Side::Buy) && held * mid < cap && cash > CLIP_USD * 2.0 {
+                    self.fill(&a, s, venue, t, Side::Buy, bid, qty(bid), true);
+                } else if side == Some(Side::Sell) && held * mid > floor {
                     let q = qty(ask);
-                    self.fill(&a, s, Venue::SPOT, t, Side::Sell, ask, if (held - q) * mid < min_notional { held } else { q }, true);
+                    self.fill(&a, s, venue, t, Side::Sell, ask, if venue.is_spot() && (held - q) * mid < min_notional { held } else { q }, true);
                 } else {
                     continue;
                 }
@@ -253,44 +309,51 @@ impl Sim {
         }
     }
 
-    fn quotes(a: &AccountRef, symbol: &str, bid: f64, ask: f64) {
+    fn quotes(a: &AccountRef, symbol: &str, venue: Venue, bid: f64, ask: f64) {
         let mut a = a.borrow_mut();
         let id = a.id.clone();
-        a.open.insert(format!("spot:{id}:{symbol}:b"), Open { symbol: symbol.into(), venue: Venue::SPOT, side: Side::Buy, price: bid, left: qty(bid) });
-        a.open.insert(format!("spot:{id}:{symbol}:a"), Open { symbol: symbol.into(), venue: Venue::SPOT, side: Side::Sell, price: ask, left: qty(ask) });
-        a.traded.insert(format!("spot:{symbol}"));
+        a.open.insert(format!("{venue}:{id}:{symbol}:b"), Open { symbol: symbol.into(), venue, side: Side::Buy, price: bid, left: qty(bid) });
+        a.open.insert(format!("{venue}:{id}:{symbol}:a"), Open { symbol: symbol.into(), venue, side: Side::Sell, price: ask, left: qty(ask) });
+        a.traded.insert(format!("{venue}:{symbol}"));
     }
 
     fn hedge_step(&mut self) {
         let ratio = self.target_ratio.filter(|r| *r != 0.0).unwrap_or(1.0);
-        for s in SYMBOLS {
-            let (base, fbid, fask, ft) = {
-                let m = self.market.borrow();
-                let (Some(sp), Some(fu)) = (m.find(s, Venue::SPOT), m.find(s, Venue::USDM)) else { continue };
-                let fu = &m.insts[fu];
-                if fu.mid().is_none() {
-                    continue;
+        if let (Some(fut), Some(perp)) = (self.fut.clone(), self.plan.hedge) {
+            for &s in self.plan.symbols {
+                let (base, fbid, fask, ft) = {
+                    let m = self.market.borrow();
+                    let (Some(sp), Some(fu)) = (m.find(s, self.plan.maker), m.find(s, perp)) else { continue };
+                    let fu = &m.insts[fu];
+                    if fu.mid().is_none() {
+                        continue;
+                    }
+                    (m.insts[sp].base.clone(), fu.bid, fu.ask, fu.t)
+                };
+                let held: f64 = self.makers.iter().map(|a| a.borrow().balances.get(&base).map_or(0.0, |x| x.0)).sum();
+                let amt = fut.borrow().positions.get(s).map_or(0.0, |x| x.0);
+                let gap = -ratio * held - amt;
+                if gap.abs() * (fbid + fask) / 2.0 > 40.0 {
+                    let side = if gap > 0.0 { Side::Buy } else { Side::Sell };
+                    self.fill(&fut, s, perp, ft, side, if side == Side::Buy { fask } else { fbid }, g4(gap.abs()), false);
                 }
-                (m.insts[sp].base.clone(), fu.bid, fu.ask, fu.t)
-            };
-            let held: f64 = self.makers.iter().map(|a| a.borrow().balances.get(&base).map_or(0.0, |x| x.0)).sum();
-            let amt = self.fut.borrow().positions.get(s).map_or(0.0, |x| x.0);
-            let gap = -ratio * held - amt;
-            if gap.abs() * (fbid + fask) / 2.0 > 40.0 {
-                let side = if gap > 0.0 { Side::Buy } else { Side::Sell };
-                let fut = self.fut.clone();
-                self.fill(&fut, s, Venue::USDM, ft, side, if side == Side::Buy { fask } else { fbid }, g4(gap.abs()), false);
             }
         }
         let m = self.market.borrow();
-        let mut f = self.fut.borrow_mut();
-        let pos = f.live_positions(&m);
-        let upnl: f64 = pos.iter().map(|p| p.upnl).sum();
-        let margin = pos.iter().map(|p| p.notional.abs()).sum::<f64>() * 0.1;
-        f.fut_available = f.fut_wallet + upnl - margin;
+        for a in self.accounts.iter().filter(|a| a.borrow().cfg.futures()) {
+            let mut f = a.borrow_mut();
+            let pos = f.live_positions(&m);
+            let upnl: f64 = pos.iter().map(|p| p.upnl).sum();
+            let margin = pos.iter().map(|p| p.notional.abs()).sum::<f64>() * 0.1;
+            f.fut_available = f.fut_wallet + upnl - margin;
+        }
     }
 
     fn orders_step(&mut self) {
+        // an exchange with no order windows has no counts to show
+        if !self.plan.maker.is_spot() {
+            return;
+        }
         for a in self.makers.clone() {
             if self.rng.random::<f64>() < 0.004 {
                 self.burst_until = now_ms() + 15_000;
@@ -321,7 +384,7 @@ impl Sim {
             if !transferred && now_ms() - t0 > 30_000 {
                 transferred = true;
                 let rec = Transfer { ts: CLOCK.now(), frm: "master@sim.invalid".into(), to: "sub-1@sim.invalid".into(),
-                                     asset: "USDT".into(), amount: 1000.0, usd: Some(1000.0) };
+                                     asset: self.plan.quote.into(), amount: 1000.0, usd: Some(1000.0) };
                 self.transfers.borrow_mut().add(&format!("sim-{}", rec.ts), rec.clone());
                 self.move_(&rec.frm, &rec.to, &rec.asset, rec.amount);
             }

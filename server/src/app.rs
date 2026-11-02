@@ -375,7 +375,7 @@ impl Desk {
     fn make_accounts(&mut self) {
         let mut accounts: Vec<AccountRef> = vec![];
         if self.cfg.simulate {
-            accounts = sim::accounts().into_iter().map(Account::shared).collect();
+            accounts = sim::accounts(sim::Plan::of(&self.cfg.exchanges[0])).into_iter().map(Account::shared).collect();
         } else {
             let read = |ac: &C::AccountCfg| match self.exchanges.named(&ac.exchange) {
                 Some(c) => c.credentials(ac),
@@ -1124,7 +1124,7 @@ impl Desk {
                 let mut p = self.pnl.borrow_mut();
                 p.begin(&mut m, now);
                 let inv: f64 = p.pos.values().map(|x| x.q * m.px(x.inst).unwrap_or(0.0)).sum();
-                info!("P&L grid started: {} instruments, inventory {inv:.2} USDT", p.pos.len());
+                info!("P&L grid started: {} instruments, inventory {inv:.2} {}", p.pos.len(), self.cfg.currency);
             }
             return;
         }
@@ -1461,7 +1461,7 @@ async fn rebate_days(desk: DeskRef, keyed: Vec<AccountRef>) {
         if let Some(r) = d.day_real.get_mut(&day) {
             r.rebates = Some(sum);
             r.other = r.other.map(|o| o - sum);
-            info!("rebates of {day}: {sum:.2} USDT");
+            info!("rebates of {day}: {sum:.2} {}", d.cfg.currency);
         }
         d.put_day_real(ds);
     }
@@ -1478,12 +1478,9 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         None if !is_local(&cfg.listen) => anyhow::bail!("refusing to listen on a public address without DESK_PASSWORD_HASH"),
         None => None,
     };
+    let plan = sim::Plan::of(&cfg.exchanges[0]);
     if cfg.simulate {
-        cfg.markets.extend(sim::markets());
-        if cfg.target_ratio.is_none() {
-            cfg.target_ratio = Some(1.0);
-            cfg.band_usd = Some(cfg.band_usd.filter(|b| *b != 0.0).unwrap_or(250.0));
-        }
+        sim::set_up(&mut cfg, plan);
     }
     let mut sig = Box::pin(shutdown_signal());
     let http = crate::connector::client();
@@ -1511,7 +1508,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
     {
         let d = desk.borrow();
         if simulate {
-            let mut s = sim::Sim::new(&d);
+            let mut s = sim::Sim::new(&d, plan);
             s.setup(&d);
             tasks.push(tokio::task::spawn_local(s.run()));
         } else {
