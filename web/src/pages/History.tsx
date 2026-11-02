@@ -5,7 +5,7 @@
 // The instrument is in the URL (#/history/<SYMBOL>/<venue>), a day too (#/day/<date> zooms to it); range,
 // interval and mode are remembered on this browser. Each load is keyed by what it was asked for and drawn only
 // under that key, so switching any of them clears the chart at once and shows the new bars when they land.
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate, useStore } from "../store";
 import type { Venue } from "../protocol";
 import { Tabs, TextToggle, useExHidden, useExPref, useKlines, type ExView, type KInterval } from "../components/ex";
@@ -45,6 +45,10 @@ const INST_KEY = "ex.hist.inst";
 const HIDDEN0 = ["pi", "other", "stack"];
 /** Klines at most for an instrument's range (15m over All would be years of bars). */
 const MAX_KLINES = 10_000;
+/** Klines loaded behind the view, and per page further back: each 1000 is one request to the venue, kept by the
+ *  server once closed. Days and weeks hold every bar; 4h over two years, 1h over seven months, 15m over seven
+ *  weeks, the earlier ones a pan away. */
+const KLINE_EAGER = 5_000;
 
 function savedInst(): { symbol: string; venue: Venue } | null {
   try {
@@ -134,9 +138,31 @@ export function History() {
   const todayDay = dayStart == null ? null : todayOf(dayStart);
 
   // ---- instrument ----
-  const nBars = from == null || dayStart == null ? 0 : Math.min(MAX_KLINES, Math.ceil((dayStart + DAY - from) / IV_MS[iv]));
-  const kl = useKlines(inst && nBars ? inst.symbol : null, inst?.venue ?? "spot", iv as KInterval, { bars: nBars });
-  const fills = useInstFills(inst?.symbol ?? null, inst?.venue ?? "spot", inst ? from : null);
+  const barsFor = (start: number | null) => (start == null || dayStart == null ? 0 : Math.ceil((dayStart + DAY - start) / IV_MS[iv]));
+  const nBars = Math.min(MAX_KLINES, barsFor(from));
+  const kl = useKlines(inst && nBars ? inst.symbol : null, inst?.venue ?? "spot", iv as KInterval, {
+    bars: nBars,
+    // no further back than "All" reaches: there the coarse intervals have every bar long before this many
+    eager: Math.min(KLINE_EAGER, dayStart == null ? 0 : barsFor(rangeFrom("all", dayStart))),
+    page: KLINE_EAGER,
+  });
+  // our fills from the range's start, or from wherever the view has been panned back to: a busy instrument has too
+  // many to load for every bar the chart holds. The summary and the tables stay with the range.
+  const instKey = `${inst?.symbol}|${inst?.venue}|${from}`;
+  const [seen, setSeen] = useState<{ key: string; t: number } | null>(null);
+  const fillsFrom = from == null ? null : seen?.key === instKey ? Math.min(seen.t, from) : from;
+  const onViewStart = (t: number) => {
+    if (fillsFrom != null && t < fillsFrom) setSeen({ key: instKey, t: Math.floor(t / DAY) * DAY - 7 * DAY });
+  };
+  const allFills = useInstFills(inst?.symbol ?? null, inst?.venue ?? "spot", inst ? fillsFrom : null);
+  const fills = useMemo(() => {
+    const start = from ?? 0;
+    return { ...allFills, fills: allFills.fills.length && allFills.fills[0]!.t < start ? allFills.fills.filter((f) => f.t >= start) : allFills.fills };
+  }, [allFills.fills, allFills.complete, allFills.loading, from]);
+  const inRangeBars = useMemo(() => {
+    const start = from ?? 0;
+    return kl.bars.filter((b) => b.time + IV_MS[iv] > start);
+  }, [kl.bars, from, iv]);
   const instRow = inst ? symbols?.find((s) => s.symbol === inst.symbol && s.venue === inst.venue) : undefined;
   const avgCost = instRow?.avg_cost ?? null;
 
@@ -232,10 +258,14 @@ export function History() {
               key="inst"
               symbol={inst.symbol}
               bars={kl.bars}
-              fills={fills.fills}
+              fills={allFills.fills}
+              fillsFrom={fillsFrom ?? 0}
+              range={range}
+              rangeFrom={from ?? 0}
+              inRange={inRangeBars.length}
               interval={iv}
               avgCost={avgCost}
-              loading={kl.loading || nBars === 0}
+              loading={kl.loading || kl.pending || nBars === 0}
               error={kl.error}
               toolbarLeft={rangeToggle}
               intervals={ivOptions}
@@ -243,6 +273,8 @@ export function History() {
               view={view}
               hide={hide}
               onBarClick={onBar}
+              onNearStart={view ? undefined : kl.loadOlder}
+              onViewStart={onViewStart}
             />
           ) : (
             <DeskChart
@@ -271,7 +303,7 @@ export function History() {
       </section>
       <section className="panel hx-side">
         {inst ? (
-          <InstSide title={instTitle} fills={fills.fills} bars={kl.bars} loading={kl.loading || fills.loading} hide={hide} today={instRow} />
+          <InstSide title={instTitle} fills={fills.fills} bars={inRangeBars} loading={kl.loading || kl.pending || fills.loading} hide={hide} today={instRow} />
         ) : (
           <DeskSide
             rows={days}

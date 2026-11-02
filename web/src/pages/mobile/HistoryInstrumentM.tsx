@@ -37,7 +37,8 @@ const ALL = [...IVS, ...MORE].map((i) => i.value);
 const BARS = 1000;
 
 /** One instrument's market candles over a longer span, with our fills on them (per bar and side, one ring
- *  at our VWAP), and what was bought and sold in that span. */
+ *  at our VWAP), and what was bought and sold in that span. A thousand bars are one request to the venue; a pan
+ *  near the first bar loads a thousand more, and our fills on them. */
 export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: Venue }) {
   const [iv, setIv] = useExPref<string>("m-hinst", "interval", "1h", ALL);
   const kIv = (iv === "line" ? "15m" : iv) as KInterval;
@@ -94,6 +95,7 @@ export function HistoryInstrumentM({ symbol, venue }: { symbol: string; venue: V
           height={380}
           initialBars={80}
           resetKey={symbol + venue}
+          onNearStart={k.loadOlder}
           fullscreen
           markers={fillMarkers(byBar, "k")}
           priceLines={

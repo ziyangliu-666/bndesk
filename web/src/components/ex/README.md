@@ -93,7 +93,7 @@ instrument plot about 360 + 80 px, and fullscreen takes everything (use `fill` i
 
 ## Klines
 
-`useKlines(symbol, venue, interval, { bars = 500, stream = true })` returns `{ bars, loading, error, live }`:
+`useKlines(symbol, venue, interval, { bars = 500, eager, page = 1000, stream = true })` returns `{ bars, loading, error, live, pending, loadOlder }`:
 
 - History comes from `/api/klines`. In mock mode, `historyMock` generates bars around the instrument's mid.
 - `30m` and `1w` come from the server too. When an older server answers 400, they are built here from `15m`

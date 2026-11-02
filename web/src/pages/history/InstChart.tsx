@@ -1,9 +1,11 @@
 // An instrument's history on ExChart: Binance's klines, our fills on them (one small hollow ring per bar and side
 // at our VWAP, hidden while the bars are dense; counts and prices in the legend), the market's volume with
-// ours, and what we bought net over the range.
+// ours, and what we bought net since the range's start. The chart holds more bars than the range, which is the
+// view it opens on; before the fills loaded (`fillsFrom`) ours and the net are blank, not zero.
 import { useMemo, useRef, type ReactNode } from "react";
 import {
   ExChart,
+  INTERVAL_MS,
   fillMarkers,
   fillsByBar,
   fillsShort,
@@ -31,6 +33,10 @@ export function InstChart({
   symbol,
   bars,
   fills,
+  fillsFrom,
+  range,
+  rangeFrom,
+  inRange,
   interval,
   avgCost,
   loading,
@@ -41,10 +47,18 @@ export function InstChart({
   view,
   hide,
   onBarClick,
+  onNearStart,
+  onViewStart,
 }: {
   symbol: string;
   bars: Candle[];
   fills: HistFill[];
+  /** Our fills are loaded from this time on. */
+  fillsFrom: number;
+  /** The range the view opens on, its start, and the bars in it. */
+  range: string;
+  rangeFrom: number;
+  inRange: number;
   interval: HInterval;
   avgCost: number | null;
   loading: boolean;
@@ -57,6 +71,8 @@ export function InstChart({
   hide: boolean;
   /** A click on a bar. */
   onBarClick?: (t: number) => void;
+  onNearStart?: () => void;
+  onViewStart?: (t: number) => void;
 }) {
   const kIv = KI[interval];
   const byBar = useMemo(() => fillsByBar(fills, kIv), [fills, kIv]);
@@ -69,19 +85,28 @@ export function InstChart({
     const net: ExPoint[] = [];
     const po = prev.current.ours,
       pn = prev.current.net;
+    const step = INTERVAL_MS[kIv];
+    const known = (t: number) => t + step > fillsFrom;
+    // the net reads 0 where the range starts and goes on either side of it
     let run = 0;
+    for (const b of bars) {
+      if (b.time + step > rangeFrom) break;
+      const f = byBar.get(b.time);
+      if (f) run -= f.buyQty - f.sellQty;
+    }
     bars.forEach((b, i) => {
       const f = byBar.get(b.time);
-      const n = f ? f.buyQty * (f.buyVwap ?? 0) + f.sellQty * (f.sellVwap ?? 0) : 0;
+      const n = !known(b.time) ? null : f ? f.buyQty * (f.buyVwap ?? 0) + f.sellQty * (f.sellVwap ?? 0) : 0;
       if (f) run += f.buyQty - f.sellQty;
+      const v = known(b.time) ? run : null;
       const o = po[i],
         q = pn[i];
       ours.push(o && o.time === b.time && o.value === n ? o : { time: b.time, value: n, color: rgba(C.ink, 0.8) });
-      net.push(q && q.time === b.time && q.value === run ? q : { time: b.time, value: run });
+      net.push(q && q.time === b.time && q.value === v ? q : { time: b.time, value: v });
     });
     prev.current = { ours, net };
     return { ours, net };
-  }, [bars, byBar]);
+  }, [bars, byBar, fillsFrom, rangeFrom, kIv]);
 
   const series = useMemo<ExSeries[]>(
     () => [
@@ -133,11 +158,14 @@ export function InstChart({
       priceLines={priceLines}
       legendExtra={legendExtra}
       chips={chips}
-      initialBars={interval === "15m" ? 700 : undefined}
-      resetKey={symbol}
-      rightOffset={interval === "1d" || interval === "1w" ? 1 : undefined}
+      initialBars={Math.max(2, interval === "15m" ? Math.min(700, inRange) : inRange)}
+      resetKey={`${symbol}|${range}`}
+      rightOffset={1}
+      fixEdges
       view={view}
       onBarClick={onBarClick}
+      onNearStart={onNearStart}
+      onViewStart={onViewStart}
     />
   );
 }

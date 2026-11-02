@@ -14,7 +14,7 @@ Days, weeks or 15-minute bars of P&L for the whole desk, as daily bars, a cumula
 
 ![History](screenshots/history.webp)
 
-Switched to one instrument, it shows Binance's klines with our fills on them, our average cost and net quantity, and our fills by day.
+Switched to one instrument, it shows Binance's klines with our fills on them, our average cost and net quantity, and our fills by day. Here too a range is what the chart opens on: every bar at days and weeks, and at finer intervals more than the range, loading further back as you reach the first bar. Our fills follow the view back; the summary and the table stay with the range.
 
 ![An instrument with its fills](screenshots/history-instrument.webp)
 

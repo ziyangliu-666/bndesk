@@ -1,7 +1,7 @@
 // Klines for ExChart: history from the server's /api/klines (Binance's, proxied and cached; generated in mock
 // mode), and the forming candle kept live from Binance's public kline stream, falling back to the desk's own
 // mid for the instrument when the stream is not available.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, type Kline } from "../../api";
 import { serverNow, useStore } from "../../store";
 import type { Venue } from "../../protocol";
@@ -71,16 +71,48 @@ export interface KlinesState {
   error: string | null;
   /** What moves the forming candle: Binance's kline stream, the desk's own mid, or nothing yet. */
   live: KlineSource;
+  /** The bars asked for (`bars`) are not all in yet: what is there is about to be added to from the start. */
+  pending: boolean;
+  /** Ask for a page of bars before the first (no-op while one is loading, or when nothing older exists). */
+  loadOlder: () => void;
 }
 
 export interface KlinesOptions {
-  /** Bars of history to load. Default 500. */
+  /** Bars of history to load. Default 500. It can grow: the bars before those held are added, the rest stay. */
   bars?: number;
+  /** Bars to go on to behind the view once `bars` are in, each `page` at a time. Default: none. */
+  eager?: number;
+  /** Bars per `loadOlder` and per step of `eager`. Default 1000 (one Binance request). */
+  page?: number;
   /** Use Binance's public kline stream for the forming candle (never in mock mode). Default true. */
   stream?: boolean;
 }
 
 const MOCK = import.meta.env.VITE_MOCK === "1";
+/** Bars held at most for one chart, however far it is panned back. */
+const MAX_HELD = 150_000;
+const RETRY_MS = 15_000;
+
+interface KState {
+  key: string;
+  bars: Candle[];
+  error: string | null;
+  live: KlineSource;
+  /** Nothing older exists. */
+  start: boolean;
+}
+const NO_STATE: KState = { key: "", bars: [], error: null, live: null, start: false };
+
+async function loadBars(symbol: string, venue: Venue, interval: KInterval, from: number, to: number, signal?: AbortSignal): Promise<Candle[]> {
+  const load = (iv: KInterval) => getJSON<Kline[]>("/api/klines", { symbol, venue, interval: iv, from, to }, signal);
+  try {
+    return (await load(interval)).map(fromKline);
+  } catch (e) {
+    const base = DERIVED[interval];
+    if (!base || !(e instanceof Error) || !e.message.startsWith("400")) throw e;
+    return aggregate((await load(base)).map(fromKline), interval);
+  }
+}
 
 function streamUrl(symbol: string, venue: Venue, iv: KInterval): string {
   const s = `${symbol.toLowerCase()}@kline_${iv}`;
@@ -99,10 +131,44 @@ function streamUrl(symbol: string, venue: Venue, iv: KInterval): string {
 export function useKlines(symbol: string | null, venue: Venue, interval: KInterval, opts: KlinesOptions = {}): KlinesState {
   const n = opts.bars ?? 500;
   const useStream = (opts.stream ?? true) && !MOCK;
-  const key = symbol ? `${symbol}|${venue}|${interval}|${n}` : "";
-  const [st, setSt] = useState<{ key: string; bars: Candle[]; error: string | null; live: KlineSource }>({ key: "", bars: [], error: null, live: null });
-  const keyRef = useRef(key);
-  keyRef.current = key;
+  const eager = opts.eager ?? 0;
+  const page = opts.page ?? 1000;
+  const key = symbol ? `${symbol}|${venue}|${interval}` : "";
+  const [st, setSt] = useState<KState>(NO_STATE);
+  const [retry, setRetry] = useState(0);
+  const stRef = useRef(st);
+  stRef.current = st;
+  const busy = useRef("");
+  const nFirst = useRef(n);
+  nFirst.current = n;
+
+  // the bars before the first one held; none back means none exist (the market's start)
+  const fetchOlder = useCallback(
+    (bars: number) => {
+      const s = stRef.current;
+      if (!symbol || s.key !== key || !s.bars.length || s.start || busy.current === key || s.bars.length >= MAX_HELD) return;
+      busy.current = key;
+      const first = s.bars[0]!.time;
+      const from = Math.max(0, first - bars * INTERVAL_MS[interval]);
+      loadBars(symbol, venue, interval, from, first - 1)
+        .then((older) => {
+          setSt((c) => {
+            if (c.key !== key) return c;
+            const head = older.filter((b) => b.time < c.bars[0]!.time);
+            return { ...c, bars: head.concat(c.bars), start: !head.length || from === 0 };
+          });
+        })
+        .catch(() => {
+          // asked for again in a while (a rate limit passes), or by the next pan
+          setTimeout(() => setRetry((r) => r + 1), RETRY_MS);
+        })
+        .finally(() => {
+          if (busy.current === key) busy.current = "";
+        });
+    },
+    [symbol, venue, interval, key],
+  );
+  const loadOlder = useCallback(() => fetchOlder(page), [fetchOlder, page]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -124,25 +190,16 @@ export function useKlines(symbol: string | null, venue: Venue, interval: KInterv
 
     // ---- history ----
     const to = serverNow();
-    const from = to - n * step;
-    setSt({ key, bars: [], error: null, live: null });
-    const load = (iv: KInterval) => getJSON<Kline[]>("/api/klines", { symbol, venue, interval: iv, from, to }, ac.signal);
-    load(interval)
-      .then(
-        (ks) => ks.map(fromKline),
-        (e: unknown) => {
-          const base = DERIVED[interval];
-          if (!base || !(e instanceof Error) || !e.message.startsWith("400")) throw e;
-          return load(base).then((ks) => aggregate(ks.map(fromKline), interval));
-        },
-      )
+    const from = Math.max(0, to - nFirst.current * step);
+    setSt({ key, bars: [], error: null, live: null, start: false });
+    loadBars(symbol, venue, interval, from, to, ac.signal)
       .then((bars) => {
         if (done) return;
-        setSt({ key, bars, error: bars.length ? null : "No klines for this instrument", live: null });
+        setSt({ key, bars, error: bars.length ? null : "No klines for this instrument", live: null, start: from === 0 });
       })
       .catch((e: unknown) => {
         if (done) return;
-        setSt({ key, bars: [], error: e instanceof Error ? e.message : String(e), live: null });
+        setSt({ key, bars: [], error: e instanceof Error ? e.message : String(e), live: null, start: false });
       });
 
     // ---- the forming candle: Binance's stream ----
@@ -218,14 +275,26 @@ export function useKlines(symbol: string | null, venue: Venue, interval: KInterv
         ws.close();
       }
     };
-  }, [key, symbol, venue, interval, n, useStream]);
+  }, [key, symbol, venue, interval, useStream]);
 
   const mine = st.key === key;
+  const held = mine ? st.bars.length : 0;
+  const firstT = mine ? (st.bars[0]?.time ?? null) : null;
+  const short = (bars: number) => firstT != null && !st.start && firstT > serverNow() - bars * INTERVAL_MS[interval] + 2 * INTERVAL_MS[interval];
+  const pending = short(n);
+  // the bars asked for, then on up to `eager`, a page at a time so a chart gets them while the view stays
+  const more = pending ? n - held : short(eager) ? Math.min(page, eager - held) : 0;
+  useEffect(() => {
+    if (more > 0) fetchOlder(Math.max(more, 1));
+  }, [more, firstT, retry, fetchOlder]);
+
   return {
     bars: mine ? st.bars : EMPTY,
     loading: !!symbol && (!mine || (!st.bars.length && !st.error)),
     error: mine ? st.error : null,
     live: mine ? st.live : null,
+    pending,
+    loadOlder,
   };
 }
 

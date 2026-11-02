@@ -244,6 +244,8 @@ export interface ExChartProps {
   dividers?: readonly number[];
   /** Called when the view comes within a few dozen bars of the first one (load older data). */
   onNearStart?: () => void;
+  /** Called as the user moves the view with the time of its first bar, ms (load what goes with those bars). */
+  onViewStart?: (t: number) => void;
   /** Controlled hidden keys (else per-id in the store). */
   hidden?: string[];
   onToggle?: (key: string) => void;
@@ -559,6 +561,10 @@ export function ExChart(p: ExChartProps) {
       setAway(cbs.current.view ? moved.current : ts.scrollPosition() < -2);
       if (r) setDense(ts.width() / Math.max(1, r.to - r.from) < 5);
       if (r && r.from < 40 && moved.current) cbs.current.onNearStart?.();
+      if (moved.current && cbs.current.onViewStart) {
+        const t = ts.getVisibleRange()?.from;
+        if (t != null) cbs.current.onViewStart((t as number) * 1000);
+      }
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
     const measure = () => {

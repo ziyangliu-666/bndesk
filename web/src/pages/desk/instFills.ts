@@ -102,7 +102,7 @@ function schedule(e: Entry) {
   e.timer = null;
   if (!e.subs.size) return;
   // a long range is more than one round of pages: the next round at once until the held fills reach now
-  const behind = e.to > e.from && serverNow() - e.to > BEHIND_MS;
+  const behind = (e.to > e.from && serverNow() - e.to > BEHIND_MS) || e.want < e.from;
   e.timer = setTimeout(
     async () => {
       if (document.visibilityState !== "hidden") await pull(e);
