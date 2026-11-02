@@ -19,7 +19,8 @@
 //! there (their Day PnL, equity, inventory and futures notional are the live desk's). The hour blocks from
 //! `--from`'s hour on are booked again. Per-account rows are not (only today's are drawn). One transaction,
 //! a kv record `repair:day-rows:<day>` of what changed; the desk reads the rows on its next start. `--hedge`
-//! also takes the kept day's hedge from the recompute, for a day the desk counted its legs wrongly.
+//! is for a day the desk counted its legs wrongly: of the live rows and the kept day it writes the hedge alone,
+//! and the kept day's Other that follows; the rest stays what the desk had live.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -654,20 +655,27 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     {
         let e = d.at(ds + DAY - 1);
         let num = |j: &Value, k: &str| j.get(k).and_then(Value::as_f64);
-        let kept_hedge = num(&j, "hedge");
-        let (pnl_day, h, reb) = (num(&j, "pnl_day").unwrap_or(0.0), kept_hedge.filter(|_| !hedge).unwrap_or(e.hedge), num(&j, "rebates").unwrap_or(e.rebates));
-        let hedge = h;
-        eprintln!("kept {day}: trading {} -> {:.2}, mm {} -> {:.2}, other {} -> {:.2} (Day PnL {pnl_day:.2}, hedge {hedge:.2}, rebates {reb:.2}; \
-                   recomputed hedge {:.2}, rebates {:.2})", f2(num(&j, "trading")), e.trading, f2(num(&j, "mm")), e.mm, f2(num(&j, "other")),
-                  pnl_day - e.trading - hedge - reb, e.hedge, e.rebates);
-        j["trading"] = serde_json::json!(e.trading);
-        j["realized"] = serde_json::json!(e.realized);
-        j["realized_old"] = serde_json::json!(e.realized_old);
-        j["floating"] = serde_json::json!(e.floating);
-        j["mm"] = serde_json::json!(e.mm);
-        j["inventory"] = serde_json::json!(e.trading - e.mm);
-        j["hedge"] = serde_json::json!(hedge);
-        j["other"] = serde_json::json!(pnl_day - e.trading - hedge - reb);
+        let (pnl_day, reb) = (num(&j, "pnl_day").unwrap_or(0.0), num(&j, "rebates").unwrap_or(e.rebates));
+        if hedge {
+            let trading = num(&j, "trading").unwrap_or(e.trading);
+            let other = pnl_day - trading - e.hedge - reb;
+            eprintln!("kept {day}: hedge {} -> {:.2}, other {} -> {other:.2} (Day PnL {pnl_day:.2}, trading {trading:.2}, rebates {reb:.2})",
+                      f2(num(&j, "hedge")), e.hedge, f2(num(&j, "other")));
+            j["hedge"] = serde_json::json!(e.hedge);
+            j["other"] = serde_json::json!(other);
+        } else {
+            let h = num(&j, "hedge").unwrap_or(e.hedge);
+            eprintln!("kept {day}: trading {} -> {:.2}, mm {} -> {:.2}, other {} -> {:.2} (Day PnL {pnl_day:.2}, hedge {h:.2}, rebates {reb:.2}; \
+                       recomputed hedge {:.2}, rebates {:.2})", f2(num(&j, "trading")), e.trading, f2(num(&j, "mm")), e.mm, f2(num(&j, "other")),
+                      pnl_day - e.trading - h - reb, e.hedge, e.rebates);
+            j["trading"] = serde_json::json!(e.trading);
+            j["realized"] = serde_json::json!(e.realized);
+            j["realized_old"] = serde_json::json!(e.realized_old);
+            j["floating"] = serde_json::json!(e.floating);
+            j["mm"] = serde_json::json!(e.mm);
+            j["inventory"] = serde_json::json!(e.trading - e.mm);
+            j["other"] = serde_json::json!(pnl_day - e.trading - h - reb);
+        }
         new_kept = Some(j.to_string());
     }
     let new = rows.iter().filter(|r| !old.contains_key(&r.t)).count();
@@ -678,7 +686,10 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     }
     let mut c = c;
     let tx = c.transaction()?;
-    for r in &rows {
+    for r in rows.iter().filter(|_| hedge) {
+        tx.execute("UPDATE equity SET hedge = ? WHERE t = ? AND account = '*'", params![r.hedge, r.t])?;
+    }
+    for r in rows.iter().filter(|_| !hedge) {
         tx.execute(
             "INSERT INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, realized, \
              floating, hedge, mm, rebates) VALUES (?, '*', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(t, account) DO UPDATE SET \
@@ -687,7 +698,7 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
             params![r.t, r.equity, r.pnl_day, r.inventory, r.futures, r.trading, r.hedged, r.realized, r.floating, r.hedge, r.mm, r.rebates],
         )?;
     }
-    for (t, b) in d.book.hours.range(from_hour..ds + DAY) {
+    for (t, b) in d.book.hours.range(from_hour..ds + DAY).filter(|_| !hedge) {
         tx.execute(
             "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
