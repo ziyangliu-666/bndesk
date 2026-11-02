@@ -404,7 +404,8 @@ pub async fn run(cfg: &Config, day: &str, from: &str, to: &str, hedge: bool, dry
     let ds = day_start_of(day, cfg.day_start_min)?;
     let (from, to) = (hhmm(ds, from)?, hhmm(ds, to)?);
     let now = crate::clock::now_ms();
-    anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min), "{day} is not over yet");
+    // the hedge of rows already written can be set right on a day still running: its span is over, and no kept day is touched
+    anyhow::ensure!(ds + DAY <= crate::sessions::day_start(now, cfg.day_start_min) || (hedge && to <= now), "{day} is not over yet");
     let public = Exchanges::open_once(&cfg.exchanges)?;
     for c in public.iter() {
         c.sync_clock().await.context("time sync")?;
