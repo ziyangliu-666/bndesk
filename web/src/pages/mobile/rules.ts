@@ -32,7 +32,7 @@ export const RULES: Record<string, { name: string; means: string }> = {
   },
   rest_ban: {
     name: "Rate limit",
-    means: "Binance answered 418 or 429 (rate limit or ban), or an engine entered rate-limit cooldowns. During a ban REST requests are paused.",
+    means: "The exchange answered 418 or 429 (rate limit or ban), or an engine entered rate-limit cooldowns. During a ban REST requests are paused.",
   },
   fee_change: {
     name: "Fee change",

@@ -81,6 +81,7 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
             </div>
             {/* what can run out, a row each: label, how near the limit (the bar), the figure */}
             <div className="ops-limit-rows fig">
+              {!a.no_order_limits && <>
               <span className="ops-l" title={`Orders placed in the last 10 s, of Binance's ${int(l10)}.${streamNote(a)}`}>Orders 10 s</span>
               <LimitBar value={a.orders_10s} limit={l10} />
               <span className={limitTone(r10)}>
@@ -91,6 +92,7 @@ function RateLimits({ accounts, orders }: { accounts: Account[]; orders: OpenOrd
               </span>
               <LimitBar value={a.orders_1d} limit={a.orders_1d_limit} />
               <span className={limitTone(r1d)}>{a.orders_1d_limit ? pct(r1d) : "--"}</span>
+              </>}
               <span className="ops-l" title="Resting bid notional / (free quote + resting bid notional)">
                 Bid use
               </span>

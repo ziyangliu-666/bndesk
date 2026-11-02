@@ -237,8 +237,10 @@ const OrderRow = memo(
 );
 
 /** Each trading account's order rate: 10 s as `17 / 100`, the day as a share of the daily limit. */
-function Rates({ accounts }: { accounts: Account[] }) {
-  if (!accounts.length) return <Empty>No account is trading</Empty>;
+function Rates({ accounts: all }: { accounts: Account[] }) {
+  // an exchange with no such windows has no meters to show
+  const accounts = all.filter((a) => !a.no_order_limits);
+  if (!accounts.length) return <Empty>{all.length ? "No order limits on this exchange" : "No account is trading"}</Empty>;
   const lim1d = accounts.find((a) => a.orders_1d_limit > 0)?.orders_1d_limit;
   const stream = accounts.some((a) => a.orders_source === "stream")
     ? "\n\nCounted from the user stream (the key cannot read Binance's own count): orders Binance rejected are not in it."
