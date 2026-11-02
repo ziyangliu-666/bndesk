@@ -115,6 +115,98 @@ impl Serialize for Venue {
     }
 }
 
+/// What an instrument is for: what is traded makes Trading PnL, market making and inventory; what hedges makes Hedge.
+/// Not the same question as which kind of market it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstRole {
+    Traded,
+    Hedge,
+}
+
+impl std::str::FromStr for InstRole {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "traded" => Ok(InstRole::Traded),
+            "hedge" => Ok(InstRole::Hedge),
+            _ => Err(format!("bad role {s:?}: traded or hedge")),
+        }
+    }
+}
+
+/// Each instrument's role: its own if it has one (`[[markets]] role`, `[exposure] hedge_symbols`), else its market's
+/// (`[roles]`), else what its market's kind has always meant: spot is traded and a perp hedges. A desk that sets
+/// nothing has an empty table. A spot balance cannot be split between two pairs, so on spot a role is its base asset's.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Roles {
+    markets: [Option<InstRole>; Venue::COUNT],
+    insts: [std::collections::HashMap<String, InstRole>; Venue::COUNT],
+}
+
+/// BTCUSDT -> BTC: what a role on spot is kept under.
+fn spot_base(symbol: &str) -> &str {
+    crate::market::STABLES.iter().find_map(|q| symbol.strip_suffix(q)).unwrap_or(symbol)
+}
+
+impl Roles {
+    pub fn set_market(&mut self, venue: Venue, role: InstRole) {
+        self.markets[venue.index()] = Some(role);
+    }
+
+    /// Returns the role the instrument had of its own.
+    pub fn set(&mut self, symbol: &str, venue: Venue, role: InstRole) -> Option<InstRole> {
+        let k = if venue.is_spot() { spot_base(symbol) } else { symbol };
+        self.insts[venue.index()].insert(k.to_string(), role)
+    }
+
+    /// The instrument's role, with no allocation: it is asked once per fill per tick.
+    pub fn of(&self, symbol: &str, venue: Venue) -> InstRole {
+        let k = if venue.is_spot() { spot_base(symbol) } else { symbol };
+        self.insts[venue.index()].get(k).copied().unwrap_or_else(|| self.market(venue))
+    }
+
+    /// The role of the instruments of a market that have none of their own.
+    pub fn market(&self, venue: Venue) -> InstRole {
+        self.markets[venue.index()].unwrap_or(if venue.is_spot() { InstRole::Traded } else { InstRole::Hedge })
+    }
+
+    pub fn traded(&self, symbol: &str, venue: Venue) -> bool {
+        self.of(symbol, venue) == InstRole::Traded
+    }
+
+    /// The role of a spot asset's balance.
+    pub fn asset(&self, asset: &str) -> InstRole {
+        self.insts[Venue::SPOT.index()].get(asset).copied().unwrap_or_else(|| self.market(Venue::SPOT))
+    }
+
+    /// The P&L book keeps a position for it: all of spot (a balance is there whatever it is for), and a traded perp. A
+    /// perp that hedges is a leg (`Account::fut_leg`).
+    pub fn booked(&self, symbol: &str, venue: Venue) -> bool {
+        venue.is_spot() || self.traded(symbol, venue)
+    }
+
+    /// Any instrument, or a market's default, is a hedge on these markets.
+    pub fn any_hedge(&self, venues: &[Venue]) -> bool {
+        venues.iter().any(|v| self.market(*v) == InstRole::Hedge) || self.insts.iter().any(|m| m.values().any(|r| *r == InstRole::Hedge))
+    }
+}
+
+/// On the wire: `{"markets": {"usdm": "traded"}, "instruments": {"usdm:BTCUSDT": "hedge", "spot:BTC": "hedge"}}`.
+impl Serialize for Roles {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let markets: std::collections::BTreeMap<&str, InstRole> =
+            Venue::all().filter_map(|v| self.markets[v.index()].map(|r| (v.as_str(), r))).collect();
+        let instruments: std::collections::BTreeMap<String, InstRole> =
+            Venue::all().flat_map(|v| self.insts[v.index()].iter().map(move |(k, r)| (format!("{v}:{k}"), *r))).collect();
+        let mut st = s.serialize_struct("Roles", 2)?;
+        st.serialize_field("markets", &markets)?;
+        st.serialize_field("instruments", &instruments)?;
+        st.end()
+    }
+}
+
 /// Markout horizons "1", "10", "60", "300" (fills::HK), serialized as an object in that order.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Marks(pub [Option<f64>; 4]);

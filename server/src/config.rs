@@ -7,7 +7,7 @@ use toml::{Table, Value};
 
 use crate::beta::BetaCfg;
 use crate::market::{QUOTE, is_stable};
-use crate::protocol::{Role, Venue};
+use crate::protocol::{InstRole, Role, Roles, Venue};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ref {
@@ -22,11 +22,12 @@ pub struct MarketCfg {
     pub reference: Option<Ref>,
     pub beta: f64,
     pub beta_prior: Option<f64>,   // overrides [exposure] beta_prior for this market
+    pub role: Option<InstRole>,    // overrides [roles] for this instrument
 }
 
 impl MarketCfg {
     pub fn new(symbol: impl Into<String>, venue: Venue) -> Self {
-        MarketCfg { symbol: symbol.into(), venue, reference: None, beta: 1.0, beta_prior: None }
+        MarketCfg { symbol: symbol.into(), venue, reference: None, beta: 1.0, beta_prior: None, role: None }
     }
 }
 
@@ -203,6 +204,8 @@ pub struct Config {
     pub max_notional: Option<f64>,   // the target clamped to ±this
     pub hedge_pauses: Vec<PauseCfg>,
     pub hedge_symbols: Vec<String>,
+    /// What each instrument is for, from `[roles]`, `[[markets]] role` and `hedge_symbols`.
+    pub roles: Roles,
     pub markets_only: bool,
     pub beta: Option<BetaCfg>,
     pub beta_vs: Option<String>,   // instrument key the factor hedge is measured on (beta_vs, else first hedge symbol)
@@ -239,6 +242,7 @@ impl Config {
             max_notional: None,
             hedge_pauses: vec![],
             hedge_symbols: vec![],
+            roles: Roles::default(),
             markets_only: false,
             beta: None,
             beta_vs: None,
@@ -415,6 +419,32 @@ fn account(d: &Table, role: Role, default_id: &str) -> Result<AccountCfg> {
     })
 }
 
+/// `[roles]`, then `[[markets]] role`, then `hedge_symbols`: a perp named there hedges whatever its market's default.
+fn roles(t: &Table, markets: &[MarketCfg], hedge_symbols: &[String]) -> Result<Roles> {
+    let mut out = Roles::default();
+    for (k, v) in t {
+        let venue: Venue = k.parse().map_err(|e: String| anyhow!("[roles] {e}"))?;
+        let role = v.as_str().ok_or_else(|| anyhow!("[roles] {k}: expected \"traded\" or \"hedge\""))?;
+        out.set_market(venue, role.parse().map_err(|e: String| anyhow!("[roles] {k}: {e}"))?);
+    }
+    for m in markets {
+        if let Some(role) = m.role
+            && out.set(&m.symbol, m.venue, role).is_some_and(|r| r != role)
+        {
+            bail!("[[markets]] {}: two roles on {}{}", m.symbol, m.venue, if m.venue.is_spot() { ": a spot balance has one, whichever pair it trades on" } else { "" });
+        }
+    }
+    for sym in hedge_symbols {
+        for venue in Venue::all().filter(|v| !v.is_spot()) {
+            if markets.iter().any(|m| m.symbol == *sym && m.venue == venue && m.role == Some(InstRole::Traded)) {
+                bail!("[[markets]] {sym}: role = \"traded\", and [exposure] hedge_symbols names it");
+            }
+            out.set(sym, venue, InstRole::Hedge);
+        }
+    }
+    Ok(out)
+}
+
 /// beta_vs, else the first hedge symbol (empty strings count as unset).
 fn vs_symbol(exp: &Table) -> Result<Option<String>> {
     if let Some(v) = opt_s(exp, "beta_vs")?.filter(|v| !v.is_empty()) {
@@ -516,8 +546,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
             reference,
             beta: f(m, "beta", 1.0)?,
             beta_prior: opt_f(m, "beta_prior")?,
+            role: opt_s(m, "role")?.map(|r| r.parse().map_err(|e: String| anyhow!("[[markets]] {symbol}: {e}"))).transpose()?,
         });
     }
+    let hedge_symbols: Vec<String> = array(exp, "hedge_symbols")?
+        .iter()
+        .map(|h| h.as_str().map(str::to_uppercase).ok_or_else(|| anyhow!("hedge_symbols: expected strings")))
+        .collect::<Result<_>>()?;
+    let roles = roles(table(&raw, "roles")?, &markets, &hedge_symbols)?;
     let mut beta = beta(exp)?;
     if let Some(b) = beta.as_mut() {
         b.priors = markets
@@ -576,10 +612,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config> {
         band_frac: f(exp, "band_frac", 0.0)?,
         max_notional: opt_f(exp, "max_notional")?.filter(|x| *x > 0.0),
         hedge_pauses: array(exp, "pauses")?.iter().map(|w| typed(w, "exposure.pauses")).collect::<Result<_>>()?,
-        hedge_symbols: array(exp, "hedge_symbols")?
-            .iter()
-            .map(|h| h.as_str().map(str::to_uppercase).ok_or_else(|| anyhow!("hedge_symbols: expected strings")))
-            .collect::<Result<_>>()?,
+        hedge_symbols,
+        roles,
         markets_only: b(exp, "markets_only", false)?,
         beta,
         beta_vs: beta_vs(exp)?,
@@ -709,7 +743,9 @@ mod tests {
             reference: Some(Ref { symbol: "ETHUSDT".into(), venue: Venue::USDM }),
             beta: 1.0,
             beta_prior: None,
+            role: None,
         });
+        assert_eq!(c.roles, Roles::default());
         assert_eq!(c.alerts, AlertCfg::default());
         assert_eq!(c.accounts.len(), 2);
         assert!(c.accounts[0].futures() && !c.accounts[1].futures());
@@ -719,6 +755,59 @@ mod tests {
         assert_eq!(c.master.as_ref().unwrap().private_key_env, "DESK_MASTER_PRIVATE_KEY");
         assert_eq!(c.fee_expiry, None);
         assert_eq!((c.currency.as_str(), c.market_making), ("USDT", true));
+    }
+
+    #[test]
+    fn an_instruments_role_is_its_own_then_its_markets_then_its_kinds() {
+        let one = |body: &str| {
+            let dir = tempfile_dir("roles");
+            let p = dir.join("desk.toml");
+            std::fs::write(&p, body).unwrap();
+            load(&p)
+        };
+        use crate::protocol::InstRole::{Hedge, Traded};
+        // nothing set: spot is traded, a perp hedges
+        let r = one("").unwrap().roles;
+        assert_eq!(r, Roles::default());
+        assert_eq!((r.of("BTCUSDT", Venue::SPOT), r.of("BTCUSDT", Venue::USDM)), (Traded, Hedge));
+        // a desk that makes markets on perps and hedges with one of them and a spot asset
+        let c = one(r#"
+            [roles]
+            usdm = "traded"
+            [exposure]
+            hedge_symbols = ["BTCUSDT"]
+            [[markets]]
+            symbol = "ETHUSDT"
+            venue = "usdm"
+            role = "hedge"
+            [[markets]]
+            symbol = "SOLUSDT"
+            role = "hedge"
+        "#).unwrap();
+        let r = &c.roles;
+        assert_eq!(r.of("XRPUSDT", Venue::USDM), Traded);
+        assert_eq!(r.of("BTCUSDT", Venue::USDM), Hedge);
+        assert_eq!(r.of("ETHUSDT", Venue::USDM), Hedge);
+        assert_eq!(r.of("BTCUSDT", Venue::SPOT), Traded);
+        assert_eq!((r.of("SOLUSDT", Venue::SPOT), r.of("SOLUSDC", Venue::SPOT), r.asset("SOL")), (Hedge, Hedge, Hedge));
+        assert_eq!(serde_json::to_value(r).unwrap(), serde_json::json!({
+            "markets": {"usdm": "traded"},
+            "instruments": {"usdm:BTCUSDT": "hedge", "usdm:ETHUSDT": "hedge", "spot:SOL": "hedge"},
+        }));
+        // an alias names the market; hedge_symbols says what it always did for a desk with no [roles]
+        assert_eq!(one("[roles]\n\"binance:usdm\" = \"traded\"").unwrap().roles.market(Venue::USDM), Traded);
+        // what cannot be meant
+        for (body, want) in [
+            ("[roles]\nusdm = \"maker\"", "bad role"),
+            ("[roles]\nnope = \"traded\"", "bad Venue"),
+            ("[roles]\nusdm = 1", "expected"),
+            ("[[markets]]\nsymbol = \"AUSDT\"\nrole = \"x\"", "bad role"),
+            ("[[markets]]\nsymbol = \"AUSDT\"\nvenue = \"usdm\"\nrole = \"traded\"\n[exposure]\nhedge_symbols = [\"AUSDT\"]", "hedge_symbols"),
+            ("[[markets]]\nsymbol = \"AUSDT\"\nrole = \"traded\"\n[[markets]]\nsymbol = \"AUSDC\"\nrole = \"hedge\"", "two roles"),
+        ] {
+            let e = format!("{:#}", one(body).unwrap_err());
+            assert!(e.contains(want), "{body}: {e}");
+        }
     }
 
     #[test]
