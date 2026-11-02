@@ -43,6 +43,8 @@ export function periodWord(iv: HInterval): string {
 
 export function DeskChart({
   rows,
+  range,
+  inRange,
   interval,
   mode,
   hidden,
@@ -60,6 +62,9 @@ export function DeskChart({
   hide,
 }: {
   rows: Row[];
+  /** The range the view opens on, and the rows in it (the rest are there to scroll to). */
+  range: string;
+  inRange: number;
   interval: HInterval;
   mode: Mode;
   hidden: string[];
@@ -278,9 +283,10 @@ export function DeskChart({
       legendExtra={legendExtra}
       priceLines={zeroLine}
       chips={chips}
-      initialBars={interval === "15m" ? 700 : undefined}
-      resetKey={mode}
+      initialBars={Math.max(2, interval === "15m" ? Math.min(700, inRange) : inRange)}
+      resetKey={`${mode}|${range}`}
       rightOffset={1}
+      fixEdges
       view={view}
       legendTime={legendTime}
       markers={markers}

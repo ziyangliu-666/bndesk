@@ -27,6 +27,7 @@ import {
   dayRows,
   deskRows,
   rangeFrom,
+  rangeRows,
   todayOf,
   useDeskHistory,
   weekOf,
@@ -34,6 +35,7 @@ import {
   type HInterval,
   type Mode,
   type Range,
+  type RangeRows,
   type Row,
 } from "./history/data";
 import "./history/history.css";
@@ -104,16 +106,25 @@ export function History() {
   const from = dayStart == null ? null : rangeFrom(range, dayStart);
 
   // ---- desk ----
-  const desk = useDeskHistory(STEP_S[iv], inst ? null : from);
+  // the chart holds every bar the server keeps: a range is what it shows, and the summary and tables under it
+  const desk = useDeskHistory(STEP_S[iv], inst || dayStart == null ? null : rangeFrom("all", dayStart));
   const daily = useDeskHistory(86_400, inst ? null : from);
   const hours = useDeskHistory(3600, !inst && tab === "hour" ? dayStart : null);
   const prevRows = useRef<Row[] | null>(null);
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     if (dayStart == null || !desk.bars.length) return (prevRows.current = []);
     const r = iv === "1w" ? deskRows(weekBars(desk.bars), "week", dayStart, null) : deskRows(desk.bars, "day", dayStart, prevRows.current);
     prevRows.current = r;
     return r;
   }, [desk.bars, iv, dayStart]);
+  const prevRange = useRef<RangeRows | null>(null);
+  const { rows, inRange } = useMemo(() => {
+    // a week bar is in the range when the range starts inside its week
+    const start = from ?? 0;
+    const r = rangeRows(allRows, allRows.findIndex((x) => x.t + (iv === "1w" ? 7 * DAY : 0) > start), prevRange.current);
+    prevRange.current = r;
+    return r;
+  }, [allRows, from, iv]);
   const hourRows = useMemo(() => (dayStart == null ? [] : deskRows(hours.bars, "day", dayStart, null)), [hours.bars, dayStart]);
   // the days once both halves are in: the snapshot's kept days alone first would change the totals a moment later,
   // when the day bars bring the days before the kept ones
@@ -237,6 +248,8 @@ export function History() {
             <DeskChart
               key="desk"
               rows={rows}
+              range={range}
+              inRange={inRange}
               interval={iv}
               mode={mode}
               hidden={hidden}

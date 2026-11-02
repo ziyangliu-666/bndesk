@@ -375,6 +375,37 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
   return out;
 }
 
+/** Rows with their running figures measured from a range's start, and what made them: `prev` lends the rows
+ *  that came out the same, so a live tick changes only the last rows' identity. */
+export interface RangeRows {
+  rows: Row[];
+  /** Rows from the range's start on. */
+  inRange: number;
+  src: Row[];
+  base: Row | null;
+}
+
+/**
+ * The chart holds every bar and a range is what it shows, so running P&L and its split read 0 where the range
+ * starts and go on either side of it. `first`: the index of the range's first row.
+ */
+export function rangeRows(src: Row[], first: number, prev: RangeRows | null): RangeRows {
+  const i = first < 0 ? src.length : first;
+  const base = i > 0 ? src[i - 1]! : null;
+  if (!base) return { rows: src, inRange: src.length, src, base };
+  const same = prev?.base === base;
+  const rows = src.map((r, j) => {
+    if (same && prev.src[j] === r) return prev.rows[j]!;
+    const run = { ...r.run };
+    for (const k of PARTS) {
+      const v = r.run[k];
+      run[k] = v == null ? null : v - (base.run[k] ?? 0);
+    }
+    return { ...r, cum: r.cum - base.cum, run };
+  });
+  return { rows, inRange: src.length - i, src, base };
+}
+
 // ================================ day rows (tables, calendar, summary) ================================
 
 /**

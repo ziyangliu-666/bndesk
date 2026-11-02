@@ -10,7 +10,7 @@ The page you keep open, laid out like an exchange's trade page. Day P&L leads, w
 
 ## History
 
-Days, weeks or 15-minute bars of P&L for the whole desk, as daily bars, a cumulative line or candles, with volume, inventory and futures underneath. The right side has the range's total, its split, a calendar of the last five weeks and the best and worst days; the table splits each day the way the Desk splits today. A click on a day marks it and zooms to it.
+Days, weeks or 15-minute bars of P&L for the whole desk, as daily bars, a cumulative line or candles, with volume, inventory and futures underneath. The right side has the range's total, its split, a calendar of the last five weeks and the best and worst days; the table splits each day the way the Desk splits today. A range is what the chart opens on: every earlier bar is there to scroll to. A click on a day marks it and zooms to it.
 
 ![History](screenshots/history.webp)
 

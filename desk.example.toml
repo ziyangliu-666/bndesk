@@ -26,7 +26,7 @@ reference = { symbol = "ETHUSDT", venue = "usdm" }
 # band_usd = 200               # band = max(band_usd, band_frac x |target|)
 # band_frac = 0.25
 # max_notional = 5000          # target clamped to ±this
-# hedge_symbols = ["BTCUSDT"]
+# hedge_symbols = ["BTCUSDT"]  # the futures that count as the hedge (default: every futures position)
 # markets_only = true          # count only the configured markets' assets (not stray coins)
 # beta = "estimate"            # or "fixed" (the beta on each [[markets]] entry, default 1)
 # beta_vs = "BTCUSDT"          # usdm instrument the betas are measured against (default: first hedge symbol)

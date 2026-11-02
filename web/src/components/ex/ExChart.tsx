@@ -233,6 +233,8 @@ export interface ExChartProps {
   /** Bars of space right of the latest one. Default 3 on touch, 5 with a mouse (a few daily bars want less; a
    *  history of days wants 1). */
   rightOffset?: number;
+  /** The view stops at the first and the latest bar: no blank space on either side, however far it is zoomed out. */
+  fixEdges?: boolean;
   /** A change of this value resets the view (a new symbol). */
   resetKey?: string | number;
   /** The legend while nothing is hovered: each line's value at the latest bar (default), or the series' names
@@ -289,7 +291,7 @@ const formatSig = (s: ExSeries) => {
   }
 };
 
-function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: number): DeepPartial<ChartOptions> {
+function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: number, fixEdges?: boolean): DeepPartial<ChartOptions> {
   return {
     autoSize: true,
     layout: {
@@ -316,6 +318,8 @@ function chartOptions(touch: boolean, tz: TzMode, step: number, rightOffset?: nu
       secondsVisible: step < 60_000,
       rightOffset: rightOffset ?? (touch ? 3 : 5),
       minBarSpacing: 0.3,
+      fixLeftEdge: !!fixEdges,
+      fixRightEdge: !!fixEdges,
       tickMarkFormatter: (t: Time, kind: number) => tickLabel((t as number) * 1000, tz, kind),
     },
     localization: { timeFormatter: (t: Time) => barLabel((t as number) * 1000, tz, step, touch) },
@@ -511,7 +515,7 @@ export function ExChart(p: ExChartProps) {
   // ---- mount ----
   useLayoutEffect(() => {
     const el = host.current!;
-    const c = createChart(el, chartOptions(touch, tz, stepRef.current, p.rightOffset));
+    const c = createChart(el, chartOptions(touch, tz, stepRef.current, p.rightOffset, p.fixEdges));
     chart.current = c;
     cbs.current.chartRef?.(c);
     const fingerUp = { current: true }; // no finger on the screen
@@ -598,9 +602,9 @@ export function ExChart(p: ExChartProps) {
     if (!c) return;
     // only the labels: applying the time scale's spacing options again would undo a fit just made (the bar
     // spacing goes back to its default and the view scrolls to the end), as on a switch of interval
-    const o = chartOptions(touch, tz, step, p.rightOffset);
+    const o = chartOptions(touch, tz, step, p.rightOffset, p.fixEdges);
     c.applyOptions({ timeScale: { secondsVisible: o.timeScale!.secondsVisible, tickMarkFormatter: o.timeScale!.tickMarkFormatter }, localization: o.localization });
-  }, [tz, step, touch, p.rightOffset]);
+  }, [tz, step, touch, p.rightOffset, p.fixEdges]);
   // the right offset only when the prop changes: setting it scrolls to the live edge
   const offRef = useRef(p.rightOffset);
   useEffect(() => {
