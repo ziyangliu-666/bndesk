@@ -58,6 +58,9 @@ pub struct Market {
     /// An account's balances are read on this market, so an account has to be on it.
     #[serde(skip)]
     pub wallet: bool,
+    /// It limits an account's orders by windows of time, which the desk meters.
+    #[serde(skip)]
+    pub order_windows: bool,
     /// Its accounts are read with an address and no key.
     #[serde(skip)]
     pub keyless: bool,
@@ -68,10 +71,10 @@ pub struct Market {
 
 /// Every market of every connector. A market's place here is its `Venue`: new ones go at the end.
 pub static MARKETS: [Market; 4] = [
-    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, keyless: false, quote: "USDT" },
-    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, keyless: false, quote: "USDT" },
-    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, keyless: true, quote: "USDC" },
-    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, keyless: true, quote: "USDC" },
+    Market { id: "spot", exchange: "Binance", kind: MarketKind::Spot, name: "Spot", aliases: &["binance:spot"], second_bars: true, trade_history: true, wallet: true, order_windows: true, keyless: false, quote: "USDT" },
+    Market { id: "usdm", exchange: "Binance", kind: MarketKind::Perp, name: "USD-M", aliases: &["binance:usdm"], second_bars: false, trade_history: true, wallet: false, order_windows: true, keyless: false, quote: "USDT" },
+    Market { id: "hl", exchange: "Hyperliquid", kind: MarketKind::Perp, name: "HL", aliases: &["hyperliquid:perp"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC" },
+    Market { id: "hlspot", exchange: "Hyperliquid", kind: MarketKind::Spot, name: "HL Spot", aliases: &["hyperliquid:spot"], second_bars: false, trade_history: false, wallet: false, order_windows: false, keyless: true, quote: "USDC" },
 ];
 
 /// Which market something is on: an index into `MARKETS`, so a copy and a compare stay what they cost as an enum.
@@ -379,6 +382,9 @@ pub struct Account {
     /// Where the order counts come from: "binance" (/api/v3/rateLimit/order) or "stream" (counted from the user
     /// stream, without the orders Binance rejected).
     pub orders_source: String,
+    /// Its exchange has no order windows: no meters, rather than empty ones. Absent on a desk that has them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_order_limits: bool,
     pub open_orders: i64,
     pub bids_notional: f64,
     pub asks_notional: f64,

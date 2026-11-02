@@ -17,7 +17,7 @@ use super::rest::{Info, Reads, post_read, refusal};
 /// Candles a response carries at most.
 const PAGE: usize = 5000;
 const TICKER_S: i64 = 5;
-const RANGE_S: i64 = 60;
+const RANGE_S: i64 = 300;
 const DAY: i64 = 86_400_000;
 
 fn px(c: &Value, k: &str) -> Option<f64> {
@@ -102,8 +102,13 @@ impl KlineProxy {
 
     /// Every instrument's day figures: both lists, at most every few seconds whatever the number of pages asking.
     async fn refresh_ctxs(&self, now: i64) -> Result<(), KlineError> {
-        if now - self.cached.lock().expect("cache").ctxs.0 < TICKER_S * 1000 {
-            return Ok(());
+        {
+            // marked at once: pages asking meanwhile take what is there, and do not ask again
+            let mut c = self.cached.lock().expect("cache");
+            if now - c.ctxs.0 < TICKER_S * 1000 {
+                return Ok(());
+            }
+            c.ctxs.0 = now;
         }
         let perps = self.read(&json!({"type": "metaAndAssetCtxs"})).await?;
         let spots = self.read(&json!({"type": "spotMetaAndAssetCtxs"})).await?;
@@ -123,7 +128,7 @@ impl KlineProxy {
             }
         }
         drop(names);
-        self.cached.lock().expect("cache").ctxs = (now, by);
+        self.cached.lock().expect("cache").ctxs.1 = by;
         Ok(())
     }
 

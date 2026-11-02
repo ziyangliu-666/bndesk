@@ -491,6 +491,13 @@ fn a_desk_on_hyperliquid_alone_adds_up() {
     assert_relative_eq!(hedge, 0.0, epsilon = 1e-9);
     assert_relative_eq!(other, 0.0, epsilon = 1e-9);
     assert_eq!(d.accounts[0].borrow().transfers_day, 100.0);
+    // no order windows on this exchange: no meters. On Binance the field is not on the wire at all
+    let row = me::account_row(&mut d.m.borrow_mut(), &mut d.accounts[0].borrow_mut(), t(9));
+    assert!(row.no_order_limits);
+    assert_eq!(serde_json::to_value(&row).unwrap()["no_order_limits"], true);
+    let bn = Account::new(AccountCfg::new("b", "b", "", Role::Sub), None, "").shared();
+    let row = me::account_row(&mut d.m.borrow_mut(), &mut bn.borrow_mut(), t(9));
+    assert!(serde_json::to_value(&row).unwrap().get("no_order_limits").is_none());
     assert_eq!(d.fills.borrow().fills.iter().filter(|f| f.venue == Venue::HL).count(), 3);
 }
 

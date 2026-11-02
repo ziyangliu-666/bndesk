@@ -263,7 +263,9 @@ async fn user_stream(p: Rc<Passes>, transfers: TransfersRef, url: String) {
             Some("userNonFundingLedgerUpdates") => {
                 let mut t = transfers.borrow_mut();
                 let rows = m.get("data").and_then(|d| d.get("nonFundingLedgerUpdates")).and_then(Value::as_array);
-                for x in rows.into_iter().flatten() {
+                // its first message is a snapshot of the address's whole ledger: today's is what the desk keeps
+                let ds = p.acct.borrow().day_start;
+                for x in rows.into_iter().flatten().filter(|x| ds != 0 && x.get("time").and_then(Value::as_i64).is_some_and(|ts| ts >= ds)) {
                     if let Err(e) = add_transfer(&p, &mut t, x) {
                         tracing::warn!("hyperliquid ledger message: {e:#}");
                     }

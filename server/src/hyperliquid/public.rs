@@ -169,6 +169,8 @@ impl Streams {
             let subs = {
                 let mut c = c1.borrow_mut();
                 c.ws = Some(ws.handle());
+                let n = c.subs.len();
+                c.feed.borrow_mut().detail = format!("{n} streams");
                 c.subs.clone()
             };
             for s in subs {
