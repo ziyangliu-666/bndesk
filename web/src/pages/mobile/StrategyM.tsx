@@ -1,17 +1,20 @@
 import { useMemo } from "react";
 import { useStore } from "../../store";
-import { bps, compact, dur, hms, int, num, pct } from "../../format";
+import { bps, compact, dur, hm, hms, int, num, pct, type TzMode } from "../../format";
 import { useExPref } from "../../components/ex";
 import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
 import { ExposureChart, GapChart, HEDGE_SERIES, quoteRows } from "../Strategy";
 import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
-import { Empty, PageTabs, Row, Sec, Stats } from "./rest/ui";
-import "./history.css";
+import { HedgeBridge } from "../../components/HedgeBridge";
+import { useQty } from "../../mask";
+import { Amt, Empty, PageTabs, Row, Sec, Stats } from "./rest/ui";
+import "./strategy.css";
 
-// ---- Strategy: the engine's own figures (pushed every 15 s). Hedge: the state, the gap and exposure charts and
-// the rebalances; Quoting: capital and the instruments not quoting ----
+// ---- Strategy: the engine's own figures (pushed every 15 s). Hedge: the state, the gap and exposure charts, today's
+// inventory against the hedge with its legs and funding (the desk's own day), the rebalances; Quoting: capital and
+// the instruments not quoting ----
 
 type Tab = "hedge" | "quoting";
 
@@ -21,38 +24,45 @@ function useAge(latest: Latest | null) {
   return { now, age, stale: age == null || age > STALE_MS };
 }
 
+/** A day in the chosen zone, to date a time that is not today's. */
+const dayOf = (t: number, tz: TzMode) => (tz === "utc" ? new Date(t).toISOString().slice(0, 10) : new Date(t).toLocaleDateString("en-CA"));
+const when = (t: number, tz: TzMode, today: string) => {
+  const d = dayOf(t, tz);
+  return (d === today ? "" : d.slice(5) + " ") + hms(t, tz);
+};
+
 function HedgeM({ latest }: { latest: Latest }) {
   const hide = useHide();
   const tz = useStore((s) => s.tz);
   const m = useMetrics(latest);
-  const { age, stale } = useAge(latest);
+  const { now, age, stale } = useAge(latest);
   const { s } = useEngineSeries(HEDGE_SERIES, 2 * 86_400_000);
   const rebal = useMemo(() => rebalances(s), [s]);
+  // the hedge figures signed one way everywhere on the page: short is negative
   const a = (v: number | null) => (v == null ? "--" : maskText(hide, compact(v, 1, true)));
-  const target = mv(m, "target"),
-    pos = mv(m, "pos");
   const h = hedgeState(m, stale, age, dur);
   const trouble = engineTrouble(latest.payload);
   const [word, tone] = trouble && !stale ? [trouble, "crit-text"] : [h.word, h.tone];
-  const day = rebal.filter((r) => r.t >= Date.now() - 86_400_000);
+  const rows = useMemo(() => rebal.slice().reverse(), [rebal]);
+  const today = dayOf(now, tz);
   return (
     <>
-      <div className="h-sum">
-        <div className="h-sum-l">
-          <div className={"h-sum-v " + tone}>{word}</div>
-          {h.inBands != null && <div className="h-sum-note">{`Unhedged ${num(h.inBands, 2, true)} bands`}</div>}
-        </div>
+      <div className="st-m-state">
+        <span className={"st-m-word " + tone}>{word}</span>
+        {h.gap != null && h.band != null && (
+          <span className="st-m-sub r-fig">{`gap ${a(h.gap)} of ${maskText(hide, "±" + num(h.band, 0))}`}</span>
+        )}
       </div>
       <Stats
-        cols={3}
+        cols={4}
+        className="st-m-figs"
         items={[
-          { label: "Unhedged", value: a(h.unhedged) },
-          { label: "Band", value: h.band == null ? "--" : maskText(hide, "±" + compact(h.band)) },
-          { label: "Beta", value: mv(m, "beta") == null ? "--" : num(mv(m, "beta"), 2) },
-          { label: "Target", value: a(target) },
-          { label: "Position", value: a(pos) },
+          { label: "Target", value: a(mv(m, "target")) },
+          { label: "Position", value: a(mv(m, "pos")) },
           { label: "Beta-weighted", value: a(mv(m, "bw")) },
           { label: "Inventory", value: a(mv(m, "invNet")) },
+          { label: "Beta", value: mv(m, "beta") == null ? "--" : num(mv(m, "beta"), 2) },
+          { label: "Taker band", value: h.takerBand == null ? "--" : maskText(hide, "±" + num(h.takerBand, 0)) },
           { label: "Slippage", value: mv(m, "slipBp") == null ? "--" : bps(mv(m, "slipBp")) + " bps" },
           { label: "Time to fill", value: mv(m, "latencyMs") == null ? "--" : dur(mv(m, "latencyMs")) },
         ]}
@@ -63,25 +73,84 @@ function HedgeM({ latest }: { latest: Latest }) {
       <div className="r-chart">
         <ExposureChart s={s} hide={hide} height={240} />
       </div>
-      <Sec title="Rebalances" right={rebal.length ? `${day.length} in 24 h` : undefined}>
-        {rebal
-          .slice()
-          .reverse()
-          .slice(0, 30)
-          .map((r) => (
-            <Row
-              dense
-              key={r.t}
-              title={(new Date(r.t).toDateString() === new Date().toDateString() ? "" : `${new Date(r.t).toISOString().slice(5, 10)} `) + hms(r.t, tz)}
-              sub={[r.taker == null ? null : r.taker ? "Taker" : "Maker", r.trigger].filter(Boolean).join(" · ")}
-              value={<span className="r-fig">{a(r.target)}</span>}
-              valueSub={`from ${a(r.prevTarget)}`}
-              tone={r.taker ? "warn" : undefined}
-            />
-          ))}
-        {!rebal.length && <Empty>None in 2 days</Empty>}
+      <HedgeDayM />
+      <FundingM />
+      <Sec title="Rebalances" right={rows.length ? `${int(rows.length)} in 2 days` : undefined}>
+        {rows.map((r) => (
+          <Row
+            dense
+            key={r.t}
+            title={when(r.t, tz, today)}
+            sub={[r.taker == null ? null : (r.taker ? "Taker" : "Maker") + (r.n > 1 ? ` ×${r.n}` : ""), r.trigger].filter(Boolean).join(" · ")}
+            value={
+              <span className="r-fig">
+                <span className="muted">{a(r.from)} → </span>
+                {a(r.target)}
+              </span>
+            }
+            valueSub={`slip ${r.slip == null ? "--" : bps(r.slip) + " bps"} · fill ${r.latency == null ? "--" : dur(r.latency)}`}
+            tone={r.taker ? "warn" : undefined}
+          />
+        ))}
+        {!rows.length && <Empty>None in 2 days</Empty>}
       </Sec>
     </>
+  );
+}
+
+/** Today's inventory P&L against what the hedge made (the desk's own day), then the legs that made it. */
+function HedgeDayM() {
+  const hd = useStore((s) => s.snap?.exposure.hedge_day);
+  const inv = useStore((s) => s.snap?.summary.pnl.inventory);
+  const hide = useHide();
+  const q = useQty();
+  if (!hd) return null;
+  const offset = inv != null && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
+  return (
+    <>
+      <Sec className="st-m-bridge" title="Inventory and hedge, today" right={offset != null ? `offset ${pct(offset, 0)}` : undefined}>
+        {hide ? <Empty>Amounts hidden</Empty> : <HedgeBridge h={hd} inventory={inv ?? 0} />}
+      </Sec>
+      {hd.legs.length > 0 && (
+        <Sec title="Hedge legs" right="hedge PnL · fees">
+          {hd.legs.map((l) => (
+            <Row
+              key={l.venue + l.symbol}
+              dense
+              title={l.symbol}
+              sub={`${q(l.qty0, true)} → ${q(l.qty, true)} · ${int(l.fills)} fills`}
+              value={<Amt v={l.pnl} />}
+              valueSub={<Amt v={-l.fees} plain />}
+              to={{ page: "desk", detail: { kind: "instrument", symbol: l.symbol, venue: l.venue } }}
+            />
+          ))}
+        </Sec>
+      )}
+    </>
+  );
+}
+
+/** Funding of the perps held: the rate now and when it is next paid. */
+function FundingM() {
+  const f = useStore((s) => s.snap?.exposure.funding);
+  const tz = useStore((s) => s.tz);
+  const now = useNow(1000) + useStore((s) => s.skew);
+  if (!f?.length) return null;
+  const next = (t: number | null) => (t == null ? "--" : `${hm(t, tz)} · in ${dur(t - now)}`);
+  // one payment time for every perp (the usual case): said once, in the head
+  const one = f.every((x) => x.next === f[0]!.next);
+  return (
+    <Sec title="Funding" right={one ? `next ${next(f[0]!.next)}` : "rate · next"}>
+      {f.map((x) => (
+        <Row
+          key={x.symbol}
+          dense
+          title={x.symbol}
+          value={<span className="r-fig">{x.rate == null ? "--" : `${bps(x.rate * 1e4)} bps`}</span>}
+          valueSub={one ? undefined : next(x.next)}
+        />
+      ))}
+    </Sec>
   );
 }
 
@@ -93,8 +162,12 @@ function QuotingM({ latest }: { latest: Latest }) {
   const rows = useMemo(() => quoteRows(latest.payload?.quotes ?? [], latest.payload?.venues), [latest]);
   const off = rows.filter((r) => r.block !== 0);
   const a = (v: number | null) => (v == null ? "--" : maskText(hide, compact(v)));
+  const { age, stale } = useAge(latest);
+  const trouble = engineTrouble(latest.payload);
+  const truncated = latest.payload?.truncated === true || latest.payload?.quotes == null;
   return (
     <>
+      {(stale || trouble) && <div className="st-m-trouble warn-text">{stale ? "No push for " + dur(age) : trouble}</div>}
       <Stats
         cols={3}
         items={[
@@ -118,7 +191,7 @@ function QuotingM({ latest }: { latest: Latest }) {
         })}
         {!caps.length && <Empty>No balances sent</Empty>}
       </Sec>
-      <Sec title="Not quoting" right={`${rows.length - off.length} of ${rows.length} quoting`}>
+      <Sec title="Not quoting" right={truncated ? undefined : `${rows.length - off.length} of ${rows.length} quoting`}>
         {off.map((r) => (
           <Row
             dense
@@ -129,7 +202,7 @@ function QuotingM({ latest }: { latest: Latest }) {
             valueSub={r.since != null ? dur(now - r.since) : undefined}
           />
         ))}
-        {!off.length && <Empty>Every instrument is quoting</Empty>}
+        {truncated ? <Empty>The last push left the quotes out</Empty> : !off.length && <Empty>{rows.length ? "Every instrument is quoting" : "The engine sent no quotes"}</Empty>}
       </Sec>
     </>
   );

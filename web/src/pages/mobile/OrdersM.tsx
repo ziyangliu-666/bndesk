@@ -5,13 +5,11 @@ import { useNow } from "../../hooks";
 import { bps, hms, int, price } from "../../format";
 import { Chips, Sheet, span, useHold, useLive } from "../../components/mobile";
 import { TextToggle, useExPref } from "../../components/ex";
-import { QuotesFull } from "./desk/QuoteTouch";
-import "./desk.css";
-import "./desk/mk.css";
 import type { Account, OpenOrder } from "../../protocol";
 import { TIP, pctDigits, useQty } from "./shared";
 import { Empty, Meter, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./rest/ops.css";
+import "./ops.css";
 import { cur, baseOf, isPerp, isSpot, venueTag, exchangeWord, notionalCur } from "../../desk";
 
 const base = (s: string) => baseOf(s);
@@ -20,13 +18,13 @@ const NO_ORDERS: OpenOrder[] = [];
 const NO_ACCOUNTS: Account[] = [];
 
 type SideF = "all" | "buy" | "sell";
-type Tab = "orders" | "quotes" | "rates";
+type Tab = "orders" | "accounts";
 
-/** Orders: the resting orders (search, account, side), the live quote map, and the order rates against
- *  Binance's limits. */
+/** Orders: the resting orders (search, account, side), and each trading account's limits as the desktop's
+ *  strip has them (free quote, order rates, bid use, what rests on each side). The quote map is Markets → Quotes. */
 export function OrdersM() {
   const from = useStore((s) => s.route);
-  const [tab, setTab] = useExPref<Tab>("m-orders", "tab", "orders", ["orders", "quotes", "rates"]);
+  const [tab, setTab] = useExPref<Tab>("m-orders", "tab", "orders", ["orders", "accounts"]);
   const accounts = useLive((s) => s.snap?.accounts, 1000) ?? NO_ACCOUNTS;
   const trading = accounts.filter((a) => a.role !== "master" && (a.open_orders > 0 || a.inventory_value > 1));
   // the busiest rate, so the tab says when a limit is near
@@ -38,20 +36,15 @@ export function OrdersM() {
       <PageTabs
         items={[
           { value: "orders", label: "Open orders" },
-          { value: "quotes", label: "Quotes" },
-          { value: "rates", label: worst >= 0.8 ? <span className={worst >= 1 ? "crit-text" : "warn-text"}>Rate limits</span> : "Rate limits" },
+          { value: "accounts", label: worst >= 0.8 ? <span className={worst >= 1 ? "crit-text" : "warn-text"}>Accounts</span> : "Accounts" },
         ]}
         value={cur}
         onChange={setTab}
       />
       {cur === "orders" ? (
         <OpenOrders accounts={trading} all={accounts} />
-      ) : cur === "quotes" ? (
-        <section className="o-qmap mk-quotes">
-          <QuotesFull ms={125} />
-        </section>
       ) : (
-        <Rates accounts={trading} />
+        <Limits accounts={trading} />
       )}
     </>
   );
@@ -236,32 +229,58 @@ const OrderRow = memo(
     a.o.side === b.o.side,
 );
 
-/** Each trading account's order rate: 10 s as `17 / 100`, the day as a share of the daily limit. */
-function Rates({ accounts: all }: { accounts: Account[] }) {
-  // an exchange with no such windows has no meters to show
-  const accounts = all.filter((a) => !a.no_order_limits);
-  if (!accounts.length) return <Empty>{all.length ? "No order limits on this exchange" : "No account is trading"}</Empty>;
-  const lim1d = accounts.find((a) => a.orders_1d_limit > 0)?.orders_1d_limit;
-  const stream = accounts.some((a) => a.orders_source === "stream")
-    ? `\n\nCounted from the user stream (the key cannot read ${exchangeWord()}'s own count): orders it rejected are not in it.`
-    : "";
+/** Each trading account, as the desktop's Orders strip: the free quote balance at the head; then what can run out
+ *  (orders per 10 s and per day against the exchange's limits, bid use), neutral until 80 %, amber from there, red
+ *  at the limit; and the resting orders on each side in a quiet line. */
+function Limits({ accounts }: { accounts: Account[] }) {
+  const orders = useLive((s) => s.snap?.orders, 1000) ?? NO_ORDERS;
+  const money = useAmt();
+  if (!accounts.length) return <Empty>No account is trading</Empty>;
+  const stream = (a: Account) =>
+    a.orders_source === "stream" ? `\n\nCounted from the user stream (the key cannot read ${exchangeWord()}'s own count): orders it rejected are not in it.` : "";
   const digits = pctDigits(accounts.filter((a) => a.orders_1d_limit > 0).map((a) => a.orders_1d / a.orders_1d_limit));
   return (
     <>
-      <Sec flush title="Orders 10 s" info={`${TIP.o10} Amber from 80 %, red at the limit.${stream}`}>
-        {accounts.map((a) => (
-          <Meter key={a.id} label={a.label} value={a.orders_10s} limit={a.orders_10s_limit} />
-        ))}
-      </Sec>
-      <Sec
-        title="Orders today"
-        info={`${TIP.o1d}${lim1d ? ` The limit is ${int(lim1d)} orders a day.` : ""} Amber from 80 %, red at the limit.${stream}`}
-        right={lim1d ? `of ${int(lim1d)}` : undefined}
-      >
-        {accounts.map((a) => (
-          <Meter key={a.id} label={a.label} sub={int(a.orders_1d)} value={a.orders_1d} limit={a.orders_1d_limit} pct digits={digits} />
-        ))}
-      </Sec>
+      {accounts.map((a) => {
+        let bid = 0;
+        let ask = 0;
+        let nb = 0;
+        let na = 0;
+        for (const o of orders) {
+          if (o.account !== a.id) continue;
+          if (o.side === "buy") (bid += o.notional), nb++;
+          else (ask += o.notional), na++;
+        }
+        return (
+          <Sec
+            key={a.id}
+            className="o-acct"
+            title={a.label}
+            info={`${TIP.o10} ${TIP.o1d}${a.orders_1d_limit ? ` The daily limit is ${int(a.orders_1d_limit)} orders.` : ""} Bid use: resting bid notional / (free quote + resting bid notional). Amber from 80 %, red at the limit.${stream(a)}`}
+            right={
+              <span className="r-fig">
+                Free {money(a.quote_free, "full")} {cur()}
+              </span>
+            }
+          >
+            {!a.no_order_limits && (
+              <>
+                {a.orders_10s_limit > 0 && <Meter label="Orders 10 s" value={a.orders_10s} limit={a.orders_10s_limit} />}
+                <Meter label="Orders today" sub={int(a.orders_1d)} value={a.orders_1d} limit={a.orders_1d_limit} pct digits={digits} />
+              </>
+            )}
+            <Meter label="Bid use" value={Number.isFinite(a.utilization) ? a.utilization : 0} limit={Number.isFinite(a.utilization) ? 1 : 0} pct digits={0} />
+            <div className="o-acct-rest r-fig">
+              <span>
+                {int(nb)} bids <b>{money(bid, "k")}</b>
+              </span>
+              <span>
+                {int(na)} asks <b>{money(ask, "k")}</b>
+              </span>
+            </div>
+          </Sec>
+        );
+      })}
     </>
   );
 }

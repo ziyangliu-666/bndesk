@@ -1,34 +1,43 @@
 import { useMemo } from "react";
 import { navigate, useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { bps, hms, int, num, pct, price } from "../../format";
-import { showInfo, span, useLive } from "../../components/mobile";
-import type { Account, Exposure } from "../../protocol";
-import { TIP, bandDef, useQty } from "./shared";
+import { pct, price } from "../../format";
+import { span, useLive } from "../../components/mobile";
+import type { Account } from "../../protocol";
+import { TIP, useQty } from "./shared";
 import { Amt, Big, Empty, PageTabs, Row, Sec, Stats, limitCls, useAmt } from "./rest/ui";
 import { pctOfMoney, useHide } from "../../mask";
-import { AccountsChart, DeskChart, Eye, GapBar, PositionRow } from "./rest/assets";
+import { AccountsChart, DeskChart, Eye, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
-import { cur, baseOf, useDesk, isSpot, hasPerps, inventoryWord, hedgeWord, roled, cashWord } from "../../desk";
+import { cur, baseOf, useDesk, isSpot, hasPerps, roled, cashWord } from "../../desk";
 
-type Tab = "accounts" | "spot" | "futures" | "exposure";
-const TABS: Tab[] = ["accounts", "spot", "futures", "exposure"];
+// the exposure and the hedge are on Strategy (the engine's own figures); a remembered "exposure" falls back
+type Tab = "accounts" | "spot" | "futures";
+const TABS: Tab[] = ["accounts", "spot", "futures"];
 
-const betaNote = (x: Exposure) =>
-  x.beta_source === "estimate" ? "β: the desk's own estimate, may differ from the engine's." : "β: configured per market.";
-
-/** Assets: the desk's total value and today's PnL, then Accounts | Spot | Futures | Exposure. */
+/** Assets: the desk's total value and today's PnL, where it sits and what moved it besides trading, then
+ *  Accounts | Spot | Futures. */
 export function AccountsM() {
   const sm = useStore((s) => s.snap?.summary);
   const accounts = useLive((s) => s.snap?.accounts, 250);
   const [saved, setTab] = useExPref<Tab>("m-assets", "tab", "accounts", TABS);
   const desk = useDesk();
   // no futures on this desk: a tab remembered from elsewhere falls back
-  const tab = (!hasPerps(desk) && saved === "futures") || (!desk.hedge && saved === "exposure") ? "accounts" : saved;
+  const tab = !hasPerps(desk) && saved === "futures" ? "accounts" : saved;
   const money = useAmt();
   const hide = useHide();
   const open = sm ? sm.equity - sm.pnl_day : null;
+  // where the value sits, and the day's two figures that are not trading (as the desktop's Assets head)
+  const t = useMemo(() => {
+    if (!accounts) return null;
+    const sum = (f: (a: Account) => number) => accounts.reduce((k, a) => k + f(a), 0);
+    return {
+      spot: sum((a) => a.quote_free + a.quote_locked + a.inventory_value),
+      fut: sum((a) => a.fut_wallet + a.fut_upnl),
+      transfers: sum((a) => a.transfers_day),
+    };
+  }, [accounts]);
 
   return (
     <>
@@ -49,18 +58,27 @@ export function AccountsM() {
           </button>
         }
       />
+      <Stats
+        className="a-parts"
+        cols={hasPerps(desk) ? 4 : 3}
+        items={[
+          { label: "Spot", value: t ? money(t.spot, "full") : "--" },
+          ...(hasPerps(desk) ? [{ label: "Futures", value: t ? money(t.fut, "full") : "--" }] : []),
+          ...(desk.rebates ? [{ label: "Rebates today", value: <Amt v={sm?.rebates} plain /> }] : []),
+          { label: "Transfers today", value: <Amt v={t?.transfers} plain /> },
+        ]}
+      />
       <PageTabs
         items={[
           { value: "accounts", label: "Accounts" },
           { value: "spot", label: "Spot" },
           ...(hasPerps(desk) ? [{ value: "futures" as const, label: "Futures" }] : []),
-          ...(desk.hedge ? [{ value: "exposure" as const, label: "Exposure" }] : []),
         ]}
         value={tab}
         onChange={setTab}
       />
       {accounts &&
-        (tab === "accounts" ? <AccountsTab accounts={accounts} /> : tab === "spot" ? <SpotTab accounts={accounts} /> : tab === "futures" ? <FuturesTab accounts={accounts} /> : <ExposureTab accounts={accounts} />)}
+        (tab === "accounts" ? <AccountsTab accounts={accounts} /> : tab === "spot" ? <SpotTab accounts={accounts} /> : <FuturesTab accounts={accounts} />)}
     </>
   );
 }
@@ -161,17 +179,12 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
   );
 }
 
-// ---- Futures: margin, positions, today's hedge legs, funding ----
+// ---- Futures: margin and positions (the hedge legs and funding are on Strategy) ----
 
 function FuturesTab({ accounts }: { accounts: Account[] }) {
-  const x = useStore((s) => s.snap?.exposure);
-  const tz = useStore((s) => s.tz);
-  const now = useNow(1000) + useStore.getState().skew;
   const money = useAmt();
-  const q = useQty();
   const t = accounts.reduce((m, a) => ({ w: m.w + a.fut_wallet, u: m.u + a.fut_upnl, av: m.av + a.fut_available }), { w: 0, u: 0, av: 0 });
   const pos = accounts.flatMap((a) => a.positions.map((p) => ({ p, a })));
-  const hd = x?.hedge_day;
   return (
     <>
       <Sec flush>
@@ -189,114 +202,6 @@ function FuturesTab({ accounts }: { accounts: Account[] }) {
           <PositionRow key={a.id + p.symbol} p={p} account={a.label} />
         ))}
         {!pos.length && <Empty>No open positions</Empty>}
-      </Sec>
-      {hd && hd.legs.length > 0 && (
-        <Sec title="Hedge legs today" info="Since the day start: the position at the day start, today's fills and fees, and the day start's mark." right="fills · fees">
-          {hd.legs.map((l) => (
-            <Row
-              key={l.venue + l.symbol}
-              dense
-              title={l.symbol}
-              sub={`start ${q(l.qty0, true)} · mark then ${price(l.mark0)}`}
-              value={<span className="r-fig">{int(l.fills)}</span>}
-              valueSub={<Amt v={-l.fees} />}
-            />
-          ))}
-        </Sec>
-      )}
-      {x && x.funding.length > 0 && (
-        <Sec title="Funding" right="rate · next">
-          {x.funding.map((f) => (
-            <Row
-              key={f.symbol}
-              dense
-              title={f.symbol}
-              sub={`position ${q(f.position, true)}`}
-              value={<span className="r-fig">{f.rate == null ? "--" : `${bps(f.rate * 1e4)} bps`}</span>}
-              valueSub={f.next == null ? "--" : `${hms(f.next, tz)} · in ${span(f.next - now)}`}
-            />
-          ))}
-        </Sec>
-      )}
-    </>
-  );
-}
-
-// ---- Exposure: the gap against its band, the hedge, by account ----
-
-function ExposureTab({ accounts }: { accounts: Account[] }) {
-  const x = useStore((s) => s.snap?.exposure);
-  const sm = useStore((s) => s.snap?.summary);
-  const tz = useStore((s) => s.tz);
-  const money = useAmt();
-  if (!x || !sm) return null;
-  const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? id;
-  const hd = x.hedge_day;
-  const inv = sm.pnl.inventory;
-  const offset = hd && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
-  const gapInfo = x.paused
-    ? `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed` +
-      `${x.paused_until != null ? `, until ${hms(x.paused_until, tz)}` : ""}. ${cur()}.`
-    : `Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is ` +
-      `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "full"))} ${cur()}.`;
-  return (
-    <>
-      <Sec flush>
-        {x.band != null && (x.gap != null || x.paused) && (
-          <GapBar
-            label={x.paused ? `Hedge to close (${x.paused})` : "Exposure gap"}
-            value={x.paused ? x.hedge_notional : x.gap}
-            band={x.band}
-            onLabel={() => showInfo(x.paused ? "Hedge to close" : "Exposure gap", gapInfo)}
-          />
-        )}
-        <Stats
-          cols={3}
-          items={[
-            { label: "Net exposure", info: `${inventoryWord()} value plus ${hedgeWord()} net notional, all accounts. ${cur()}.`, value: <Amt v={x.net} plain /> },
-            {
-              label: "Hedge target",
-              info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} ${cur()}.`,
-              value: <Amt v={x.target} plain />,
-            },
-            { label: "Hedge", info: `Futures notional of the hedge symbols, ${cur()}.`, value: <Amt v={x.hedge_notional} plain /> },
-            { label: roled() ? "Inventory" : "Spot value", value: money(x.spot_value, "full") },
-            ...(Math.abs(x.futures_notional - x.hedge_notional) > 0.005
-              ? [{ label: "All futures", info: `Futures net notional of every symbol, hedge or not, ${cur()}.`, value: <Amt v={x.futures_notional} plain /> }]
-              : []),
-          ]}
-        />
-      </Sec>
-      {hd && (
-        <Sec
-          title="Inventory and hedge today"
-          info="Since the day start: the Inventory PnL of the Desk against what the hedge made. Offset: −Hedge ÷ Inventory PnL; 100 % cancels it exactly."
-        >
-          <Stats
-            cols={4}
-            items={[
-              { label: "Inventory PnL", value: <Amt v={inv} /> },
-              { label: "Hedge PnL", value: <Amt v={hd.hedge_pnl} /> },
-              { label: "Net", value: <Amt v={inv + (hd.hedge_pnl ?? 0)} /> },
-              { label: "Offset", value: offset != null ? pct(offset, 0) : "--" },
-            ]}
-          />
-        </Sec>
-      )}
-      <Sec title="By account" right="spot · futures · net">
-        {x.by_account.map((r) => (
-          <Row
-            key={r.account}
-            dense
-            title={labelOf(r.account)}
-            sub={`Spot ${money(r.spot_value, "k")} · Futures ${money(r.futures_notional, "pnlK")}`}
-            value={<Amt v={r.net} kind="pnlK" plain />}
-            to={{ page: "assets", detail: { kind: "account", id: r.account } }}
-          />
-        ))}
-      </Sec>
-      <Sec>
-        <DeskChart what="exposure" />
       </Sec>
     </>
   );

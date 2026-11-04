@@ -113,47 +113,6 @@
 .m-hist-day .m-row-side {
   min-width: 88px;
 }
-/* ---- History (exchange grammar): the range's total at the left, four facts at the right ---- */
-.h-sum {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  padding: 2px 0 8px;
-}
-.h-sum-l {
-  flex: 1;
-  min-width: 0;
-}
-.h-sum-label {
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.h-sum-v {
-  display: block;
-  font-size: 24px;
-  font-weight: 500;
-  line-height: 32px;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-.h-sum-v.masked {
-  font-size: 20px;
-}
-.h-sum-r.r-stats {
-  flex: none;
-  gap: 4px 16px;
-  padding: 0;
-  text-align: right;
-}
-.h-sum-r .r-stat {
-  align-items: flex-end;
-}
-.h-sum-r .r-stat-v {
-  font-size: 14px;
-  line-height: 18px;
-}
 .h-part {
   display: inline-flex;
   align-items: center;
@@ -163,22 +122,197 @@
 .h-part.sub {
   padding-left: 16px;
 }
-.h-se {
+
+/* ---- History › Desk: the PnL large, four quieter figures on one line, what they cover ---- */
+.hm-sum {
+  padding: 12px 0 14px;
+}
+.hm-sum-l {
   font-size: 12px;
+  line-height: 16px;
   color: var(--muted);
 }
-.h-sum-note {
+.hm-sum-v {
+  display: block;
   margin-top: 2px;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 36px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.hm-figs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.hm-figs > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.hm-figs span {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.hm-figs b {
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 400;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hm-figs b.up {
+  color: var(--up);
+}
+.hm-figs b.down {
+  color: var(--down);
+}
+.hm-note {
+  margin-top: 10px;
   font-size: 12px;
   line-height: 16px;
   color: var(--muted);
 }
 
-/* the hero's figures at the right: a tappable one lines up with the others */
-.h-sum-r button.r-stat-tap {
-  align-items: flex-end;
+/* the split: key, name, a thin bar, the figure; rows add up to the PnL */
+.hm-split {
+  padding: 0 0 10px;
+}
+.hm-split-r {
+  display: grid;
+  /* one column grid for every row, so the bars start on one line */
+  grid-template-columns: 16px 10.5em minmax(24px, 1fr) minmax(84px, auto);
+  align-items: center;
+  column-gap: 8px;
+  min-height: 34px;
+  font-size: 14px;
+}
+.hm-split-r.sub .hm-split-n {
+  padding-left: 14px;
+  color: var(--ink-2);
+}
+.hm-split-k {
+  display: flex;
+  align-items: center;
+}
+.hm-split-n {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hm-split-bar {
+  display: flex;
+  justify-content: flex-end;
+  height: 4px;
+}
+.hm-split-bar i {
+  display: block;
+  height: 4px;
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
+}
+.hm-split-v {
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.h-sum-r .r-stat-l {
-  align-self: flex-end;
+
+/* the last five weeks: a 7-column grid, each kept day a 44 px target that opens it */
+.hm-cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  column-gap: 2px;
+  row-gap: 2px;
+  padding-bottom: 12px;
+}
+.hm-cal-h {
+  padding-bottom: 4px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--muted);
+}
+.hm-cal-c {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 46px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.hm-cal-c:active {
+  background: var(--raised);
+}
+.hm-cal-c.out {
+  cursor: default;
+}
+.hm-cal-c i {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--muted);
+}
+.hm-cal-c.out i {
+  opacity: 0.45;
+}
+.hm-cal-c.today i {
+  color: var(--accent);
+  font-weight: 500;
+}
+.hm-cal-c b {
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 16px;
+  min-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.hm-cal-c b.up {
+  color: var(--up);
+}
+.hm-cal-c b.down {
+  color: var(--down);
+}
+
+/* By day | By hour (today): the tabs head the list */
+.hm-tabs {
+  margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+  border-bottom: 1px solid var(--rule);
+}
+.hm-tabs-r {
+  font-size: 12px;
+  color: var(--muted);
+}
+/* said once, where the days without a split start */
+.hm-div {
+  padding: 14px 0 6px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  border-top: 1px solid var(--rule);
+}
+
+/* the day page: the chips wrap onto a second line instead of running past the edge */
+.hm-day-chart .ex-chart .ex-chips {
+  flex-wrap: wrap;
+  row-gap: 0;
+  padding-right: 12px;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.hm-vs {
+  font-variant-numeric: tabular-nums;
 }

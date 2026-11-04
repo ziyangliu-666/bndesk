@@ -2,22 +2,24 @@
 // sheet), the KPI grid, the price path around our fills (a tap picks a horizon, a sideways drag reads the
 // others), the distribution at that horizon, the day in 15-minute buckets, then the instruments with their own
 // curves. All of it from /api/markouts over today's fills (analysis/data.ts).
-import { useState } from "react";
-import { useStore } from "../../store";
+import { useMemo, useState } from "react";
+import { navigate, useStore } from "../../store";
 import { bps, compact, int, pct, signClass } from "../../format";
 import { C, S1 } from "../../theme";
-import { useExHidden } from "../../components/ex";
+import { TextToggle, useExHidden, useExPref } from "../../components/ex";
 import { Chips, Segmented, Sheet } from "../../components/mobile";
 import { maskText, money, useHide } from "../../mask";
-import type { MarkoutReport } from "../../protocol";
+import type { MarkoutInst, MarkoutReport } from "../../protocol";
 import { MAIN_H, MK_DEF, REF_OPTS, TOX_DEF, hIdx, everyLine, hLabel, pathCover, useMarkouts, useView, type SideF, type VenueF, type Weight } from "../analysis/data";
 import { PathChart, type PathLineDef } from "../analysis/PathChart";
 import { Dist } from "../analysis/Dist";
 import { DayChart } from "../analysis/DayChart";
+import { Scatter, instKey } from "../analysis/Scatter";
 import { Spark } from "../analysis/Spark";
 import { Empty, Row, Sec, Stats, type Stat } from "./rest/ui";
 import "../analysis/analysis.css";
 import "./rest/ops.css";
+import "./analysis.css";
 import { kindWord, markets, marketOf, venueTag, notionalCur } from "../../desk";
 
 const SIDES: { value: SideF; label: string }[] = [
@@ -85,7 +87,8 @@ export function MarkoutsM() {
         />
         <Dist d={r?.dist ?? null} of={of} touch height={210} />
       </Sec>
-      <Sec>
+      <Sec className="m-an-day">
+        <div className="r-chart">
         <DayChart
           id="m-an-day"
           buckets={r?.by_time ?? []}
@@ -98,8 +101,10 @@ export function MarkoutsM() {
             </span>
           }
         />
+        </div>
       </Sec>
       <Instruments r={r} hide={hide} />
+      <EdgeScatter r={r} hide={hide} />
       <Sheet opened={sheet} onClose={() => setSheet(false)} title="View">
         <div className="m-an-sheet">
           <div className="m-an-sheet-l">Account</div>
@@ -144,15 +149,65 @@ function kpis(r: MarkoutReport | null, side: SideF, hide: boolean): Stat[] {
   ];
 }
 
+type SortBy = "notional" | "m10" | "adverse" | "pnl";
+const SORTS: SortBy[] = ["notional", "m10", "adverse", "pnl"];
+
+/** The sort key and its order: notional largest first, the others worst first (what the desk is looking for). */
+function sortKey(by: SortBy, i10: number): [(x: MarkoutInst) => number | null, boolean] {
+  switch (by) {
+    case "m10":
+      return [(x) => x.mean[i10] ?? null, false];
+    case "adverse":
+      return [(x) => x.adverse10, true];
+    case "pnl":
+      return [(x) => x.pnl, false];
+    default:
+      return [(x) => x.notional, true];
+  }
+}
+
 function Instruments({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
   const [all, setAll] = useState(false);
-  const every = r?.by_instrument ?? [];
-  const rows = all ? every : every.slice(0, 12);
+  const [saved, setBy] = useExPref<SortBy>("m-an-inst", "sort", "notional", SORTS);
+  // P&L is masked under Hide amounts, so it cannot order the list then
+  const by = hide && saved === "pnl" ? "notional" : saved;
   const i10 = hIdx(r, 10);
-  const i60 = hIdx(r, 60);
   const iFill = hIdx(r, 0);
+  const every = useMemo(() => {
+    const [f, desc] = sortKey(by, i10);
+    return (r?.by_instrument ?? []).slice().sort((a, b) => {
+      const x = f(a),
+        y = f(b);
+      if (x == null) return y == null ? 0 : 1;
+      if (y == null) return -1;
+      return desc ? y - x : x - y;
+    });
+  }, [r, by, i10]);
+  const rows = all ? every : every.slice(0, 12);
   return (
-    <Sec flush title="Instruments" right="10 s · 60 s, bps" info="Today's instruments by notional. The curve is the instrument's own markout path, −10 s to 5 min, as in the chart above; ±2 SE is the 10 s figure's uncertainty (wide on a name with few fills).">
+    <Sec
+      flush
+      className="m-an-inst-sec"
+      title="Instruments"
+      info={
+        "Today's instruments. Notional sorts the largest first; 10 s, Adverse and P&L the worst first.\n\n" +
+        "Each row: notional, fills and edge at the fill (bps); the instrument's own markout path from −10 s to 5 min; its 10 s markout (bps) with ±2 SE " +
+        `(wide on a name with few fills); the share of its fills whose 10 s markout is below zero; its markout P&L (Σ notional × 60 s markout, ${notionalCur()}, a diagnostic, not P&L).`
+      }
+      right={
+        <TextToggle
+          label="Sort by"
+          value={by}
+          onChange={setBy}
+          options={[
+            { value: "notional", label: "Notional" },
+            { value: "m10", label: "10 s" },
+            { value: "adverse", label: "Adverse" },
+            ...(hide ? [] : [{ value: "pnl" as const, label: "P&L" }]),
+          ]}
+        />
+      }
+    >
       {rows.map((x) => (
         <Row
           key={x.venue + ":" + x.symbol}
@@ -163,16 +218,18 @@ function Instruments({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
               {venueTag(x.venue) && <span className="r-tag">{venueTag(x.venue)}</span>}
             </>
           }
-          sub={`${int(x.fills)} fills · ${maskText(hide, compact(x.notional))} · edge ${bps(x.edge)}`}
+          sub={`${maskText(hide, compact(x.notional))} · ${int(x.fills)} fills · edge ${bps(x.edge)}`}
           value={
             <span className="m-an-v">
-              <Spark vals={x.mean} iFill={iFill} w={64} h={22} />
+              <Spark vals={x.mean} iFill={iFill} w={48} h={22} />
               <span className={"r-fig " + signClass(x.mean[i10])}>{bps(x.mean[i10])}</span>
+              <span className="m-an-se r-fig">±{x.se10 == null ? "--" : (2 * x.se10).toFixed(1)}</span>
             </span>
           }
           valueSub={
             <>
-              {bps(x.mean[i60])} · ±{x.se10 == null ? "--" : (2 * x.se10).toFixed(1)}
+              {x.adverse10 == null ? "--" : pct(x.adverse10, 0)} adverse ·{" "}
+              <span className={hide ? "" : signClass(x.pnl)}>{maskText(hide, money(x.pnl, true))}</span>
             </>
           }
           to={{ page: "desk", detail: { kind: "instrument", symbol: x.symbol, venue: x.venue } }}
@@ -184,6 +241,33 @@ function Instruments({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
         </button>
       )}
       {r && !rows.length && <Empty>No fills today</Empty>}
+    </Sec>
+  );
+}
+
+/** Edge at the fill against the 10 s markout, a bubble per instrument. No hover on a phone: a tap picks the
+ *  nearest bubble and reads it in the legend, a second tap on it opens the instrument. */
+function EdgeScatter({ r, hide }: { r: MarkoutReport | null; hide: boolean }) {
+  const [sel, setSel] = useState<string | null>(null);
+  return (
+    <Sec
+      title="Edge vs 10 s markout"
+      info={
+        "Each instrument's edge at the fill (across) against its 10 s markout (up), bps; the bubble's area is its notional. " +
+        "Under zero the market took more than the edge; under the dashed diagonal some of the edge went.\n\nTap a bubble to read it, tap it again to open the instrument."
+      }
+    >
+      <div className="m-an-scatter">
+        <Scatter
+          rows={r?.by_instrument ?? []}
+          j10={hIdx(r, 10)}
+          hide={hide}
+          hover={sel}
+          // a finger lifting is a pointer leaving: keep the bubble read until another is tapped
+          onHover={(k) => k && setSel(k)}
+          onPick={(x) => (sel === instKey(x) ? navigate({ page: "desk", detail: { kind: "instrument", symbol: x.symbol, venue: x.venue } }) : setSel(instKey(x)))}
+        />
+      </div>
     </Sec>
   );
 }

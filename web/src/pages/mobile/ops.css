@@ -121,3 +121,45 @@
 .m-ops-trend-wait {
   padding: 0;
 }
+
+/* ---- Orders and Fills (phone): the search 44 px tall; the account row wraps, never cut ---- */
+.o-search input[type="search"] {
+  height: 44px;
+}
+.o-search > button[type="button"] {
+  height: 44px;
+}
+.o-filters .m-chips {
+  mask-image: none;
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+.o-filters .m-chips > .m-seg {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-left: -6px;
+}
+.o-filters .m-chips .m-seg button {
+  padding: 0 6px;
+}
+
+/* Orders → Accounts: one section per account (a rule between), meters, then the resting orders in a quiet line */
+.o-acct .r-head-r {
+  font-size: 13px;
+  color: var(--muted);
+}
+.o-acct-rest {
+  display: flex;
+  gap: 16px;
+  padding: 6px 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.o-acct-rest b {
+  margin-left: 3px;
+  font-weight: 400;
+  color: var(--ink-2);
+}

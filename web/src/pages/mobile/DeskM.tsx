@@ -1,73 +1,50 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
-import { isHidden, navigate, openMarkets, serverNow, useStore } from "../../store";
+import { isHidden, navigate, serverNow, useStore } from "../../store";
 import { useEngineHedge } from "../strategy/engine";
 import { useNow } from "../../hooks";
 import { hm, int, num } from "../../format";
 import { LevelIcon } from "../../components/ui";
-import { DefinedLabel, LimitBar, ListRow, Money, RateMeter, Section, Segmented, defineProps, useHold, useLive, useMoney } from "../../components/mobile";
+import { LimitBar, ListRow, Money, RateMeter, Section, useHold, useLive, useMoney } from "../../components/mobile";
 import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { SeriesKey } from "../../components/ex";
-import type { Account, Exposure, Fill, SymbolRow } from "../../protocol";
-import { FillRow, InstName, useFillSheet } from "./shared";
-import { instPnl, unpriced, useLegPnl } from "../../selectors";
-import { useHide } from "../../mask";
+import type { Account, Exposure, Fill } from "../../protocol";
+import { FillRow, useFillSheet } from "./shared";
 import { RULES, alertText, byUrgency, heldFor } from "./rules";
 import { DeskChart } from "./desk/DeskChart";
-import { QuotesMini } from "./desk/QuoteTouch";
-import { QuoteLegend } from "../../components/quotes";
+import { QuotesLine } from "./desk/QuoteTouch";
 import "./desk.css";
-import { cur, useDesk, isHedge, inventoryWord, hedgeWord } from "../../desk";
+import { cur, useDesk, inventoryWord, hedgeWord } from "../../desk";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
 const PAGE_MS = 250;
-/** The quotes block moves with every message: its dots are the point of it (a canvas redraw, no list to re-render). */
+/** The quotes line's counts follow every message. */
 const QUOTES_MS = 125;
 
-// Desk, the phone's home: what the day made and how it got there (hero, chart, the parts), where we quote now,
-// how close to the limits, who made it, the latest fills.
+// Desk, the phone's home: what the day made and its parts (hero), how it got there (the chart: P&L, equity,
+// exposure), the quotes in one line (the map is Markets → Quotes), how close to the limits, the latest fills.
 export function DeskM() {
   // the day's figures follow every message; the lists, chart and quotes take theirs 4 times a second
   const sm = useLive((s) => s.snap?.summary, FIG_MS);
   const exposure = useLive((s) => s.snap?.exposure, FIG_MS);
   const engine = useEngineHedge(useNow(5000) + useStore.getState().skew);
   const accounts = useLive((s) => s.snap?.accounts, PAGE_MS);
-  // the movers and the latest fills hold still under a resting finger
+  // the latest fills hold still under a resting finger
   const [held, hold] = useHold();
-  const symbols = useLive((s) => s.snap?.symbols, PAGE_MS, held);
-  const hide = useHide();
   const fills = useLive((s) => s.snap?.fills, PAGE_MS, held);
   const reconcile = useStore((s) => s.snap?.alerts.some((a) => a.active && a.rule === "reconcile") ?? false);
   const tz = useStore((s) => s.tz);
-  const money = useMoney();
   const fill = useFillSheet();
   const o10 = useSticky(accounts ?? [], (a) => [a.orders_10s, a.orders_10s_limit]);
   const o1d = useSticky(accounts ?? [], (a) => [a.orders_1d, a.orders_1d_limit]);
   // the parts with values of their own keep their element while the day's figures move 8 times a second
   const chartEl = useMemo(() => <DeskChart ms={PAGE_MS} />, []);
-  const quotesEl = useMemo(
-    () => (
-      <Section
-        title="Quotes"
-        right={
-          <UnstyledButton className="m-link" onClick={() => openMarkets("quotes")}>
-            All
-          </UnstyledButton>
-        }
-        card={false}
-        className="dk-quotes"
-      >
-        <QuoteLegend short className="dk-qlegend" />
-        <QuotesMini n={8} ms={QUOTES_MS} />
-      </Section>
-    ),
-    [],
-  );
+  const quotesEl = useMemo(() => <QuotesLine ms={QUOTES_MS} />, []);
+  const desk = useDesk();
   if (!sm || !exposure) return null;
   const p = sm.pnl;
-  const desk = useDesk();
   const hedge = exposure.hedge_day?.hedge_pnl ?? null;
   const zone = tz === "utc" ? " UTC" : "";
   const equity = (accounts ?? []).reduce((s, a) => s + a.equity, 0);
@@ -77,40 +54,41 @@ export function DeskM() {
     <>
       <AlertLine />
 
-      <DeskHero v={sm.pnl_day} since={`since ${hm(sm.day_start, tz)}${zone}`} h1={sm.pnl_1h} equity={equity} />
+      <DeskHero
+        v={sm.pnl_day}
+        since={`since ${hm(sm.day_start, tz)}${zone}`}
+        h1={sm.pnl_1h}
+        equity={equity}
+        parts={[
+          ...(desk.mm
+            ? [
+                { key: "mm", label: "MM", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm },
+                { key: "inv", label: "Inv", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory },
+              ]
+            : [{ key: "trading", label: "Trading", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
+          ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),
+          ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates }] : []),
+          {
+            key: "other",
+            label: "Other",
+            color: PNL_COLORS.other,
+            stroke: PNL_STROKES.other,
+            v: sm.other,
+            tone: reconcile ? "warn" : undefined,
+          },
+        ]}
+      />
+
+      {/* the hedge on the first screen, under the day's P&L: "is the hedge OK" without a scroll */}
+      <div className="dk-hedge-line">{engine ? <EngineHedgeBar e={engine} /> : <ExposureBar x={exposure} />}</div>
 
       <section className="dk-chart-sec">
         {chartEl}
       </section>
 
-      <Section title="Day PnL split" right={cur()}>
-        <PartRows
-          rows={[
-            ...(desk.mm
-              ? [
-            { key: "mm", label: "Market making", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm, sub: p.mm_unmarked_fills ? `${int(p.mm_unmarked_fills)} without a 60 s price` : undefined, info: `Each fill against the mid 60 s after it, minus fees. Against the fair at the fill instead: ${money(p.mm_spread)} ${cur()}.${unpriced(p, hide)}` },
-            { key: "inv", label: "Inventory PnL", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory, info: "Trading PnL minus market making: what the inventory made after the first 60 s of each fill." },
-                ]
-              : [{ key: "trading", label: "Trading PnL", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
-            ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),
-            ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates }] : []),
-            {
-              key: "other",
-              label: "Other",
-              color: PNL_COLORS.other,
-              stroke: PNL_STROKES.other,
-              v: sm.other,
-              tone: reconcile ? "warn" : undefined,
-              info: "Day PnL minus what the parts above add up to." + (reconcile ? "\n\nA reconcile alert is active: a fill, transfer or asset the desk does not see." : ""),
-            },
-          ]}
-        />
-      </Section>
-
       {quotesEl}
 
       <Section title="Risk" className="dk-risk">
-        {engine ? <EngineHedgeBar e={engine} /> : <ExposureBar x={exposure} />}
         {o10 && (
           <RateMeter
             label="Orders 10 s"
@@ -143,10 +121,6 @@ export function DeskM() {
         </div>
       </Section>
 
-      <div className="m-hold" {...hold}>
-        <Movers symbols={symbols} />
-      </div>
-
       {fills && fills.length > 0 && (
         <div className="m-hold" {...hold}>
           <Section title="Latest fills" link={{ label: "All", to: { page: "fills" } }}>
@@ -161,7 +135,7 @@ export function DeskM() {
 
 // ---- head: Day PnL on one line, clear but not giant; 1h, equity and the day's start a quiet line under it ----
 
-function DeskHero({ v, since, h1, equity }: { v: number; since: string; h1: number; equity: number }) {
+function DeskHero({ v, since, h1, equity, parts }: { v: number; since: string; h1: number; equity: number; parts: Part[] }) {
   const hide = useStore((s) => s.hideAmounts);
   return (
     <section className="dk-hero">
@@ -180,6 +154,15 @@ function DeskHero({ v, since, h1, equity }: { v: number; since: string; h1: numb
           {hide ? <IconEyeOff size={18} stroke={1.75} /> : <IconEye size={18} stroke={1.75} />}
         </UnstyledButton>
       </div>
+      {/* the parts that make the day, keyed as the chart's lines; in ink: the sign is in the text */}
+      <div className="dk-hero-parts m-fig">
+        {parts.map((r) => (
+          <span key={r.key} className={r.tone ?? ""}>
+            <SeriesKey color={r.color} stroke={r.stroke} />
+            {r.label} <b>{<Money v={r.v} color={false} />}</b>
+          </span>
+        ))}
+      </div>
       <div className="dk-hero-sub m-fig">
         <span>
           1h <b>{<Money v={h1} color={false} />}</b>
@@ -193,46 +176,15 @@ function DeskHero({ v, since, h1, equity }: { v: number; since: string; h1: numb
   );
 }
 
-// ---- the parts of the day: plain rows, a colour key that matches the chart's lines ----
-
 interface Part {
   key: string;
   label: string;
-  sub?: string;
   color: string;
   stroke: Stroke;
   v: number | null | undefined;
-  info?: string;
   tone?: "warn";
 }
 
-function PartRows({ rows }: { rows: Part[] }) {
-  return (
-    <>
-      {rows.map((r) => (
-        <div key={r.key} className={"dk-part" + (r.info ? " m-tap" : "")} {...defineProps(r.label, r.info)}>
-          <SeriesKey color={r.color} stroke={r.stroke} />
-          <span className={"dk-part-l " + (r.tone ?? "")}>
-            <DefinedLabel label={r.label} info={r.info} />
-            {r.sub && <span className="dk-part-sub"> {r.sub}</span>}
-          </span>
-          {/* the parts in ink: the sign is in the text; Day PnL above carries the colour */}
-          <span className={"dk-part-v " + (r.tone ?? "")}>
-            <Money v={r.v} color={false} />
-          </span>
-        </div>
-      ))}
-    </>
-  );
-}
-
-// ---- top movers: the instruments that made or lost the most today ----
-
-/**
- * The best or the worst instruments today by what each made: its Trading PnL, or its hedge leg
- * (marked "hedge"), so the two biggest contributors are here whichever they are. With amounts hidden the
- * ranking would give the winners away: the busiest instruments by fills instead.
- */
 const LatestFills = memo(function LatestFills({ fills, onOpen }: { fills: Fill[]; onOpen: (f: Fill) => void }) {
   return (
     <>
@@ -240,68 +192,6 @@ const LatestFills = memo(function LatestFills({ fills, onOpen }: { fills: Fill[]
         <FillRow key={f.id} f={f} onOpen={onOpen} />
       ))}
     </>
-  );
-});
-
-const Movers = memo(function Movers({ symbols }: { symbols: SymbolRow[] | undefined }) {
-  const [side, setSide] = useState<"best" | "worst">("best");
-  const money = useMoney();
-  const hide = useHide();
-  const legs = useLegPnl();
-  const made = (r: SymbolRow) => instPnl(r, legs);
-  const [best, worst, busy] = useMemo(() => {
-    const xs = (symbols ?? []).filter((r) => !r.dust && Math.abs(instPnl(r, legs)) >= 0.005).sort((a, b) => instPnl(b, legs) - instPnl(a, legs));
-    const busy = (symbols ?? [])
-      .filter((r) => r.fills_day > 0)
-      .sort((a, b) => b.fills_day - a.fills_day || a.symbol.localeCompare(b.symbol))
-      .slice(0, 4);
-    return [xs.filter((r) => instPnl(r, legs) > 0).slice(0, 4), xs.filter((r) => instPnl(r, legs) < 0).reverse().slice(0, 4), busy];
-  }, [symbols, legs]);
-  const list = hide ? busy : side === "best" ? best : worst;
-  if (!best.length && !worst.length && !busy.length) return null;
-  return (
-    <Section
-      title={hide ? "Busiest today" : "Top movers"}
-      right={
-        hide ? (
-          "by fills"
-        ) : (
-          <Segmented
-            label="Movers"
-            value={side}
-            onChange={setSide}
-            data={[
-              { value: "best", label: "Best" },
-              { value: "worst", label: "Worst" },
-            ]}
-          />
-        )
-      }
-    >
-      {list.map((r) => {
-        const hedged = isHedge(r);
-        return (
-          <ListRow
-            key={r.venue + r.symbol}
-            title={<InstName r={r} />}
-            subtitle={
-              hedged
-                ? `Hedge leg · ${int(r.fills_day)} fills`
-                : `${hide ? "inv " + money(r.inv_value, "short") : Math.abs(r.inv_value) < 0.005 ? "flat" : "inv " + money(r.inv_value, "short") + ` ${cur()}`} · ${int(r.fills_day)} fills`
-            }
-            primary={
-              <>
-                {hedged && <span className="dk-mv-k">hedge </span>}
-                <Money v={made(r)} />
-              </>
-            }
-            secondary={hedged ? undefined : `MM ${money(r.mm_pnl)} · Inv ${money(r.inv_pnl)}`}
-            to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
-          />
-        );
-      })}
-      {list.length === 0 && <div className="m-empty">{side === "best" ? "Nothing has made money today yet." : "Nothing has lost money today."}</div>}
-    </Section>
   );
 });
 
@@ -339,8 +229,8 @@ function EngineHedgeBar({ e }: { e: NonNullable<ReturnType<typeof useEngineHedge
   return (
     <button type="button" className="m-plain-btn" onClick={() => navigate({ page: "strategy" })}>
       <LimitBar
-        label={e.word === "Within the band" ? "Unhedged" : e.word}
-        value={e.unhedged ?? 0}
+        label={e.word === "Within the band" ? "Hedge gap" : e.word}
+        value={e.gap ?? 0}
         limit={e.band ?? 0}
         centered
       />

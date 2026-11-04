@@ -10,7 +10,7 @@ import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from
 import { ExChart, GAP, Tabs, TextToggle, rgba, useExPref, type ExLegendItem, type ExOhlc, type ExPoint, type ExSeries } from "../../components/ex";
 import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
-import { dayEnds, pastStep, useDayOffsets, usePast, type DayOffset } from "./past";
+import { dayEnds, pastStep, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
 import { roled, useDesk, notionalCur } from "../../desk";
 
@@ -98,8 +98,8 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     () => (step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)),
     [step, minRows, bars, series, fills, dayStart],
   );
-  // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null until those are in)
-  const offAt = useDayOffsets(tab === "pnl" ? dayStart : null);
+  // each day from 0, as the phone's Desk: the Desk is today's P&L (History has the running total over the days)
+  const offAt = null as ((t: number) => DayOffset) | null | undefined;
   // until the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
   const head = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? past.rows.map((r) => runOn(r, offAt(r.t))) : past.rows), [past.rows, offAt]);
   const tail = useMemo(() => (offAt === undefined ? NO_ROWS : offAt ? today.map((r) => runOn(r, offAt(r.t))) : today), [today, offAt]);

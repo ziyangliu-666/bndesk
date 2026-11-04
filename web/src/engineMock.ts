@@ -65,12 +65,13 @@ function build(): Built {
     inv += (r() - 0.5) * (us ? 260 : 90) - (inv - 3500) * 0.002;
     beta += (r() - 0.5) * 0.004 - (beta - 0.33) * 0.01;
     const bw = inv * beta;
-    const band = Math.max(600, 0.4 * Math.abs(bw));
-    const want = -bw;
     const paused = new Date(x).getUTCDay() === 6 ? 1 : 0;
-    if (!paused && Math.abs(want - target) > band) {
-      const isTaker = Math.abs(want - target) > 3 * band;
-      target = Math.round(want / 10) * 10;
+    // as anchor_mm: the target follows the beta-weighted inventory every step (clamped), the hedge only moves when
+    // a rebalance fills; one starts once the hedge is a band from its target
+    target = paused ? 0 : Math.max(-10_000, Math.min(10_000, -bw));
+    const band = Math.max(600, 0.4 * Math.abs(target));
+    if (!paused && chase === 0 && Math.abs(target - pos) >= band) {
+      const isTaker = Math.abs(target - pos) >= 3 * band;
       count++;
       rebalT = x - Math.floor(r() * STEP);
       if (isTaker) taker++;
@@ -79,7 +80,7 @@ function build(): Built {
       slip = slip * 0.8 + (isTaker ? 4 + r() * 4 : -0.5 + r() * 2) * 0.2;
       lat = lat * 0.8 + (isTaker ? 300 + r() * 400 : 15_000 + r() * 60_000) * 0.2;
     }
-    if (chase > 0 && --chase === 0) pos = target;
+    if (chase > 0 && --chase === 0) pos = Math.round(target / 10) * 10;
     for (let i = 0; i < accts.length; i++) {
       const d = (r() - 0.5) * 300;
       locked[i] = Math.max(500, Math.min(8000, locked[i]! + d));

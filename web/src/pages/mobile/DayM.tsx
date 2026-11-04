@@ -1,19 +1,18 @@
 import { useMemo } from "react";
 import { useStore, serverNow } from "../../store";
 import { getJSON, type History as Hist } from "../../api";
-import { int, num } from "../../format";
+import { int, num, signClass } from "../../format";
 import { C, PNL_COLORS as P, PNL_STROKES as S, type Stroke } from "../../theme";
 import { ExChart, SeriesKey, type ExBoxRow, type ExSeries } from "../../components/ex";
 import { showInfo } from "../../components/mobile";
 import { DAY, PART_INFO, useLoad } from "./shared";
 import { Amt, Big, Row, Sec, Stats, amt, useAmt } from "./rest/ui";
+import { rangeFrom, useRangeDays, type DayRow } from "../history/data";
 import { MASK } from "../../mask";
 import "./rest/assets.css";
 import "./history.css";
 import { cur, useDesk, notionalCur } from "../../desk";
 
-const DEF_SE =
-  "± is the likely error of the figure: its standard error, from how much the day's hourly results varied (Newey–West, lag 3).";
 // the split as the desk lists it: Trading PnL as the subtotal of its two parts, then the rest
 const PARTS = [
   { key: "trading", label: "Trading PnL", color: P.trading, stroke: S.trading, sub: false },
@@ -33,6 +32,7 @@ export function DayM({ date }: { date: string }) {
   const today = days?.[days.length - 1]?.day;
   const d = days?.find((x) => x.day === date);
   const money = useAmt();
+  const hide = useStore((s) => s.hideAmounts);
   // the day's start: today's, moved back by whole days
   const start = today ? dayStart - Math.round((Date.parse(today + "T00:00:00Z") - Date.parse(date + "T00:00:00Z")) / DAY) * DAY : 0;
   const live = date === today;
@@ -41,6 +41,7 @@ export function DayM({ date }: { date: string }) {
   // Day PnL as the History list has it: the desk's own figure, else the day's change on the equity history
   const fromPath = path.pts.length ? path.pts[path.pts.length - 1]!.pnl : null;
   const pnl = kept ? d!.pnl_day : fromPath;
+  const vs = useVsAverage(date, pnl, dayStart);
   if (!d && !path.pts.length) {
     if (path.loading) return <DayPath start={start} path={path} />;
     return <div className="r-empty">This day is not among the {days?.length ?? 0} the desk keeps.</div>;
@@ -53,11 +54,18 @@ export function DayM({ date }: { date: string }) {
         label={`Day PnL${live ? ", so far" : ""} (${cur()})`}
         value={<Amt v={pnl} />}
         sub={
-          kept ? undefined : pnl != null ? (
-            <>From the equity history: the split was not kept this day</>
-          ) : (
-            <>No Day PnL this day · Trading {money(d?.trading)} ± {money(d?.trading_se, "full")}</>
-          )
+          <>
+            {vs && (
+              <div className="hm-vs">
+                <span className={hide ? "masked" : signClass(vs.diff)}>{money(vs.diff)}</span> vs the {vs.n}-day average
+              </div>
+            )}
+            {kept ? null : pnl != null ? (
+              <div>From the equity history: the split was not kept this day</div>
+            ) : (
+              <div>No Day PnL this day · Trading {money(d?.trading)}</div>
+            )}
+          </>
         }
       />
       <DayPath start={start} path={path} />
@@ -87,25 +95,7 @@ export function DayM({ date }: { date: string }) {
         </Sec>
       )}
 
-      {d && desk.hedge && <><Sec title="Trading PnL if hedged" info={`Trading PnL minus what the inventory would have made on its references (hedged on refs), or on the beta instrument (hedged on beta). ${DEF_SE}`} right="± likely error">
-        <Stats
-          cols={3}
-          items={[
-            { label: "Not hedged", value: <SeVal v={d.trading} se={d.trading_se} /> },
-            {
-              label: "On refs",
-              info: `Trading PnL minus what the inventory would have made on each instrument's own reference, hedged with a 0–1 s delay. ${cur()}. ` + DEF_SE,
-              value: <SeVal v={d.hedged} se={d.hedged_se} />,
-            },
-            {
-              label: "On beta",
-              info: `Trading PnL minus what the inventory would have made on the beta instrument, each market weighted by its beta. ${cur()}. ` + DEF_SE,
-              value: <SeVal v={d.factor} se={d.factor_se} />,
-            },
-          ]}
-        />
-      </Sec>
-
+      {d && (
       <Sec title="Activity">
         <Stats
           cols={3}
@@ -121,19 +111,22 @@ export function DayM({ date }: { date: string }) {
             },
           ]}
         />
-      </Sec></>}
+      </Sec>
+      )}
     </>
   );
 }
 
-function SeVal({ v, se }: { v: number | null; se: number | null }) {
-  const money = useAmt();
-  return (
-    <>
-      <Amt v={v} />
-      <span className="h-se"> ±{se == null ? "--" : money(se, "full")}</span>
-    </>
-  );
+/** The day against the finished days before it with a Day PnL: up to 14 of them, 3 at least, else nothing. */
+function useVsAverage(date: string, pnl: number | null | undefined, dayStart: number): { diff: number; n: number } | null {
+  const { rows } = useRangeDays(dayStart ? rangeFrom("all", dayStart) : null);
+  return useMemo(() => {
+    if (pnl == null) return null;
+    const before = rows.filter((r: DayRow) => r.day < date && r.pnl != null).slice(0, 14);
+    if (before.length < 3) return null;
+    const avg = before.reduce((k, r) => k + r.pnl!, 0) / before.length;
+    return { diff: pnl - avg, n: before.length };
+  }, [rows, date, pnl]);
 }
 
 type PathPt = { time: number; pnl: number; trading: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null };
@@ -212,7 +205,7 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
     return rows;
   };
   return (
-    <div className="r-chart">
+    <div className="r-chart hm-day-chart">
       <ExChart
         id="m-day"
         title="Day PnL through the day, 5 min"

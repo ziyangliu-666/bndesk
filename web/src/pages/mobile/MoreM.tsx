@@ -1,6 +1,7 @@
 import { useStore } from "../../store";
 import { useNow } from "../../hooks";
-import { bps, countdown, hm, hms, int } from "../../format";
+import { bps, countdown, hm, hms, int, num } from "../../format";
+import { useEngineHedge, useEngineLatest } from "../strategy/engine";
 import { nextEvent } from "../../components/Header";
 import { useFreshness } from "../../components/mobile/StatusPill";
 import { TextToggle, TvAttribution } from "../../components/ex";
@@ -26,6 +27,10 @@ export function MoreM() {
   const dayStart = useStore((s) => s.snap?.summary.day_start);
   const fresh = useFreshness();
   const zone = tz === "utc" ? "UTC" : "local time";
+  // the engine's hedge as Strategy opens with it; null: no fresh push
+  const eh = useEngineHedge(now);
+  // a push once seen and now stale is worth a word; a desk whose engine never pushes says nothing
+  const engineSeen = useEngineLatest().latest?.t != null;
 
   // the feeds as the System page classifies them (up, silent, flapping, down)
   const fs = feeds ? feedSummary(feeds, now, alerts) : null;
@@ -42,7 +47,13 @@ export function MoreM() {
           valueSub={markout != null ? "10 s, last hour" : undefined}
           to={{ page: "analysis" }}
         />
-        <Row title="Strategy" sub="The engine's hedge and quoting" to={{ page: "strategy" }} />
+        <Row
+          title="Strategy"
+          sub="The engine's hedge and quoting"
+          value={eh ? <span className={eh.tone}>{eh.word}</span> : engineSeen ? <span className="warn-text">No push</span> : undefined}
+          valueSub={eh?.inBands != null ? `gap ${num(eh.inBands, 2, true)} bands` : undefined}
+          to={{ page: "strategy" }}
+        />
         <Row title="Orders" sub="Open orders, quote map, rate limits" value={<span className="r-fig">{int(nOrders)}</span>} valueSub="open" to={{ page: "orders" }} />
         <Row
           title="System"

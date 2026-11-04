@@ -50,21 +50,21 @@ function exposureFact(x: Exposure, m: (s: string) => ReactNode, hide: boolean): 
 }
 
 function engineFact(e: NonNullable<ReturnType<typeof useEngineHedge>>, m: (s: string) => ReactNode): Fact {
-  const over = e.unhedged != null && e.band != null && Math.abs(e.unhedged) > e.band;
+  const over = e.gap != null && e.band != null && Math.abs(e.gap) >= e.band;
   return {
     label: (
       <button type="button" className="dk-tk-link" onClick={() => navigate({ page: "strategy" })}>
-        {e.word === "Within the band" ? "Unhedged" : e.word}
+        {e.word === "Within the band" ? "Hedge gap" : e.word}
       </button>
     ),
     value: (
       <>
-        {m(pnl(e.unhedged))}
+        {m(pnl(e.gap))}
         <span className="dk-tk-of"> / ±{m(num(e.band, 0))}</span>
       </>
     ),
     tone: over ? "warn" : undefined,
-    title: `The engine's beta-weighted inventory its hedge does not offset, against its band (Strategy has the history). ${cur()}.`,
+    title: `The engine's hedge target minus its hedge, against the band at which it rebalances (Strategy has the history). ${cur()}.`,
   };
 }
 

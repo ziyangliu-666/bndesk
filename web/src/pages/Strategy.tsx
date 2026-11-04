@@ -10,7 +10,7 @@ import { ExChart, Tabs, useExPref, type ExMarker, type ExSeries } from "../compo
 import { amount, maskText, useHide } from "../mask";
 import { useNow } from "../hooks";
 import { FundingPanel, HedgePanel } from "./Accounts";
-import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
+import { BLOCK, STALE_MS, dateTag, engineTrouble, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
 import "./ops/ops.css";
 import "./strategy/strategy.css";
 import { cur } from "../desk";
@@ -54,7 +54,7 @@ function HedgeState({ m, age, stale, trouble }: { m: Record<string, number>; age
   return (
     <div className="st-state">
       <span className={"st-state-word " + (trouble && !stale ? "crit-text" : h.tone)}>{trouble && !stale ? trouble : h.word}</span>
-      {h.inBands != null && <span className="st-state-sub fig">{`unhedged ${num(h.inBands, 2, true)} bands`}</span>}
+      {h.inBands != null && <span className="st-state-sub fig">{`gap ${num(h.inBands, 2, true)} bands`}</span>}
     </div>
   );
 }
@@ -73,14 +73,13 @@ function HedgeFigures({ m, rebal, hide }: { m: Record<string, number>; rebal: Re
   const h = hedgeState(m, false, null, dur);
   return (
     <div className="st-figs">
-      <Fig label="Unhedged" title={`Beta-weighted inventory the hedge does not offset (beta-weighted + hedge), ${cur()}`}>{a(h.unhedged)}</Fig>
+      <Fig label="Hedge gap" title={`Target − hedge: the engine rebalances once it reaches the band, ${cur()}`}>{a(h.gap)}</Fig>
       <Fig label="Band" title={`Unhedged allowed before a maker rebalance; past the taker band the engine crosses, ${cur()}`}>
-        {mv(m, "band") == null ? "--" : maskText(hide, "±" + compact(mv(m, "band")))}
-        {mv(m, "takerBand") != null && <span className="ops-unit">{maskText(hide, "taker ±" + compact(mv(m, "takerBand")))}</span>}
+        {mv(m, "band") == null ? "--" : maskText(hide, "±" + num(mv(m, "band"), 0))}
+        {mv(m, "takerBand") != null && <span className="ops-unit">{maskText(hide, "taker ±" + num(mv(m, "takerBand"), 0))}</span>}
       </Fig>
       <Fig label="Target">
         {a(target)}
-        {h.behind != null && Math.abs(h.behind) > 0.5 && <span className="ops-unit">{maskText(hide, compact(h.behind, 1, true) + " to fill")}</span>}
       </Fig>
       <Fig label="Hedge position" title="The engine's position in the hedge perpetual, at its mid">{a(pos)}</Fig>
       <Fig label="Beta-weighted inventory">{a(mv(m, "bw"))}</Fig>
@@ -107,10 +106,8 @@ export function GapChart({ s, rebal, hide, height }: { s: ReturnType<typeof useE
     const band = s?.v[skey("band")] ?? [];
     const pos = s?.v[skey("pos")] ?? [];
     const tb = s?.v[skey("takerBand")] ?? [];
-    // the beta-weighted inventory the hedge does not offset, in bands: it drifts to ±1, a rebalance brings it back
-    const gap = pts(s, skey("bw"), (bw, i) => (pos[i] != null && band[i] ? (bw + pos[i]!) / band[i]! : null));
-    // and a rebalance still filling: the target the hedge has not reached, in bands
-    const behind = pts(s, skey("target"), (t, i) => (pos[i] != null && band[i] ? (t - pos[i]!) / band[i]! : null));
+    // the engine's gap, target − hedge, in bands: it drifts to ±1 as the inventory moves, a rebalance brings it back
+    const gap = pts(s, skey("target"), (t, i) => (pos[i] != null && band[i] ? (t - pos[i]!) / band[i]! : null));
     const from = Date.now() - DAY;
     let takerBands: number | null = null;
     for (let i = (s?.t.length ?? 0) - 1; i >= 0; i--)
@@ -119,8 +116,7 @@ export function GapChart({ s, rebal, hide, height }: { s: ReturnType<typeof useE
         break;
       }
     const series: ExSeries[] = [
-      { key: "gap", kind: "line", label: "Unhedged", toggle: false, color: C.ink, width: 1.5, format: (v) => num(v, 2, true), data: gap },
-      { key: "behind", kind: "line", label: "To fill", color: C.warn, width: 1, format: (v) => num(v, 2, true), data: behind, lastValue: false },
+      { key: "gap", kind: "line", label: "Gap", toggle: false, color: C.ink, width: 1.5, format: (v) => num(v, 2, true), data: gap },
     ];
     return { series, last24: gap.filter((p) => p.time >= from).length, takerBands };
   }, [s]);
@@ -154,11 +150,11 @@ export function GapChart({ s, rebal, hide, height }: { s: ReturnType<typeof useE
       <ExChart
         id="st-gap"
         height={height}
-        title="Unhedged"
+        title="Hedge gap"
         series={series}
         markers={hide ? [] : markers}
         priceLines={lines}
-        toolbarLeft={<span className="ops-chart-title">Unhedged, in bands</span>}
+        toolbarLeft={<span className="ops-chart-title">Gap to target, in bands</span>}
         initialBars={Math.max(2, last24)}
         fill={height == null}
         fullscreen
@@ -219,7 +215,7 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
                 <th className="l">Time</th>
                 <th className="l">Type</th>
                 <th className="l">Trigger</th>
-                <th title={`Target before and after, ${cur()}`}>Target</th>
+                <th title={`The hedge before it, and the target it went for, ${cur()}`}>Hedge → target</th>
                 <th title="Average slippage after it, bps">Slip</th>
                 <th title="Average time to fill after it">Fill</th>
               </tr>
@@ -228,13 +224,13 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
               {rows.map((r) => (
                 <tr key={r.t}>
                   <td className="l fig">
-                    {new Date(r.t).toDateString() !== new Date().toDateString() && <span className="muted">{new Date(r.t).toISOString().slice(5, 10)} </span>}
+                    {dateTag(r.t, tz) && <span className="muted">{dateTag(r.t, tz)}</span>}
                     {hms(r.t, tz)}
                   </td>
                   <td className={"l" + (r.taker ? " warn-text" : "")}>{r.taker == null ? "--" : r.taker ? "Taker" : "Maker"}{r.n > 1 ? ` ×${r.n}` : ""}</td>
                   <td className="l">{r.trigger ?? "--"}</td>
                   <td className="fig">
-                    <span className="muted">{a(r.prevTarget)} → </span>
+                    <span className="muted">{a(r.from)} → </span>
                     {a(r.target)}
                   </td>
                   <td className="fig">{r.slip == null ? "--" : bps(r.slip)}</td>

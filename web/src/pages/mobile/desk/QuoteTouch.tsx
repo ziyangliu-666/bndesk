@@ -5,13 +5,12 @@
 // row's place (the busiest list re-ranks); it ends on the next tap on the map, a touch anywhere else on the
 // page, or a scroll.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { QuoteLegend, QuoteRows, SORTS, mapCounts, quoteRows, rowsFor, sidesOf, type MapSort, type QRow } from "../../../components/quotes";
-import { useBusiest } from "../../../selectors";
-import { selectInstrument, useStore } from "../../../store";
+import { QuoteLegend, QuoteRows, SORTS, mapCounts, quoteRows, sidesOf, type MapSort, type QRow } from "../../../components/quotes";
+import { openMarkets, selectInstrument, useStore } from "../../../store";
 import { LONG_PRESS_MS } from "../../../gesture";
 import { useExPref } from "../../../components/ex";
 import { bps, int, price } from "../../../format";
-import { Chips, Segmented, useLive, useMoney } from "../../../components/mobile";
+import { Chips, ListRow, Segmented, useLive, useMoney } from "../../../components/mobile";
 import { baseOf } from "../../../desk";
 
 const AXIS_H = 18;
@@ -216,18 +215,33 @@ function Reading({ row, style }: { row: QRow; style: CSSProperties }) {
   );
 }
 
-/** The Desk's block: the `n` busiest instruments, live (at `ms`). */
-export function QuotesMini({ n = 8, ms }: { n?: number; ms: number }) {
-  const keys = useBusiest(n);
+/** The Desk's line for the quotes: how many orders rest and how many instruments quote one side only (through
+ *  fair in amber); a tap opens Markets → Quotes, where the map is. */
+export function QuotesLine({ ms }: { ms: number }) {
   const symbols = useLive((s) => s.snap?.symbols, ms);
   const orders = useLive((s) => s.snap?.orders, ms);
-  const rows = useMemo(() => rowsFor(keys, symbols ?? [], orders ?? []), [keys, symbols, orders]);
-  return <QuoteTouch rows={rows} range={25} rowH={34} label={58} empty="Nothing quoted right now" />;
+  const n = useMemo(() => mapCounts(quoteRows(symbols ?? [], orders ?? [], "name")), [symbols, orders]);
+  return (
+    <ListRow
+      dense
+      chevron
+      className="dk-qline"
+      title="Quotes"
+      primary={
+        <span className="m-fig">
+          {int(n.orders)} orders
+          {n.oneSide > 0 && <> · {int(n.oneSide)} one side</>}
+          {n.through > 0 && <span className="warn-text"> · {int(n.through)} through fair</span>}
+        </span>
+      }
+      onClick={() => openMarkets("quotes")}
+    />
+  );
 }
 
 const RANGES = [10, 25, 50, 100] as const;
 
-/** Markets → Quotes and More → Orders → Quotes: every quoted instrument, with the range and the order above the
+/** Markets → Quotes (the one place the map is drawn on the phone): every quoted instrument, with the range and the order above the
  *  map and its counts (one side, wide, through fair) under them. */
 export function QuotesFull({ ms }: { ms: number }) {
   // the map's choices, shared with the desktop's Orders map (useQuoteMapState keeps them under ex.qmap.*)
@@ -260,7 +274,7 @@ export function QuotesFull({ ms }: { ms: number }) {
             { value: "activity", label: "Busiest" },
             { value: "wide", label: "Widest" },
             { value: "oneside", label: "One side" },
-            { value: "inventory", label: "Inventory" },
+            { value: "inventory", label: "Held" },
             { value: "name", label: "A–Z" },
           ]}
         />

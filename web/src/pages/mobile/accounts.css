@@ -1,2 +1,13 @@
-
-
+/* the head's second line: where the value sits, and today's rebates and transfers; quieter than the total. Each
+   pair as wide as it needs, spread across the line, wrapping when the figures grow */
+.r-stats.a-parts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: -6px;
+  padding: 0 0 12px;
+}
+.a-parts .r-stat-v {
+  color: var(--ink-2);
+}

@@ -1,38 +1,27 @@
-import { useMemo } from "react";
-import { navigate, useStore } from "../../store";
+import { Fragment, useMemo, useRef } from "react";
+import { useStore } from "../../store";
 import { useThrottled } from "../../hooks";
-import { bps, compact, int } from "../../format";
+import { bps, compact, hm, int } from "../../format";
 import { C } from "../../theme";
-import {
-  ExChart,
-  useExPref,
-  type ExBoxRow,
-  type ExSeries,
-} from "../../components/ex";
+import { ExChart, Tabs, rgba, useExPref, type ExBoxRow, type ExLegendItem, type ExSeries } from "../../components/ex";
+import { REF_LINE } from "../../components/ex/palette";
 import type { SymbolRow } from "../../protocol";
 import { useHedgePnl } from "../../selectors";
-import { daySummary, deskRows, rangeFrom, summaryNote, useDeskHistory, useRangeDays, type DayRow, type Range as HRange } from "../history/data";
+import { IV_LABEL, STEP_S, daySummary, deskRows, rangeFrom, useDeskHistory, useRangeDays, weekBars, type DayRow, type HInterval, type Row as KRow } from "../history/data";
 import { dayTitle } from "./index";
-import {
-  Amt,
-  Empty,
-  PageTabs,
-  Row,
-  Sec,
-  Stats,
-  amt,
-  useAmt,
-} from "./rest/ui";
+import { Amt, Empty, PageTabs, Row, Sec, amt, useAmt } from "./rest/ui";
+import { BestWorst, Calendar, Split, Summary } from "./history/DeskParts";
 import "./history.css";
 import { MASK } from "../../mask";
-import { cur, earlierNote, useDesk, isHedge, venueTag } from "../../desk";
+import { cur, useDesk, isHedge, notionalCur, venueTag } from "../../desk";
 
 // ---- History: the desk's days (the running P&L as day candles, then the list), or the instruments. The chart holds every day
 // kept (a year at most: a few KB), and the summary and the list cover all of them: no range to pick ----
 
 type Tab = "desk" | "inst";
-type Range = "7" | "30" | "90" | "all";
-const RANGE_OF: Record<Range, HRange> = { "7": "7d", "30": "30d", "90": "90d", all: "all" };
+// the phone's intervals: hours (today's and the last days'), days, weeks; 15 minutes are too fine to read here
+const IVS: HInterval[] = ["1h", "4h", "1d", "1w"];
+const IV_OPTS = IVS.map((v) => ({ value: v, label: IV_LABEL[v] }));
 
 export function HistoryM() {
   const [tab, setTab] = useExPref<Tab>("m-hist", "tab", "desk", [
@@ -55,22 +44,27 @@ export function HistoryM() {
 }
 
 function DeskHistory() {
-  const range: Range = "all";
   const hide = useStore((s) => s.hideAmounts);
+  const tz = useStore((s) => s.tz);
   const money = useAmt();
-  // the range's days, as the desktop History has them (the snapshot's kept days and the day bars of
-  // /api/history), summed the same way
+  // every day kept, as the desktop History has them (the snapshot's kept days and the day bars of /api/history)
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? null);
-  const from = dayStart == null ? null : rangeFrom(RANGE_OF[range], dayStart);
+  const from = dayStart == null ? null : rangeFrom("all", dayStart);
   const { rows, todayDay: todayKey } = useRangeDays(from);
-  // oldest first
-  const days = useMemo(() => rows.slice().reverse(), [rows]);
   const sum = useMemo(() => daySummary(rows, todayKey), [rows, todayKey]);
 
-  // the chart: the running P&L as day candles (each opens where the day before closed), from the day bars
-  const bars = useDeskHistory(86_400, from);
-  const kRows = useMemo(() => (dayStart == null ? [] : deskRows(bars.bars, "day", dayStart, null)), [bars.bars, dayStart]);
-  const dayAt = useMemo(() => new Map(days.map((d) => [d.start, d])), [days]);
+  // the chart: the running P&L as candles (each opens where the one before closed), volume under it
+  const [iv, setIv] = useExPref<HInterval>("m-hist", "interval", "1d", IVS);
+  const bars = useDeskHistory(STEP_S[iv], from);
+  const prev = useRef<KRow[] | null>(null);
+  const kRows = useMemo(() => {
+    if (dayStart == null || !bars.bars.length) return (prev.current = []);
+    const r = iv === "1w" ? deskRows(weekBars(bars.bars), "week", dayStart, null) : deskRows(bars.bars, "day", dayStart, prev.current);
+    prev.current = r;
+    return r;
+  }, [bars.bars, iv, dayStart]);
+  const byT = useMemo(() => new Map(kRows.map((r) => [r.t, r])), [kRows]);
+  const dayAt = useMemo(() => new Map(rows.map((d) => [d.start, d])), [rows]);
   const series = useMemo<ExSeries[]>(() => {
     const fmt = hide ? () => MASK : (x: number) => amt(x, "pnl");
     return [
@@ -85,89 +79,105 @@ function DeskHistory() {
           return { time: r.t, open: r.o + off, high: Math.max(r.h, r.o, r.c) + off, low: Math.min(r.l, r.o, r.c) + off, close: r.cum };
         }),
       },
+      {
+        key: "vol",
+        kind: "histogram",
+        label: `Vol(${notionalCur()})`,
+        pane: 1,
+        toggle: false,
+        color: rgba(C.ink2, 0.32),
+        lastValue: false,
+        format: hide ? () => MASK : (v: number) => compact(v),
+        data: kRows.map((r) => ({ time: r.t, value: r.volume })),
+      },
     ];
   }, [kRows, hide]);
+  const word = iv === "1w" ? "Week" : iv === "1d" ? "Day" : "Bar";
   const boxRows = (t: number): ExBoxRow[] => {
-    const k = kRows.find((r) => r.t === t);
+    const k = byT.get(t);
     if (!k) return [];
-    const d = dayAt.get(t);
-    const r = (label: string, v: number | null | undefined): ExBoxRow => [
-      label,
-      money(v),
-      hide ? C.muted : v! > 0 ? C.up : v! < 0 ? C.down : C.ink,
-    ];
+    const d = iv === "1d" ? dayAt.get(t) : undefined;
+    const tone = (v: number | null | undefined): string => (hide ? C.muted : v! > 0 ? C.up : v! < 0 ? C.down : C.ink);
     return [
-      ["Day", d?.day ?? new Date(t).toISOString().slice(0, 10)],
-      r("Cumulative", k.cum),
-      r("Day PnL", d?.pnl ?? k.pnl),
+      [word, iv === "1d" ? (d?.day ?? new Date(t).toISOString().slice(0, 10)) : iv === "1w" ? `from ${new Date(t).toISOString().slice(0, 10)}` : hm(t, tz)],
+      ["Cumulative", money(k.cum), tone(k.cum)],
+      [`${word} PnL`, money(d?.pnl ?? k.pnl), tone(d?.pnl ?? k.pnl)],
       ["Fills", int(d?.fills ?? k.fills)],
     ];
   };
+  const legendExtra = useMemo<ExLegendItem[]>(() => [{ label: "Fills", pane: 1, line: 1, value: (t) => [int(byT.get(t)?.fills), C.ink] }], [byT]);
+  const zeroLine = useMemo(() => [{ series: "k", price: 0, color: REF_LINE, style: "solid" as const, axisLabel: false }], []);
+  // intraday bars open on the last days (a year of hours does not read on a phone); days and weeks on all of them
+  const initial = iv === "1h" ? 72 : iv === "4h" ? 42 : kRows.length;
 
-  const label = `PnL, all days (${cur()})`;
+  // By day | By hour (today)
+  const [tab, setTab] = useExPref<"day" | "hour">("m-hist", "table", "day", ["day", "hour"]);
+  const hours = useDeskHistory(3600, tab === "hour" ? dayStart : null);
+  const hourRows = useMemo(() => (dayStart == null ? [] : deskRows(hours.bars, "day", dayStart, null).slice().reverse()), [hours.bars, dayStart]);
+  // the first day (newest first) from before the desk kept a split: the list says so once, there
+  const firstUnsplit = rows.findIndex((d) => !d.split && d.pnl != null);
 
   return (
     <>
-      <div className="h-sum">
-        <div className="h-sum-l">
-          <div className="h-sum-label">{label}</div>
-          <Amt v={sum.total} className="h-sum-v" />
-          {rows.length > 0 && <div className="h-sum-note">{summaryNote(sum)}</div>}
-          {earlierNote() && <div className="h-sum-note" title={earlierNote()!.title}>{earlierNote()!.text}</div>}
-        </div>
-        <Stats
-          cols={2}
-          className="h-sum-r"
-          items={[
-            {
-              label: "Days up",
-              info: "Finished days that made money, of the finished days in the range. Today is still moving: it counts in the total, not here, nor as the best or worst day.",
-              value: sum.finished ? `${sum.up} of ${sum.finished}` : "--",
-            },
-            {
-              label: "Best day",
-              value: <Amt v={sum.best?.pnl ?? null} />,
-              // a tap opens the day (its page has the path and the split)
-              onClick: sum.best ? () => navigate({ page: "history", detail: { kind: "day", date: sum.best!.day } }) : undefined,
-            },
-            { label: "Fills", value: rows.length ? compact(sum.fills) : "--" },
-            {
-              label: "Worst day",
-              value: <Amt v={sum.worst?.pnl ?? null} />,
-              onClick: sum.worst ? () => navigate({ page: "history", detail: { kind: "day", date: sum.worst!.day } }) : undefined,
-            },
-          ]}
-        />
-      </div>
-      <div className="r-chart">
+      <Summary sum={sum} rows={rows} />
+      <div className="r-chart hm-chart">
         <ExChart
           id="m-hist-k"
           title="Desk PnL"
           series={series}
-          height={280}
-          loading={bars.loading}
-          initialBars={Math.max(2, kRows.length)}
-          resetKey={range}
+          paneStretch={[1, 0.22]}
+          height={300}
+          intervals={IV_OPTS}
+          interval={iv}
+          onInterval={(v) => setIv(v as HInterval)}
+          loading={bars.loading || from == null}
+          initialBars={Math.max(2, Math.min(initial, kRows.length))}
+          resetKey={iv}
           rightOffset={0.6}
           fixEdges
           fullscreen
           legendRest="names"
+          legendExtra={legendExtra}
+          priceLines={zeroLine}
           boxRows={boxRows}
-          emptyText="No days kept yet"
+          emptyText={bars.error ? "Could not load the history" : "No days kept yet"}
         />
       </div>
 
-      <Sec
-        title="By day"
-        right={sum.missing ? `${sum.missing} without Day PnL` : cur()}
-      >
-        {days
-          .slice()
-          .reverse()
-          .map((d) => (
-            <DayItem key={d.day} d={d} today={d.day === todayKey} />
-          ))}
-        {!days.length && <Empty>No days kept yet</Empty>}
+      <Split rows={rows} sum={sum} />
+      <Calendar rows={rows} todayDay={todayKey} />
+      <BestWorst rows={rows} todayDay={todayKey} />
+
+      <Sec className="hm-tables">
+        <div className="hm-tabs">
+          <Tabs
+            items={[
+              { value: "day", label: "By day" },
+              { value: "hour", label: "By hour (today)" },
+            ]}
+            value={tab}
+            onChange={setTab}
+            right={<span className="hm-tabs-r">{tab === "day" && sum.missing ? `${sum.missing} without Day PnL` : cur()}</span>}
+          />
+        </div>
+        {tab === "day" ? (
+          <>
+            {rows.map((d, i) => (
+              <Fragment key={d.day}>
+                {i === firstUnsplit && <div className="hm-div">Before the split was kept: Day PnL only</div>}
+                <DayItem d={d} today={d.day === todayKey} />
+              </Fragment>
+            ))}
+            {!rows.length && <Empty>No days kept yet</Empty>}
+          </>
+        ) : (
+          <>
+            {hourRows.map((r) => (
+              <Row key={r.t} dense title={hm(r.t, tz)} sub={`${int(r.fills)} fills · Vol ${money(r.volume, "k")}`} value={<Amt v={r.pnl} />} />
+            ))}
+            {!hourRows.length && <Empty>{hours.loading ? "Loading" : "No hours yet today"}</Empty>}
+          </>
+        )}
       </Sec>
     </>
   );
@@ -199,7 +209,7 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
       }
       sub2={d.split}
       value={<Amt v={d.pnl} />}
-      valueSub={d.split ? (desk.rebates ? `Rebates ${money(d.reb)}` : undefined) : d.pnl != null ? "No split kept" : `Trading ${money(d.pi)} · no Day PnL`}
+      valueSub={d.split ? (desk.rebates ? `Rebates ${money(d.reb)}` : undefined) : d.pnl == null ? `Trading ${money(d.pi)} · no Day PnL` : undefined}
       to={{ page: "history", detail: { kind: "day", date: d.day } }}
     />
   );

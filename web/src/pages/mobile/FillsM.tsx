@@ -6,6 +6,7 @@ import { TextToggle } from "../../components/ex";
 import { FillRow, useFillSheet, type FillFig } from "./shared";
 import { Empty, Sec } from "./rest/ui";
 import "./rest/ops.css";
+import "./ops.css";
 
 const N = 100;
 const EMPTY: never[] = [];

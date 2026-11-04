@@ -6,8 +6,12 @@ import type { Alert, Engine, Feed } from "../../protocol";
 import { EngineFacts, EngineState, feedState, feedSummary, FeedRow, KillBar, LatencyTable, useRejectSpike, type FeedState } from "./shared";
 import "./ops.css";
 import "./rest/ops.css";
+import "./analysis.css";
 import { useExPref } from "../../components/ex";
 import { PageTabs } from "./rest/ui";
+
+/** Sentence case for the engine's own lower-case words ("binance usdm", "post only would cross"). */
+const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 
 const OK = ["up", "running", "live", "ok", "connected"];
 const ORDER: Record<FeedState, number> = { down: 0, flapping: 1, silent: 2, up: 3 };
@@ -47,8 +51,8 @@ function VenueBlock({ v, feeds, now, alerts }: { v: Engine["venues"][number]; fe
       cols={3}
       items={[
         {
-          label: v.name,
-          value: bad.length ? bad.join(", ") : states.length ? "all up" : "--",
+          label: cap(v.name),
+          value: bad.length ? cap(bad.join(", ")) : states.length ? "All up" : "--",
           tone: worst,
           span: 3,
         },
@@ -88,14 +92,14 @@ function EngineSection({ e, feeds, now, alerts }: { e: Engine; feeds: Feed[]; no
         <div className="m-ops-tbl" role="table">
           <div className="m-ops-tr head two" role="row">
             <span role="columnheader">Rejects by reason</span>
-            <span role="columnheader">since start</span>
+            <span role="columnheader">Since start</span>
           </div>
           {e.rejects
             .filter((r) => r.count > 0)
             .sort((a, b) => b.count - a.count)
             .map((r) => (
               <div className="m-ops-tr two" role="row" key={r.reason}>
-                <span role="cell">{r.reason}</span>
+                <span role="cell">{cap(r.reason)}</span>
                 <span role="cell" className="m-fig">{int(r.count)}</span>
               </div>
             ))}
@@ -128,7 +132,7 @@ export function EngineM() {
   const tone = (w: string) => (w === "crit" ? "crit-text" : w === "warn" ? "warn-text" : "");
 
   return (
-    <div className="o-page">
+    <div className="o-page m-sys">
       <PageTabs
         items={[
           ...(hasEngines
@@ -151,7 +155,8 @@ export function EngineM() {
       ) : (
         <>
           {bad.length > 0 && (
-            <Section title="Need a look" right={<span className={tone(sum.worst)}>{sum.text}</span>}>
+            // the count is the tab's and the Up section's; each row says its own state
+            <Section title="Need a look">
               {bad.map((f) => (
                 <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
               ))}

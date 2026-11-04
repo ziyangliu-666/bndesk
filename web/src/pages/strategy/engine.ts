@@ -152,14 +152,19 @@ export const STALE_MS = 50_000;
 let shared: { latest: Latest | null; error: string | null } = { latest: null, error: null };
 const subs = new Set<() => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
+/** A request out: a view mounting meanwhile must not start a second loop. */
+let inflight = false;
 async function poll() {
+  timer = null;
+  inflight = true;
   try {
     shared = { latest: await getJSON<Latest>("/api/engine/latest", {}), error: null };
   } catch (e) {
     shared = { ...shared, error: String(e) };
   }
+  inflight = false;
   for (const f of subs) f();
-  timer = subs.size ? setTimeout(poll, 15_000) : null;
+  if (subs.size) timer = setTimeout(poll, 15_000);
 }
 
 /** The last payload, again every 15 s. */
@@ -168,7 +173,7 @@ export function useEngineLatest(): { latest: Latest | null; error: string | null
   useEffect(() => {
     const f = () => tick((n) => n + 1);
     subs.add(f);
-    if (timer == null) void poll();
+    if (timer == null && !inflight) void poll();
     return () => {
       subs.delete(f);
       if (!subs.size && timer != null) clearTimeout(timer), (timer = null);
@@ -240,7 +245,8 @@ export interface Rebalance {
   taker: boolean | null;
   trigger: string | null;
   target: number | null;
-  prevTarget: number | null;
+  /** The hedge before it (the sample before). */
+  from: number | null;
   pos: number | null;
   slip: number | null;
   latency: number | null;
@@ -265,7 +271,7 @@ export function rebalances(s: Series | null): Rebalance[] {
   const out: Rebalance[] = [];
   let last: number | null = null;
   let lastTaker: number | null = null;
-  let lastTarget: number | null = null;
+  let lastPos: number | null = null;
   for (let i = 0; i < s.t.length; i++) {
     const c = cnt[i],
       t = tk[i];
@@ -281,7 +287,7 @@ export function rebalances(s: Series | null): Rebalance[] {
         taker: code != null ? TAKER_TRIGGERS.has(code) : t != null && lastTaker != null ? tookOver : null,
         trigger: code == null || code === 0 ? null : (TRIGGER[code] ?? `Code ${code}`),
         target: tgt[i] ?? null,
-        prevTarget: lastTarget,
+        from: lastPos,
         pos: pos[i] ?? null,
         slip: slip[i] ?? null,
         latency: lat[i] ?? null,
@@ -289,7 +295,7 @@ export function rebalances(s: Series | null): Rebalance[] {
     }
     last = c;
     if (t != null) lastTaker = t;
-    if (tgt[i] != null) lastTarget = tgt[i]!;
+    if (pos[i] != null) lastPos = pos[i]!;
   }
   // two in one sample, or a restart's clock: keep them in time order, one row per time
   out.sort((x, y) => x.t - y.t);
@@ -328,9 +334,10 @@ export function useMetrics(latest: Latest | null) {
 }
 
 /**
- * The hedge's state now. `unhedged`: the beta-weighted inventory the hedge does not offset (bw + hedge; the hedge
- * is short, negative), what the band is measured on; `behind`: the target the hedge has not reached yet
- * (target − hedge: a rebalance still filling).
+ * The hedge's state now, judged as the engine judges it: `gap` = target − hedge (the engine moves its target every
+ * step, −ratio × beta-weighted inventory clamped to its cap; it rebalances once the gap reaches the band, and crosses
+ * past the taker band). `unhedged` = beta-weighted inventory + hedge, the exposure itself (−gap unless the target is
+ * clamped or the ratio is not 1).
  */
 export function hedgeState(m: Record<string, number>, stale: boolean, age: number | null, dur: (ms: number | null) => string) {
   const target = mv(m, "target"),
@@ -340,22 +347,30 @@ export function hedgeState(m: Record<string, number>, stale: boolean, age: numbe
     tb = mv(m, "takerBand");
   const paused = (mv(m, "paused") ?? 0) > 0;
   const unhedged = bw != null && pos != null ? bw + pos : null;
-  const behind = target != null && pos != null ? target - pos : null;
-  const inBands = unhedged != null && band ? unhedged / band : null;
-  const filling = behind != null && band != null && Math.abs(behind) > 0.1 * band;
+  const gap = target != null && pos != null ? target - pos : null;
+  const inBands = gap != null && band ? gap / band : null;
   const pause = PAUSE[mv(m, "pauseReason") ?? 0] ?? (mv(m, "pauseReason") ? `code ${mv(m, "pauseReason")}` : "");
   const [word, tone] = stale
     ? ["No push for " + dur(age), "warn-text"]
     : paused
       ? ["Paused" + (pause ? `: ${pause}` : ""), "muted"]
-      : unhedged == null || band == null
+      : gap == null || band == null
         ? ["--", ""]
-        : tb != null && Math.abs(unhedged) > tb
+        : tb != null && Math.abs(gap) >= tb
           ? ["Past the taker band", "crit-text"]
-          : filling
+          : Math.abs(gap) >= band
             ? ["Rebalancing", "warn-text"]
-            : Math.abs(unhedged) > band
-              ? ["Outside the band", "warn-text"]
-              : ["Within the band", "up"];
-  return { unhedged, behind, inBands, word, tone, band, takerBand: tb };
+            : ["Within the band", "up"];
+  return { unhedged, gap, inBands, word, tone, band, takerBand: tb };
+}
+
+/** "11-03 " before a time that is not today, in the chosen time zone (UTC or the browser's). */
+export function dateTag(t: number, tz: "utc" | "local", now = Date.now()): string {
+  const day = (x: number) => {
+    const d = new Date(x);
+    return tz === "utc" ? [d.getUTCMonth(), d.getUTCDate()] : [d.getMonth(), d.getDate()];
+  };
+  const [m, d] = day(t);
+  const [nm, nd] = day(now);
+  return m === nm && d === nd ? "" : `${String(m! + 1).padStart(2, "0")}-${String(d).padStart(2, "0")} `;
 }

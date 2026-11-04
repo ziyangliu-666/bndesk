@@ -1,0 +1,107 @@
+/* Phone Analysis: overrides of the shared analysis plots (pages/analysis/*), scoped to the phone page. */
+
+/* the plots' legends: plain label over value on the black ground, no scrim boxes */
+.m-an .an-path .ex-lg-it,
+.m-an .an-dist .ex-lg-it {
+  background: var(--ground);
+  background-clip: content-box;
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  column-gap: 4px;
+  align-items: baseline;
+}
+.m-an .an-path .ex-lg-it > :first-child,
+.m-an .an-dist .ex-lg-it > :first-child {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.m-an .an-path .ex-lg-it > .ex-lg-v,
+.m-an .an-dist .ex-lg-it > .ex-lg-v {
+  grid-column: 1;
+  grid-row: 2;
+}
+.m-an .an-path .ex-lg-it > .ex-lg-v + .ex-lg-l {
+  grid-column: 2;
+  grid-row: 2;
+}
+/* labels muted, the figure carries the line's colour */
+.m-an .an-path .ex-lg-it .ex-lg-l {
+  color: var(--muted) !important;
+}
+/* the horizon heads the column of labels: it is the label row's first word */
+.m-an .an-path .ex-lg-v.an-lg-h {
+  grid-row: 1;
+  color: var(--ink-2);
+}
+.m-an .an-path .ex-legend,
+.m-an .an-dist .ex-legend {
+  line-height: 16px;
+}
+.m-an .ex-lg-line.an-lg-items {
+  column-gap: 14px;
+  flex-wrap: nowrap;
+}
+.m-an .an-path .ex-lg-it.tog {
+  padding-block: 4px;
+  margin-block: -4px;
+}
+
+/* through the day: edge to edge on the ground, as the other charts */
+.m-an-day .r-chart .ex-chart {
+  background: var(--ground);
+}
+.m-an-day .r-chart .ex-tb {
+  padding-left: var(--m-pad-l);
+  padding-right: calc(var(--m-pad-r) - 8px);
+}
+
+/* the instruments: a sort toggle in the head, 44 px targets */
+.m-an-inst-sec .r-head-r .ex-tt {
+  margin-right: -8px;
+}
+.m-an-inst-sec .r-head-r .ex-tt button {
+  min-height: 44px;
+  padding: 0 7px;
+  font-size: 13px;
+}
+.m-an-se {
+  margin-left: -6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* the distribution's legend: n is the Fills figure above and the mean the price path's at the same horizon, so
+   both are said once, up there; the median and the deciles stay */
+.m-an .an-dist .ex-lg-it:first-child:has(> .ex-lg-l:first-child),
+.m-an .an-dist .ex-lg-it:has(.an-k-mean) {
+  display: none;
+}
+.m-an .an-dist .ex-lg-l {
+  color: var(--muted);
+}
+
+/* edge vs 10 s: a fixed height on the phone, the legend plain like the others */
+.m-an-scatter {
+  display: flex;
+  height: 280px;
+  margin: 0 -4px;
+}
+.m-an .an-scatter .ex-lg-it {
+  background: var(--ground);
+  background-clip: content-box;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* System: the engine's latency stages arrive in lower case; sentence case them */
+.m-sys .m-ops-tr > span:first-child::first-letter {
+  text-transform: uppercase;
+}
+
+/* Alert: the check's definition is a tap away, its words dotted like every defined term */
+.m-alert-what .r-dotted {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 5px;
+  font-weight: 400;
+}

@@ -3,14 +3,16 @@ import { canHide, isHidden, useStore } from "../../store";
 import { useNow } from "../../hooks";
 import { bps, hm, hms, int, num, pct, price } from "../../format";
 import { LevelIcon } from "../../components/ui";
-import { KV, LimitBar, ListRow, Money, RateMeter, Section, Sparkline, SplitRows, Tag, span, useMoney } from "../../components/mobile";
+import { showInfo, KV, LimitBar, ListRow, Money, RateMeter, Section, Sparkline, SplitRows, Tag, span, useMoney } from "../../components/mobile";
 import type { Account, Alert, Snapshot, Venue } from "../../protocol";
 import type { RingPoint, Route } from "../../store";
 import { bandDef, pctDigits, useRejectSpike, EngineFacts, EngineState, FeedRow, KillBar, LatencyTable, feedProblem, useQty } from "./shared";
 import { RULES, alertText } from "./rules";
 import "./ops.css";
 import "./rest/ops.css";
-import { Sec, Stats } from "./rest/ui";
+import "./analysis.css";
+import { Row, Sec, Stats } from "./rest/ui";
+import { clearedTime } from "./AlertsM";
 import { cur, quoteAsset, baseOf, isTraded, marketOf, spotVenue, inventoryWord, venueTag, exchangeWord, cashWord } from "../../desk";
 
 /** One alert: what it says, what the rule means, how long it has held, and the live figures behind it. */
@@ -34,6 +36,7 @@ export function AlertM({ id }: { id: string }) {
   const rule = RULES[alert.rule];
   const zone = tz === "utc" ? " UTC" : "";
   const hidden = isHidden(alert, keys);
+  const cleared = clearedTime(alert);
   return (
     <div className="o-page">
       <Sec flush>
@@ -41,8 +44,6 @@ export function AlertM({ id }: { id: string }) {
           <LevelIcon level={alert.level} size={20} />
           <p>{alertText(alert, hide)}</p>
         </div>
-        {/* the server rewrites the text at each check while the alert holds */}
-        {alert.active && <p className="o-asof">Text from the server's last check</p>}
         {/* a warning or info can leave the badge and the Desk on this browser until it clears; a critical one never */}
         {canHide(alert) && (
           <div className="o-act-line">
@@ -52,14 +53,19 @@ export function AlertM({ id }: { id: string }) {
             </button>
           </div>
         )}
+        {/* the rule's name is the page title; here its times, and what the check watches a tap away */}
         <Stats
-          cols={3}
+          cols={2}
           items={[
-            { label: "Rule", value: rule?.name ?? alert.rule, info: rule?.means },
-            { label: "Since", value: hms(alert.since, tz) + zone },
-            alert.active ? { label: "Active for", value: span(now - alert.since) } : { label: "State", value: "Cleared" },
+            { label: "Raised", value: hms(alert.since, tz) + zone },
+            alert.active
+              ? { label: "Active for", value: span(now - alert.since) }
+              : cleared != null
+                ? { label: "Cleared", value: `${hm(cleared, tz)}, after ${span(cleared - alert.since)}` }
+                : { label: "State", value: "Cleared" },
           ]}
         />
+        {rule?.means && <Row dense className="m-alert-what" title={<span className="r-dotted">What the {rule.name} check watches</span>} onClick={() => showInfo(rule.name, rule.means)} />}
       </Sec>
       {alert.active ? <Evidence a={alert} now={now} /> : <Subject a={alert} />}
     </div>
@@ -399,7 +405,7 @@ function FeedsEv({ a, now, kind, subject }: { a: Alert; now: number; kind?: "res
     <Section
       title={kind ? "REST pollers, now" : bad ? "Feeds that need a look, now" : "Feeds, now"}
       right={<>{int(feeds.length - bad)} of {int(feeds.length)} up</>}
-      link={{ label: "Health", to: { page: "system" } }}
+      link={{ label: "System", to: { page: "system" } }}
     >
       {list.map((f) => (
         <FeedRow key={f.name} f={f} now={now} alerts={alerts} />
@@ -457,7 +463,7 @@ function EngineEv({ name, latency, limitUs }: { name: string; latency: boolean; 
   const spike = useRejectSpike(name);
   if (!e) return null;
   return (
-    <Section title={e.name} right={<EngineState e={e} />} link={{ label: "Health", to: { page: "system" } }}>
+    <Section title={e.name} right={<EngineState e={e} />} link={{ label: "System", to: { page: "system" } }}>
       {e.kill && <div className="m-ops-kill">Kill active{e.kill_reason ? `: ${e.kill_reason}` : ""}</div>}
       {latency ? <LatencyTable e={e} p99Limit={limitUs} /> : <KillBar e={e} />}
       <EngineFacts e={e} spike={spike} />
@@ -469,7 +475,7 @@ function EngineEv({ name, latency, limitUs }: { name: string; latency: boolean; 
 function EnginesLink() {
   return (
     <Section>
-      <ListRow dense title="Engine health" to={{ page: "system" }} />
+      <ListRow dense title="System" to={{ page: "system" }} />
     </Section>
   );
 }

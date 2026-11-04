@@ -1,0 +1,36 @@
+/* ---- Strategy (phone): one state line, the figures under it ---- */
+.st-m-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  padding: 12px 0 10px;
+}
+.st-m-word {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.st-m-word.up {
+  color: var(--up);
+}
+.st-m-sub {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.r-stats.st-m-figs {
+  padding: 0 0 14px;
+}
+/* the bridge draws its own 12 px inset: line its labels and figures up with the rows' edges */
+.st-m-bridge .bridge {
+  margin: 0 -12px;
+}
+
+/* the engine as a whole in trouble (no push, unreadable, killed, flattening): one line above the figures */
+.st-m-trouble {
+  padding: 12px 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+}
