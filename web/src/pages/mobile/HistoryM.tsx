@@ -2,17 +2,16 @@ import { useMemo } from "react";
 import { navigate, useStore } from "../../store";
 import { useThrottled } from "../../hooks";
 import { bps, compact, int } from "../../format";
-import { C, PNL_COLORS as P, PNL_STROKES as S } from "../../theme";
+import { C } from "../../theme";
 import {
   ExChart,
-  rgba,
   useExPref,
   type ExBoxRow,
   type ExSeries,
 } from "../../components/ex";
 import type { SymbolRow } from "../../protocol";
 import { useHedgePnl } from "../../selectors";
-import { daySummary, rangeFrom, summaryNote, useRangeDays, type DayRow, type Range as HRange } from "../history/data";
+import { daySummary, deskRows, rangeFrom, summaryNote, useDeskHistory, useRangeDays, type DayRow, type Range as HRange } from "../history/data";
 import { dayTitle } from "./index";
 import {
   Amt,
@@ -28,19 +27,11 @@ import "./history.css";
 import { MASK } from "../../mask";
 import { cur, earlierNote, useDesk, isHedge, venueTag } from "../../desk";
 
-// ---- History: the desk's days (Daily | Cumulative, then the list), or the instruments. The chart holds every day
-// kept (a year at most: a few KB); 7D 30D 90D All are what it opens on, and what the summary and the list cover ----
+// ---- History: the desk's days (the running P&L as day candles, then the list), or the instruments. The chart holds every day
+// kept (a year at most: a few KB), and the summary and the list cover all of them: no range to pick ----
 
 type Tab = "desk" | "inst";
 type Range = "7" | "30" | "90" | "all";
-type View = "daily" | "cum";
-const RANGES: { value: Range; label: string }[] = [
-  { value: "7", label: "7D" },
-  { value: "30", label: "30D" },
-  { value: "90", label: "90D" },
-  { value: "all", label: "All" },
-];
-
 const RANGE_OF: Record<Range, HRange> = { "7": "7d", "30": "30d", "90": "90d", all: "all" };
 
 export function HistoryM() {
@@ -64,146 +55,56 @@ export function HistoryM() {
 }
 
 function DeskHistory() {
-  const [range, setRange] = useExPref<Range>("m-hist", "range", "30", [
-    "7",
-    "30",
-    "90",
-    "all",
-  ]);
-  const [view, setView] = useExPref<View>("m-hist", "view", "daily", [
-    "daily",
-    "cum",
-  ]);
+  const range: Range = "all";
   const hide = useStore((s) => s.hideAmounts);
   const money = useAmt();
-  const desk = useDesk();
   // the range's days, as the desktop History has them (the snapshot's kept days and the day bars of
   // /api/history), summed the same way
   const dayStart = useStore((s) => s.snap?.summary.day_start ?? null);
   const from = dayStart == null ? null : rangeFrom(RANGE_OF[range], dayStart);
   const { rows, todayDay: todayKey } = useRangeDays(from);
-  const all = useRangeDays(dayStart == null ? null : rangeFrom("all", dayStart));
   // oldest first
   const days = useMemo(() => rows.slice().reverse(), [rows]);
-  const allDays = useMemo(() => all.rows.slice().reverse(), [all.rows]);
-  const inRange = useMemo(() => (from == null ? 0 : allDays.filter((d) => d.start >= from).length), [allDays, from]);
   const sum = useMemo(() => daySummary(rows, todayKey), [rows, todayKey]);
 
-  const chart = useMemo(() => {
-    const cum = view === "cum";
-    const acc = { pnl: 0, pi: 0, mm: 0, inv: 0, hedge: 0, reb: 0, other: 0 };
-    // running figures read 0 where the range starts and go on either side of it
-    const keys = Object.keys(acc) as (keyof typeof acc)[];
-    const first = allDays.length - inRange;
-    if (cum)
-      for (const d of allDays.slice(0, first)) {
-        acc.pnl -= d.pnl ?? 0;
-        acc.pi -= d.pi ?? 0;
-        acc.mm -= d.mm ?? 0;
-        acc.inv -= d.inv ?? 0;
-        acc.hedge -= d.hedge ?? 0;
-        acc.reb -= d.reb ?? 0;
-        acc.other -= d.other ?? 0;
-      }
-    const pts = allDays.map((d) => {
-      const v: Record<keyof typeof acc, number | null> = {
-        pnl: d.pnl,
-        pi: d.pi,
-        mm: d.mm,
-        inv: d.inv,
-        hedge: d.hedge,
-        reb: d.reb,
-        other: d.other,
-      };
-      if (cum) for (const k of keys) acc[k] += v[k] ?? 0;
-      return { time: d.start, d, v: cum ? { ...acc } : v };
-    });
-    return { pts, by: new Map(pts.map((p) => [p.time, p])) };
-  }, [allDays, inRange, view]);
-
+  // the chart: the running P&L as day candles (each opens where the day before closed), from the day bars
+  const bars = useDeskHistory(86_400, from);
+  const kRows = useMemo(() => (dayStart == null ? [] : deskRows(bars.bars, "day", dayStart, null)), [bars.bars, dayStart]);
+  const dayAt = useMemo(() => new Map(days.map((d) => [d.start, d])), [days]);
   const series = useMemo<ExSeries[]>(() => {
     const fmt = hide ? () => MASK : (x: number) => amt(x, "pnl");
-    const line = (
-      key: keyof (typeof chart.pts)[number]["v"],
-      label: string,
-      color: string,
-      more?: Partial<ExSeries>,
-    ): ExSeries => ({
-      key,
-      kind: "line",
-      label,
-      color,
-      format: fmt,
-      data: chart.pts.map((p) => ({
-        time: p.time,
-        value: (p.v[key] as number | null) ?? null,
-      })),
-      lastValue: false,
-      width: 1.5,
-      hiddenByDefault: true,
-      options:
-        view === "daily" && inRange <= 31
-          ? { pointMarkersVisible: true, pointMarkersRadius: 2 }
-          : undefined,
-      ...more,
-    });
     return [
-      view === "daily"
-        ? {
-            key: "pnl",
-            kind: "histogram",
-            label: "Day PnL",
-            toggle: false,
-            signColor: true,
-            format: fmt,
-            lastValue: true,
-            data: chart.pts.map((p) => ({
-              time: p.time,
-              value: p.v.pnl,
-              color: hide ? rgba(C.ink2, 0.5) : (p.v.pnl ?? 0) >= 0 ? rgba(C.up, 0.85) : rgba(C.down, 0.85),
-            })),
-          }
-        : {
-            key: "pnl",
-            kind: "baseline",
-            label: "Cumulative",
-            toggle: false,
-            signColor: true,
-            format: fmt,
-            data: chart.pts.map((p) => ({ time: p.time, value: p.v.pnl })),
-          },
-      line("pi", "Trading", P.trading),
-      ...(desk.mm ? [line("mm", "MM", P.mm, { lineStyle: S.mm }), line("inv", "Inv", P.inv, { lineStyle: S.inv })] : []),
-      ...(desk.hedge ? [line("hedge", "Hedge", P.hedge, { lineStyle: S.hedge })] : []),
-      ...(desk.rebates ? [line("reb", "Rebates", P.reb, { lineStyle: S.reb })] : []),
-      line("other", "Other", P.other, { lineStyle: S.other }),
+      {
+        key: "k",
+        kind: "candles",
+        label: "Cumulative PnL",
+        toggle: false,
+        format: fmt,
+        data: kRows.map((r) => {
+          const off = r.cum - r.c;
+          return { time: r.t, open: r.o + off, high: Math.max(r.h, r.o, r.c) + off, low: Math.min(r.l, r.o, r.c) + off, close: r.cum };
+        }),
+      },
     ];
-  }, [chart, hide, view, inRange, desk.mm, desk.hedge, desk.rebates]);
+  }, [kRows, hide]);
   const boxRows = (t: number): ExBoxRow[] => {
-    const p = chart.by.get(t);
-    if (!p) return [];
-    const r = (
-      label: string,
-      v: number | null | undefined,
-      color?: string,
-    ): ExBoxRow => [
+    const k = kRows.find((r) => r.t === t);
+    if (!k) return [];
+    const d = dayAt.get(t);
+    const r = (label: string, v: number | null | undefined): ExBoxRow => [
       label,
       money(v),
-      color ?? (hide ? C.muted : v! > 0 ? C.up : v! < 0 ? C.down : C.ink),
+      hide ? C.muted : v! > 0 ? C.up : v! < 0 ? C.down : C.ink,
     ];
     return [
-      ["Day", p.d.day],
-      r(view === "cum" ? "Cumulative" : "Day PnL", p.v.pnl),
-      r("Trading", p.v.pi, P.trading),
-      ...(desk.mm ? [r("MM", p.v.mm, P.mm), r("Inv", p.v.inv, P.inv)] : []),
-      ...(desk.hedge ? [r("Hedge", p.v.hedge, P.hedge)] : []),
-      ...(desk.rebates ? [r("Rebates", p.v.reb, P.reb)] : []),
-      r("Other", p.v.other, P.other),
-      ["Fills", int(p.d.fills)],
+      ["Day", d?.day ?? new Date(t).toISOString().slice(0, 10)],
+      r("Cumulative", k.cum),
+      r("Day PnL", d?.pnl ?? k.pnl),
+      ["Fills", int(d?.fills ?? k.fills)],
     ];
   };
 
-  const label = range === "all" ? `PnL, all days (${cur()})` : `PnL, ${range} days (${cur()})`;
+  const label = `PnL, all days (${cur()})`;
 
   return (
     <>
@@ -240,44 +141,17 @@ function DeskHistory() {
       </div>
       <div className="r-chart">
         <ExChart
-          key={view}
-          id={view === "cum" ? "m-hist-cum" : "m-hist-day"}
+          id="m-hist-k"
           title="Desk PnL"
           series={series}
           height={280}
-          loading={all.loading}
-          initialBars={Math.max(2, inRange)}
-          resetKey={range + view}
+          loading={bars.loading}
+          initialBars={Math.max(2, kRows.length)}
+          resetKey={range}
           rightOffset={0.6}
           fixEdges
           fullscreen
           legendRest="names"
-          intervals={RANGES}
-          interval={range}
-          onInterval={(v) => setRange(v as Range)}
-          modes={[
-            {
-              label: "Chart",
-              value: view,
-              onChange: (v) => setView(v as View),
-              options: [
-                { value: "daily", label: "Daily" },
-                { value: "cum", label: "Cumulative" },
-              ],
-            },
-          ]}
-          chips={[
-            { key: "pi", label: "Trading", color: P.trading, stroke: S.trading },
-            ...(desk.mm
-              ? [
-                  { key: "mm", label: "MM", color: P.mm, stroke: S.mm },
-                  { key: "inv", label: "Inv", color: P.inv, stroke: S.inv },
-                ]
-              : []),
-            ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge }] : []),
-            ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: P.reb, stroke: S.reb }] : []),
-            { key: "other", label: "Other", color: P.other, stroke: S.other },
-          ]}
           boxRows={boxRows}
           emptyText="No days kept yet"
         />

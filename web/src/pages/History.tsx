@@ -1,14 +1,14 @@
-// Desktop History, Binance's "PnL analysis" with a chart page's frame: Desk | instrument tabs; ranges 7D 30D
-// 90D All; intervals 15m 1H 4H 1D 1W; Daily | Cumulative | Candles; the chart with its legends, volume and
-// inventory; the range's summary and calendar at the right; By day | By hour tables under it.
+// Desktop History, Binance's "PnL analysis" with a chart page's frame: Desk | instrument tabs; every day the
+// server keeps, always (no range to pick); intervals 15m 1H 4H 1D 1W; the running P&L as candles with volume
+// under it; the summary and calendar at the right; By day | By hour tables under it.
 //
 // The instrument is in the URL (#/history/<SYMBOL>/<venue>), a day too (#/day/<date> zooms to it); range,
-// interval and mode are remembered on this browser. Each load is keyed by what it was asked for and drawn only
+// the interval is remembered on this browser. Each load is keyed by what it was asked for and drawn only
 // under that key, so switching any of them clears the chart at once and shows the new bars when they land.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate, useStore } from "../store";
 import type { Venue } from "../protocol";
-import { Tabs, TextToggle, useExHidden, useExPref, useKlines, type ExView, type KInterval } from "../components/ex";
+import { Tabs, useExPref, useKlines, type ExView, type KInterval } from "../components/ex";
 import { DeskChart } from "./history/DeskChart";
 import { InstChart } from "./history/InstChart";
 import { InstrumentPicker } from "./history/Picker";
@@ -19,9 +19,6 @@ import {
   INTERVALS,
   IV_LABEL,
   IV_MS,
-  MODES,
-  RANGES,
-  RANGE_LABEL,
   STEP_S,
   dayOf,
   dayRows,
@@ -33,7 +30,6 @@ import {
   weekOf,
   weekBars,
   type HInterval,
-  type Mode,
   type Range,
   type RangeRows,
   type Row,
@@ -43,7 +39,6 @@ import { useInstFills } from "./desk/instFills";
 import { cur, earlierNote, spotVenue, venueTag } from "../desk";
 
 const INST_KEY = "ex.hist.inst";
-const HIDDEN0 = ["pi", "other", "stack"];
 /** Klines at most for an instrument's range (15m over All would be years of bars). */
 const MAX_KLINES = 10_000;
 /** Klines loaded behind the view, and per page further back: each 1000 is one request to the venue, kept by the
@@ -102,17 +97,15 @@ export function History() {
   const lastInst = useRef(inst ?? savedInst());
   if (inst) lastInst.current = inst;
 
-  const [range, setRange] = useExPref<Range>("hist", "range", "30d", RANGES);
+  // no range to pick: the page holds every day the server keeps, the chart opens on all of it
+  const range: Range = "all";
   const [iv, setIv] = useExPref<HInterval>("hist", "interval", "1d", INTERVALS);
-  const [mode, setMode] = useExPref<Mode>("hist", "mode", "daily", MODES);
-  const { hidden, toggle } = useExHidden("hist", HIDDEN0);
   const [tab, setTab] = useExPref<"day" | "hour">("hist", "table", "day", ["day", "hour"]);
 
   const from = dayStart == null ? null : rangeFrom(range, dayStart);
 
   // ---- desk ----
-  // the chart holds every bar the server keeps: a range is what it shows, and the summary and tables under it
-  const desk = useDeskHistory(STEP_S[iv], inst || dayStart == null ? null : rangeFrom("all", dayStart));
+  const desk = useDeskHistory(STEP_S[iv], inst || dayStart == null ? null : from);
   const daily = useDeskHistory(86_400, inst ? null : from);
   const hours = useDeskHistory(3600, !inst && tab === "hour" ? dayStart : null);
   const prevRows = useRef<Row[] | null>(null);
@@ -219,28 +212,9 @@ export function History() {
 
   // ---- toolbar ----
   const ivOptions = INTERVALS.map((v) => ({ value: v, label: IV_LABEL[v] }));
-  const rangeToggle = (
-    <>
-      <TextToggle label="Range" options={RANGES.map((r) => ({ value: r, label: RANGE_LABEL[r] }))} value={range} onChange={setRange} />
-      <span className="ex-tt-div hx-tb-div" />
-    </>
-  );
-  const dailyLabel = iv === "1d" ? "Daily" : iv === "1w" ? "Weekly" : "Per bar";
-  const modes = [
-    {
-      label: "Chart type",
-      value: mode,
-      onChange: (v: string) => setMode(v as Mode),
-      options: [
-        { value: "daily", label: dailyLabel, title: "What each bar made" },
-        { value: "cum", label: "Cumulative", title: "Running total from the start of the range" },
-        { value: "candles", label: "Candles", title: iv === "1w" ? "Each week's PnL from 0 at its start" : "Each bar's PnL since its day start" },
-      ],
-    },
-  ];
-  const span = from == null || dayStart == null ? "" : `${ymd(range === "all" && desk.bars[0] ? desk.bars[0].t : from)} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
+  const span = from == null || dayStart == null ? "" : `${ymd(desk.bars[0] ? desk.bars[0].t : from)} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
 
-  const instTitle = inst ? `${inst.symbol}${venueTag(inst.venue) ? ` ${venueTag(inst.venue)}` : ""} · ${RANGE_LABEL[range]}` : "";
+  const instTitle = inst ? `${inst.symbol}${venueTag(inst.venue) ? ` ${venueTag(inst.venue)}` : ""}` : "";
   return (
     <div className="page hx-page">
       <section className="panel hx-chart">
@@ -269,7 +243,7 @@ export function History() {
               avgCost={avgCost}
               loading={kl.loading || kl.pending || nBars === 0}
               error={kl.error}
-              toolbarLeft={rangeToggle}
+              toolbarLeft={null}
               intervals={ivOptions}
               onInterval={(v) => setIv(v as HInterval)}
               view={view}
@@ -285,15 +259,10 @@ export function History() {
               range={range}
               inRange={inRange}
               interval={iv}
-              mode={mode}
-              hidden={hidden}
-              onToggle={toggle}
               loading={desk.loading || from == null}
               error={desk.error}
-              toolbarLeft={rangeToggle}
               intervals={ivOptions}
               onInterval={(v) => setIv(v as HInterval)}
-              modes={modes}
               view={view}
               legendTime={legendTime}
               chosen={focusT}
@@ -309,7 +278,7 @@ export function History() {
         ) : (
           <DeskSide
             rows={days}
-            title={`Desk · ${RANGE_LABEL[range]}`}
+            title="Desk · All days"
             todayDay={todayDay}
             selected={focusDay}
             day={focusRow}
