@@ -10,7 +10,7 @@ import { ExChart, Tabs, useExPref, type ExMarker, type ExSeries } from "../compo
 import { amount, maskText, useHide } from "../mask";
 import { useNow } from "../hooks";
 import { FundingPanel, HedgePanel } from "./Accounts";
-import { BLOCK, STALE_MS, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
+import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
 import "./ops/ops.css";
 import "./strategy/strategy.css";
 import { cur } from "../desk";
@@ -18,7 +18,7 @@ import { cur } from "../desk";
 const DAY = 86_400_000;
 /** The hedge charts hold two days and open on the last one. */
 const SPAN = 2 * DAY;
-const HEDGE_KEYS = ["target", "pos", "band", "takerBand", "bw", "invNet", "rebalCount", "takerCount", "trigger", "slipBp", "latencyMs", "paused"] as const;
+const HEDGE_KEYS = ["target", "pos", "band", "takerBand", "bw", "invNet", "rebalCount", "rebalT", "takerCount", "trigger", "slipBp", "latencyMs", "paused"] as const;
 
 type Tab = "hedge" | "quoting";
 
@@ -49,11 +49,11 @@ function NoData({ latest, error }: { latest: Latest | null; error: string | null
 
 // ================================ hedge ================================
 
-function HedgeState({ m, age, stale }: { m: Record<string, number>; age: number | null; stale: boolean }) {
+function HedgeState({ m, age, stale, trouble }: { m: Record<string, number>; age: number | null; stale: boolean; trouble: string | null }) {
   const h = hedgeState(m, stale, age, dur);
   return (
     <div className="st-state">
-      <span className={"st-state-word " + h.tone}>{h.word}</span>
+      <span className={"st-state-word " + (trouble && !stale ? "crit-text" : h.tone)}>{trouble && !stale ? trouble : h.word}</span>
       {h.inBands != null && <span className="st-state-sub fig">{`unhedged ${num(h.inBands, 2, true)} bands`}</span>}
     </div>
   );
@@ -256,7 +256,7 @@ function Hedge({ latest, error }: { latest: Latest | null; error: string | null 
   return (
     <div className="ops-tab-body st-hedge">
       <section className="ops-panel st-top">
-        <HedgeState m={m} age={age} stale={stale} />
+        <HedgeState m={m} age={age} stale={stale} trouble={engineTrouble(latest.payload)} />
         <HedgeFigures m={m} rebal={rebal} hide={hide} />
       </section>
       <GapChart s={s} rebal={rebal} hide={hide} />
@@ -369,6 +369,8 @@ function CapitalChart({ hide }: { hide: boolean }) {
 }
 
 interface QRow {
+  key: string;
+  venue: string | null;
   symbol: string;
   mid: number | null;
   position: number | null;
@@ -382,10 +384,11 @@ interface QRow {
   why: string | null;
 }
 
-export function quoteRows(qs: Quote[]): QRow[] {
+export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
+  const named = new Set(qs.map((q) => q.venue)).size > 1;
   const by = new Map<string, { bid: Quote | null; ask: Quote | null }>();
   for (const q of qs) {
-    const key = q.symbol + (q.venue ? "|" + q.venue : "");
+    const key = q.symbol + (q.venue != null ? "|" + q.venue : "");
     const e = by.get(key) ?? { bid: null, ask: null };
     if (q.side === "bid" || q.side === "buy") e.bid = q;
     else e.ask = q;
@@ -401,8 +404,11 @@ export function quoteRows(qs: Quote[]): QRow[] {
       const spread = bp != null && ap != null && mid ? ((ap - bp) / mid) * 1e4 : null;
       const depth = (bid?.working_px && bid.working_qty ? bid.working_px * bid.working_qty : 0) + (ask?.working_px && ask.working_qty ? ask.working_px * ask.working_qty : 0);
       const worst = [bid, ask].filter(Boolean).sort((x, y) => rank(y!.block ?? 0) - rank(x!.block ?? 0))[0]!;
-      const since = worst.block_since ?? (worst.block_since_ns != null ? worst.block_since_ns / 1e6 : null);
+      const since = worst.block_since ?? (worst.block_since_ns ? worst.block_since_ns / 1e6 : null);
+      const v = q.venue;
       return {
+        key,
+        venue: named && v != null ? (typeof v === "number" ? (venues?.[v]?.name ?? String(v)) : v) : null,
         symbol: key.split("|")[0]!,
         mid,
         position: q.position ?? null,
@@ -412,7 +418,7 @@ export function quoteRows(qs: Quote[]): QRow[] {
         depth: depth || null,
         block: worst.block ?? 0,
         since: worst.block ? since : null,
-        why: worst.reason || worst.note || null,
+        why: [worst.reason, worst.note].filter((x) => x && x !== "None").join(" · ") || null,
       };
     })
     .sort((a, b) => rank(b.block) - rank(a.block) || a.symbol.localeCompare(b.symbol));
@@ -432,7 +438,7 @@ function QuoteSide({ q, hide }: { q: Quote | null; hide: boolean }) {
 function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean }) {
   const skew = useStore((s) => s.skew);
   const now = useNow(1000) + skew;
-  const rows = useMemo(() => quoteRows(latest?.payload?.quotes ?? []), [latest]);
+  const rows = useMemo(() => quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues), [latest]);
   const n = rows.filter((r) => r.block === 0).length;
   return (
     <section className="ops-panel st-quotes">
@@ -458,8 +464,11 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.symbol}>
-                  <td className="l">{r.symbol}</td>
+                <tr key={r.key}>
+                  <td className="l">
+                    {r.symbol}
+                    {r.venue && <span className="ops-perp">{r.venue}</span>}
+                  </td>
                   <td className={"l " + (r.block >= 3 ? "warn-text" : r.block > 0 ? "muted" : "")}>{BLOCK[r.block] ?? `Code ${r.block}`}</td>
                   <td className="l muted st-why">{r.why ?? ""}</td>
                   <td className="fig">{r.since != null ? dur(now - r.since) : ""}</td>
@@ -473,7 +482,7 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
             </tbody>
           </table>
         ) : (
-          <div className="ops-empty">The engine sent no quotes</div>
+          <div className="ops-empty">{latest?.payload?.truncated ? "The last push left the quotes out to stay small" : "The engine sent no quotes"}</div>
         )}
       </div>
     </section>
@@ -504,17 +513,20 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
   const { age, stale } = usePush(latest);
   const tz = useStore((s) => s.tz);
   const quoting = useMemo(() => {
-    const rows = quoteRows(latest?.payload?.quotes ?? []);
+    const rows = quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues);
     return { n: rows.filter((r) => r.block === 0).length, of: rows.length };
   }, [latest]);
   if (!latest?.payload) return <NoData latest={latest} error={error} />;
   const p = latest.payload;
+  const trouble = engineTrouble(p);
   const a = (v: number | null) => (v == null ? "--" : maskText(hide, compact(v)));
   return (
     <div className="ops-tab-body st-quoting">
       <section className="ops-panel st-top">
         <div className="st-state">
-          <span className={"st-state-word " + (stale ? "warn-text" : quoting.n < quoting.of ? "" : "up")}>{stale ? "No push for " + dur(age) : `${quoting.n} of ${quoting.of} quoting`}</span>
+          <span className={"st-state-word " + (stale ? "warn-text" : trouble ? "crit-text" : quoting.n < quoting.of ? "" : "up")}>
+            {stale ? "No push for " + dur(age) : (trouble ?? `${quoting.n} of ${quoting.of} quoting`)}
+          </span>
           {!stale && latest.t != null && <span className="st-state-sub fig">{`pushed ${hms(latest.t, tz)}`}</span>}
         </div>
         <div className="st-figs">
@@ -522,12 +534,20 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
             {mv(m, "sidesQuoting") == null ? "--" : int(mv(m, "sidesQuoting"))}
             {mv(m, "sidesWarm") != null && <span className="ops-unit">of {int(mv(m, "sidesWarm"))}</span>}
           </Fig>
-          <Fig label="Clips unspent">{mv(m, "clipsUnspent") == null ? "--" : int(mv(m, "clipsUnspent"))}</Fig>
-          <Fig label="Quoted" title={`Notional of the working quotes, ${cur()}`}>{a(mv(m, "quoteNotional"))}</Fig>
-          <Fig label="Budget">{a(mv(m, "budget"))}</Fig>
-          <Fig label="Pool locked" title="The strategy's view">{a(mv(m, "poolLocked"))}</Fig>
+          <Fig label="Budget" title="Clips the pools' balance allows, and those left after the last re-allocation">
+            {mv(m, "budget") == null ? "--" : num(mv(m, "budget"), 1)}
+            {mv(m, "clipsUnspent") != null && <span className="ops-unit">{`${num(mv(m, "clipsUnspent"), 1)} unspent`}</span>}
+          </Fig>
+          <Fig label="Clip" title={`One quote's notional; at most ${mv(m, "maxUnits") ?? "--"} clips a side, ${cur()}`}>
+            {a(mv(m, "quoteNotional"))}
+            {mv(m, "maxUnits") != null && <span className="ops-unit">{`max ${int(mv(m, "maxUnits"))}`}</span>}
+          </Fig>
+          <Fig label="Pool locked" title="The engine's own booking">{a(mv(m, "poolLocked"))}</Fig>
           <Fig label="Pool free">{a(mv(m, "poolFree"))}</Fig>
-          <Fig label="Max units">{mv(m, "maxUnits") == null ? "--" : int(mv(m, "maxUnits"))}</Fig>
+          <Fig label="Unwinding" title={`Positions the last requote is unwinding, and how far from fair, ${cur()}`}>
+            {a(mv(m, "unwindUsd"))}
+            {mv(m, "unwindBp") != null && (mv(m, "unwindUsd") ?? 0) > 0 && <span className="ops-unit">{`${bps(mv(m, "unwindBp"), false)} bps`}</span>}
+          </Fig>
         </div>
       </section>
       <QuotesTable latest={latest} hide={hide} />

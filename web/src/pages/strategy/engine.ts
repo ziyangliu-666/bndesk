@@ -33,30 +33,49 @@ export const M = {
   poolLocked: "pool_locked",
   quoteNotional: "quote_notional",
   maxUnits: "max_units",
+  unwindUsd: "unwind_usd",
+  unwindBp: "unwind_bp",
 } as const;
 export type MKey = keyof typeof M;
 
-/** What a rebalance's trigger code means. */
-export const TRIGGER: Record<number, string> = { 0: "Band", 1: "Taker band", 2: "Close", 3: "Pause", 4: "Resume", 5: "Manual" };
-/** Why a pause is on. */
-export const PAUSE: Record<number, string> = { 0: "", 1: "Market closed", 2: "Weekend", 3: "Daily window", 4: "Manual" };
+/** What a rebalance's trigger code means (anchor_mm-metrics.md `rebal_trigger`). */
+export const TRIGGER: Record<number, string> = {
+  1: "Band",
+  2: "Taker band",
+  3: "Maker timeout",
+  4: "Band",
+  5: "Window close",
+  6: "Window close, taker",
+};
+/** Codes of a taker (IOC) order. */
+export const TAKER_TRIGGERS = new Set([2, 3, 4, 6]);
+/** Why the hedge is not traded (`hedge_pause_reason`; 0 hedging). */
+export const PAUSE: Record<number, string> = {
+  1: "Warming up",
+  2: "No hedge book",
+  3: "Hedge book stale",
+  4: "No-hedge window",
+  5: "No hedge set",
+};
 /** A quote's first obstacle (status-file.md `block`). */
 export const BLOCK: Record<number, string> = {
+  [-1]: "Unknown",
   0: "Quoting",
   1: "Not wanted",
   2: "Quoting off",
-  3: "Cancelled",
-  4: "Venue tripped",
-  5: "Data late",
-  6: "Backing off",
+  3: "Pulled",
+  4: "Venue killed",
+  5: "Feed lag",
+  6: "Backoff",
   7: "Starved",
-  8: "Rejected",
+  8: "Refused",
   9: "Pending",
 };
 
 export interface Quote {
   symbol: string;
-  venue?: string;
+  /** Index into the payload's venues. */
+  venue?: number | string;
   side: "bid" | "ask" | "buy" | "sell" | string;
   desired_px?: number | null;
   desired_qty?: number | null;
@@ -83,12 +102,22 @@ export interface Reason {
   count: number;
 }
 export interface Payload {
+  schema?: string;
+  t_ns?: number;
+  /** false: the engine's status file was unreadable (only `error` with it). */
+  ok?: boolean;
+  error?: string;
+  /** The quotes were left out to keep the push small. */
+  truncated?: boolean;
+  engine?: { name?: string; state?: string; running?: boolean; session_id?: number | string };
   metrics?: Record<string, number> | { name: string; value: number }[];
-  balances?: Balance[];
+  /** By account then asset (an array of rows also read). */
+  balances?: Record<string, Record<string, { free?: number; locked?: number }>> | Balance[];
   quotes?: Quote[];
+  venues?: { name: string; order?: string; killed?: boolean; kill_reason?: string }[];
   risk_reject_reasons?: Reason[];
   venue_reject_reasons?: Reason[];
-  kill?: { active?: boolean; reason?: string } | boolean;
+  kill?: { flags?: number; reason?: string; latched?: boolean; flatten_state?: string; flattening?: boolean };
   [k: string]: unknown;
 }
 export interface Latest {
@@ -190,7 +219,7 @@ export function pts(s: Series | null, key: string, f: (v: number, i: number) => 
 
 export interface Rebalance {
   t: number;
-  /** Rebalances in this sample (more than one when they came within one push). */
+  /** Rebalances decided in this sample (0: an IOC that took over one already started). */
   n: number;
   taker: boolean | null;
   trigger: string | null;
@@ -201,11 +230,16 @@ export interface Rebalance {
   latency: number | null;
 }
 
-/** Rebalances read off the samples: each sample where the count went up (a drop is the engine restarting). */
+/**
+ * Rebalances read off the samples: each sample where `rebal_count` went up (a new one, at `rebal_t`), or where only
+ * `rebal_taker` did (an IOC taking over one already started: past the taker band or the maker timeout). A drop of
+ * either is the engine restarting.
+ */
 export function rebalances(s: Series | null): Rebalance[] {
   if (!s) return [];
   const col = (k: MKey) => s.v[skey(k)] ?? [];
   const cnt = col("rebalCount"),
+    at = col("rebalT"),
     tk = col("takerCount"),
     trig = col("trigger"),
     tgt = col("target"),
@@ -217,16 +251,19 @@ export function rebalances(s: Series | null): Rebalance[] {
   let lastTaker: number | null = null;
   let lastTarget: number | null = null;
   for (let i = 0; i < s.t.length; i++) {
-    const c = cnt[i];
+    const c = cnt[i],
+      t = tk[i];
     if (c == null) continue;
-    if (last != null && c > last) {
-      const t = tk[i];
+    const more = last != null && c > last ? c - last : 0;
+    const tookOver = t != null && lastTaker != null && t > lastTaker;
+    if (more > 0 || tookOver) {
       const code = trig[i];
+      const when = more > 0 && at[i] != null && at[i]! > s.t[i]! - 120_000 && at[i]! <= s.t[i]! + 60_000 ? at[i]! : s.t[i]!;
       out.push({
-        t: s.t[i]!,
-        n: c - last,
-        taker: t != null && lastTaker != null ? t > lastTaker : null,
-        trigger: code == null ? null : (TRIGGER[code] ?? `Code ${code}`),
+        t: when,
+        n: more,
+        taker: code != null ? TAKER_TRIGGERS.has(code) : t != null && lastTaker != null ? tookOver : null,
+        trigger: code == null || code === 0 ? null : (TRIGGER[code] ?? `Code ${code}`),
         target: tgt[i] ?? null,
         prevTarget: lastTarget,
         pos: pos[i] ?? null,
@@ -235,23 +272,39 @@ export function rebalances(s: Series | null): Rebalance[] {
       });
     }
     last = c;
-    if (tk[i] != null) lastTaker = tk[i]!;
+    if (t != null) lastTaker = t;
     if (tgt[i] != null) lastTarget = tgt[i]!;
   }
-  return out;
+  // two in one sample, or a restart's clock: keep them in time order, one row per time
+  out.sort((x, y) => x.t - y.t);
+  return out.filter((r, i) => i === 0 || r.t !== out[i - 1]!.t);
 }
 
-/** The balances by account (USDT-like assets summed: what the pools quote with). */
+/** The balances by account (USD-like assets summed: what the pools quote with). */
 export function capital(p: Payload | null | undefined): { account: string; free: number; locked: number }[] {
   const by = new Map<string, { account: string; free: number; locked: number }>();
-  for (const b of p?.balances ?? []) {
-    if (!/^(USDT|USDC|FDUSD|USD)$/.test(b.asset)) continue;
-    const r = by.get(b.account) ?? { account: b.account, free: 0, locked: 0 };
-    r.free += b.free || 0;
-    r.locked += b.locked || 0;
-    by.set(b.account, r);
-  }
+  const add = (account: string, asset: string, free: number | undefined, locked: number | undefined) => {
+    if (!/^(USDT|USDC|FDUSD|USD)$/.test(asset)) return;
+    const r = by.get(account) ?? { account, free: 0, locked: 0 };
+    r.free += free || 0;
+    r.locked += locked || 0;
+    by.set(account, r);
+  };
+  const b = p?.balances;
+  if (Array.isArray(b)) for (const x of b) add(x.account, x.asset, x.free, x.locked);
+  else if (b) for (const [acct, assets] of Object.entries(b)) for (const [asset, x] of Object.entries(assets ?? {})) add(acct, asset, x?.free, x?.locked);
   return [...by.values()].sort((a, b) => a.account.localeCompare(b.account));
+}
+
+/** What stops the engine as a whole, if anything: unreadable status, a kill, a flatten. */
+export function engineTrouble(p: Payload | null | undefined): string | null {
+  if (!p) return null;
+  if (p.ok === false) return "Engine status unreadable" + (p.error ? `: ${p.error}` : "");
+  const k = p.kill;
+  if (k?.flattening || (k?.flatten_state && k.flatten_state !== "Off")) return `Flatten ${k.flatten_state ?? "working"}` + (k.reason ? `: ${k.reason}` : "");
+  if (k?.latched || (k?.flags ?? 0) !== 0) return "Killed" + (k?.reason ? `: ${k.reason}` : "");
+  if (p.engine?.running === false) return `Engine ${p.engine.state ?? "stopped"}`;
+  return null;
 }
 
 export function useMetrics(latest: Latest | null) {
@@ -274,7 +327,7 @@ export function hedgeState(m: Record<string, number>, stale: boolean, age: numbe
   const behind = target != null && pos != null ? target - pos : null;
   const inBands = unhedged != null && band ? unhedged / band : null;
   const filling = behind != null && band != null && Math.abs(behind) > 0.1 * band;
-  const pause = PAUSE[mv(m, "pauseReason") ?? 0];
+  const pause = PAUSE[mv(m, "pauseReason") ?? 0] ?? (mv(m, "pauseReason") ? `code ${mv(m, "pauseReason")}` : "");
   const [word, tone] = stale
     ? ["No push for " + dur(age), "warn-text"]
     : paused

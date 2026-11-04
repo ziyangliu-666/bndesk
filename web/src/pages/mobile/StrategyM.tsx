@@ -6,7 +6,7 @@ import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
 import { ExposureChart, GapChart, HEDGE_SERIES, quoteRows } from "../Strategy";
-import { BLOCK, STALE_MS, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
+import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
 import { Empty, PageTabs, Row, Sec, Stats } from "./rest/ui";
 import "./history.css";
 
@@ -32,7 +32,8 @@ function HedgeM({ latest }: { latest: Latest }) {
   const target = mv(m, "target"),
     pos = mv(m, "pos");
   const h = hedgeState(m, stale, age, dur);
-  const [word, tone] = [h.word, h.tone];
+  const trouble = engineTrouble(latest.payload);
+  const [word, tone] = trouble && !stale ? [trouble, "crit-text"] : [h.word, h.tone];
   const day = rebal.filter((r) => r.t >= Date.now() - 86_400_000);
   return (
     <>
@@ -90,7 +91,7 @@ function QuotingM({ latest }: { latest: Latest }) {
   const m = useMetrics(latest);
   const { now } = useAge(latest);
   const caps = useMemo(() => capital(latest.payload), [latest]);
-  const rows = useMemo(() => quoteRows(latest.payload?.quotes ?? []), [latest]);
+  const rows = useMemo(() => quoteRows(latest.payload?.quotes ?? [], latest.payload?.venues), [latest]);
   const off = rows.filter((r) => r.block !== 0);
   const a = (v: number | null) => (v == null ? "--" : maskText(hide, compact(v)));
   return (
@@ -99,8 +100,8 @@ function QuotingM({ latest }: { latest: Latest }) {
         cols={3}
         items={[
           { label: "Sides quoting", value: mv(m, "sidesQuoting") == null ? "--" : `${int(mv(m, "sidesQuoting"))} / ${int(mv(m, "sidesWarm"))}` },
-          { label: "Quoted", value: a(mv(m, "quoteNotional")) },
-          { label: "Clips unspent", value: mv(m, "clipsUnspent") == null ? "--" : int(mv(m, "clipsUnspent")) },
+          { label: "Budget, clips", value: mv(m, "budget") == null ? "--" : `${num(mv(m, "clipsUnspent"), 1)} / ${num(mv(m, "budget"), 1)}` },
+          { label: "Unwinding", value: a(mv(m, "unwindUsd")) },
         ]}
       />
       <Sec title={`Capital (${cur()})`}>
@@ -122,8 +123,8 @@ function QuotingM({ latest }: { latest: Latest }) {
         {off.map((r) => (
           <Row
             dense
-            key={r.symbol}
-            title={r.symbol}
+            key={r.key}
+            title={r.venue ? `${r.symbol} ${r.venue}` : r.symbol}
             sub={r.why ?? undefined}
             value={<span className={r.block >= 3 ? "warn-text" : "muted"}>{BLOCK[r.block] ?? `Code ${r.block}`}</span>}
             valueSub={r.since != null ? dur(now - r.since) : undefined}

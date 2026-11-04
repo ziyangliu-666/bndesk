@@ -34,6 +34,7 @@ function build(): Built {
   let target = -inv * beta;
   let pos = target;
   let count = 0,
+    rebalT = 0,
     taker = 0,
     trig = 0,
     slip = 1.2,
@@ -55,8 +56,9 @@ function build(): Built {
       const isTaker = Math.abs(want - target) > 3 * band;
       target = Math.round(want / 10) * 10;
       count++;
+      rebalT = x - Math.floor(r() * STEP);
       if (isTaker) taker++;
-      trig = isTaker ? 1 : 0;
+      trig = isTaker ? 2 : 1;
       chase = isTaker ? 1 : 2 + Math.floor(r() * 6);
       slip = slip * 0.8 + (isTaker ? 4 + r() * 4 : -0.5 + r() * 2) * 0.2;
       lat = lat * 0.8 + (isTaker ? 300 + r() * 400 : 15_000 + r() * 60_000) * 0.2;
@@ -79,20 +81,23 @@ function build(): Built {
     m("beta", beta);
     m("baseShort", 0);
     m("rebalCount", count);
+    m("rebalT", rebalT);
     m("makerCount", count - taker);
     m("takerCount", taker);
     m("trigger", trig);
     m("paused", paused);
-    m("pauseReason", paused ? 2 : 0);
+    m("pauseReason", paused ? 4 : 0);
     m("slipBp", slip);
     m("latencyMs", lat);
+    m("unwindUsd", us ? 400 + r() * 300 : 0);
+    m("unwindBp", 6 + r() * 4);
     m("sidesWarm", 28);
     m("sidesQuoting", us ? 24 + Math.floor(r() * 3) : 18 + Math.floor(r() * 4));
     m("clipsUnspent", Math.floor(r() * 4));
-    m("budget", 40_000);
+    m("budget", 34);
     m("poolFree", free.reduce((a, b) => a + b, 0));
     m("poolLocked", locked.reduce((a, b) => a + b, 0));
-    m("quoteNotional", locked.reduce((a, b) => a + b, 0) * 0.92);
+    m("quoteNotional", 500);
     m("maxUnits", 8);
     ACCOUNTS.forEach((a, i) => {
       f[`balances.${a}.USDT.free`] = free[i]!;
@@ -111,7 +116,7 @@ function latest() {
   const metrics = Object.entries(f)
     .filter(([k]) => k.startsWith("metrics."))
     .map(([k, v]) => ({ name: k.slice(8), value: v }));
-  const balances = ACCOUNTS.map((a) => ({ account: a, asset: "USDT", free: f[`balances.${a}.USDT.free`]!, locked: f[`balances.${a}.USDT.locked`]! }));
+  const balances = Object.fromEntries(ACCOUNTS.map((a) => [a, { USDT: { free: f[`balances.${a}.USDT.free`]!, locked: f[`balances.${a}.USDT.locked`]! } }]));
   const now = Date.now();
   const quotes = SYMBOLS.flatMap((symbol, i) => {
     const mid = 40 + i * 37.3 + r() * 2;
@@ -123,7 +128,8 @@ function latest() {
       const qty = Math.round((800 + r() * 1500) / mid * 100) / 100;
       return {
         symbol,
-        side: side === 0 ? "bid" : "ask",
+        venue: 0,
+        side: side === 0 ? "buy" : "sell",
         desired_px: px,
         desired_qty: qty,
         desired_levels: 3,
@@ -131,9 +137,9 @@ function latest() {
         working_qty: block === 0 ? qty * (0.6 + r() * 0.4) : 0,
         working_orders: block === 0 ? 3 : 0,
         block,
-        reason: block === 8 ? "PostOnlyWouldCross" : null,
-        note: block === 7 ? "budget 0 / 1200" : block === 1 ? "inventory cap" : null,
-        block_since: block === 0 ? null : now - (60_000 + i * 45_000),
+        reason: block === 8 ? "PostOnlyWouldCross" : "None",
+        note: "",
+        block_since_ns: block === 0 ? 0 : (now - (60_000 + i * 45_000)) * 1e6,
         position: Math.round((r() - 0.3) * 3000 / mid * 100) / 100,
         mid,
       };
@@ -143,6 +149,11 @@ function latest() {
     t: b.t[b.t.length - 1],
     now,
     payload: {
+      schema: "bndesk-anchor/1",
+      ok: true,
+      engine: { name: "anchor-live", state: "running", running: true },
+      venues: [{ name: "binance", order: "live", killed: false }],
+      kill: { flags: 0, reason: "", latched: false, flatten_state: "Off", flattening: false },
       metrics,
       balances,
       quotes,
@@ -154,7 +165,6 @@ function latest() {
         { reason: "PostOnlyWouldCross", count: 230 },
         { reason: "InsufficientBalance", count: 7 },
       ],
-      kill: { active: false },
     },
   };
 }
