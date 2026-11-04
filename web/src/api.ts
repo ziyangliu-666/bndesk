@@ -42,6 +42,11 @@ export type Kline = [number, number, number, number, number, number];
 type Params = Record<string, string | number>;
 
 export async function getJSON<T>(path: string, params: Params, signal?: AbortSignal): Promise<T> {
+  if (import.meta.env.VITE_MOCK === "1" && path.startsWith("/api/engine/")) {
+    const { engineMock } = await import("./engineMock");
+    await new Promise((r) => setTimeout(r, 80));
+    return JSON.parse(JSON.stringify(engineMock(path, params))) as T;
+  }
   if (import.meta.env.VITE_MOCK === "1") {
     const { mockApi } = await import("./historyMock");
     await new Promise((r) => setTimeout(r, 80));

@@ -29,6 +29,7 @@ export const PAGES: Record<Page, { title: string; C: Lazy<object> }> = {
   history: { title: "History", C: page(() => import("./HistoryM"), "HistoryM") },
   more: { title: "More", C: page(() => import("./MoreM"), "MoreM") },
   analysis: { title: "Analysis", C: page(() => import("./MarkoutsM"), "MarkoutsM") },
+  strategy: { title: "Strategy", C: page(() => import("./StrategyM"), "StrategyM") },
   orders: { title: "Orders", C: page(() => import("./OrdersM"), "OrdersM") },
   system: { title: "System", C: page(() => import("./EngineM"), "EngineM") },
   fills: { title: "Fills", C: page(() => import("./FillsM"), "FillsM") },

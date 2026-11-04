@@ -35,7 +35,7 @@ pub const LOCK_S: i64 = 15 * 60;
 pub const N: u64 = 1 << 15; // scrypt cost: ~50-100 ms, 32 MiB
 pub const R: u32 = 8;
 pub const PAR: u32 = 1;
-pub const PUBLIC: [&str; 2] = ["/login", "/healthz"];
+pub const PUBLIC: [&str; 3] = ["/login", "/healthz", crate::telemetry::INGEST_PATH];
 const MAXMEM: u64 = 64 << 20;
 const MAX_BODY: usize = 1 << 20; // aiohttp's client_max_size
 

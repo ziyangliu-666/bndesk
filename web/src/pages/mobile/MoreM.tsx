@@ -42,6 +42,7 @@ export function MoreM() {
           valueSub={markout != null ? "10 s, last hour" : undefined}
           to={{ page: "analysis" }}
         />
+        <Row title="Strategy" sub="The engine's hedge and quoting" to={{ page: "strategy" }} />
         <Row title="Orders" sub="Open orders, quote map, rate limits" value={<span className="r-fig">{int(nOrders)}</span>} valueSub="open" to={{ page: "orders" }} />
         <Row
           title="System"

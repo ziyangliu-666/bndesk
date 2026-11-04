@@ -633,6 +633,11 @@ async fn cors(req: Request, next: Next) -> Response {
 
 /// `history`: the read-only `/api/history`, `/api/fills`, `/api/klines` (behind auth like the rest).
 pub fn make_app(hub: &HubHandle, auth: Option<Auth>, web_dist: PathBuf, history: Arc<crate::history::Api>) -> Router {
+    make_app_with(hub, auth, web_dist, history, Router::new())
+}
+
+/// `make_app` with more routes behind the same auth (`extra`).
+pub fn make_app_with(hub: &HubHandle, auth: Option<Auth>, web_dist: PathBuf, history: Arc<crate::history::Api>, extra: Router) -> Router {
     let st = AppState { shared: hub.0.clone(), web_dist: Arc::new(web_dist) };
     // gzip for HTTP; the WebSocket deflates its large messages itself (`frame`)
     let http = Router::new()
@@ -643,6 +648,7 @@ pub fn make_app(hub: &HubHandle, auth: Option<Auth>, web_dist: PathBuf, history:
         .fallback(spa)
         .with_state(st.clone())
         .merge(crate::history::routes(history))
+        .merge(extra)
         .layer(CompressionLayer::new());
     let mut app = Router::new().route("/ws", get(ws_handler)).with_state(st).merge(http);
     match auth {

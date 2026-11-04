@@ -1599,7 +1599,10 @@ pub async fn run(mut cfg: Config) -> Result<()> {
             .money(d.money.clone())
     };
     history.warm();
-    let app = server::make_app(&handle, auth, server::web_dist(), history);
+    // the engine's own figures, pushed from its box (its token in BNDESK_INGEST_TOKEN)
+    let telemetry = crate::telemetry::Telemetry::open(&desk.borrow().cfg.db, std::env::var("BNDESK_INGEST_TOKEN").ok())
+        .context("engine telemetry db")?;
+    let app = server::make_app_with(&handle, auth, server::web_dist(), history, crate::telemetry::routes(telemetry));
     let srv = server::serve(&handle, app, &listen).await.with_context(|| format!("listen {listen}"))?;
     info!("listening on http://{} (simulate={simulate})", srv.addr);
     sig.await;

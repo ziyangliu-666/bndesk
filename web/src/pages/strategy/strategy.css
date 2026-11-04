@@ -1,0 +1,146 @@
+/* Strategy (desktop): the engine's own figures. Same grammar as Assets: regions split by 1 px rules on black. */
+.st-page {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.st-none {
+  background: var(--panel);
+  padding: 24px 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* the state on the left, the figures in one line beside it */
+.st-top {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 32px;
+  padding: 10px 16px;
+}
+.st-state {
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+}
+.st-state-word {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.st-state-word.up {
+  color: var(--up);
+}
+.st-state-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.st-figs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  min-width: 0;
+}
+
+/* Hedge: the two charts down the left, the hedge's P&L, funding and rebalances down the right */
+.st-hedge {
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.42fr);
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+}
+.st-hedge > .st-side {
+  grid-column: 2;
+  grid-row: 2 / 4;
+}
+.st-side {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: var(--rule);
+}
+.st-rebal {
+  min-height: 0;
+}
+
+/* Quoting: the quotes table on the left, capital and rejects on the right */
+.st-quoting {
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.42fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.st-quoting > .st-side {
+  grid-template-rows: auto auto minmax(220px, 1fr);
+}
+.st-quotes {
+  min-height: 0;
+}
+.st-why {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-cap .st-cap-bar-h {
+  width: 40%;
+}
+.st-bar {
+  display: inline-block;
+  vertical-align: middle;
+  width: calc(100% - 48px);
+  height: 4px;
+  background: var(--raised);
+}
+.st-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.st-bar-fill.hot {
+  background: var(--warn);
+}
+.st-bar-v {
+  display: inline-block;
+  width: 40px;
+  margin-left: 8px;
+  text-align: right;
+}
+
+.st-rejs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding: 4px 16px 12px;
+  font-size: 12px;
+}
+.st-rej-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 22px;
+  color: var(--ink);
+}
+
+@media (max-width: 74.99em) {
+  .st-hedge,
+  .st-quoting {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 360px 360px auto;
+  }
+  .st-hedge > .st-side,
+  .st-quoting > .st-side {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+/* the table's ink is set per cell: the states keep their tone */
+.st-page .ops-table td.warn-text {
+  color: var(--warn);
+}
+.st-page .ops-table td.muted {
+  color: var(--muted);
+}
+.st-page .ops-table td.up {
+  color: var(--up);
+}
+.st-page .ops-table td.down {
+  color: var(--down);
+}

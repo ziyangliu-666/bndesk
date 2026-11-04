@@ -20,9 +20,10 @@ const Analysis = lazyPage(() => import("./pages/Markouts").then((m) => ({ defaul
 const Assets = lazyPage(() => import("./pages/Accounts").then((m) => ({ default: m.Accounts })));
 const System = lazyPage(() => import("./pages/Engine").then((m) => ({ default: m.Engine })));
 const Orders = lazyPage(() => import("./pages/Orders").then((m) => ({ default: m.Orders })));
+const Strategy = lazyPage(() => import("./pages/Strategy").then((m) => ({ default: m.Strategy })));
 const History = lazyPage(() => import("./pages/History").then((m) => ({ default: m.History })));
-const LOAD = [Desk, Analysis, Assets, System, Orders, History, { preload: () => import("./components/quotes").then((m) => m.QuoteMapEC.preload()) }];
-const PAGE = { desk: Desk, analysis: Analysis, assets: Assets, system: System, orders: Orders, history: History };
+const LOAD = [Desk, Analysis, Strategy, Assets, System, Orders, History, { preload: () => import("./components/quotes").then((m) => m.QuoteMapEC.preload()) }];
+const PAGE = { desk: Desk, analysis: Analysis, strategy: Strategy, assets: Assets, system: System, orders: Orders, history: History };
 
 /** The layout's Desk, fetched at once (index.html has already asked for its files): it is ready to draw when the
  *  first snapshot lands, instead of being asked for only then. */
@@ -82,6 +83,8 @@ function DesktopApp() {
                 <History />
               ) : page === "analysis" ? (
                 <Analysis />
+              ) : page === "strategy" ? (
+                <Strategy />
               ) : page === "orders" ? (
                 <Orders />
               ) : page === "assets" ? (

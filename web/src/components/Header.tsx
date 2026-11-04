@@ -5,12 +5,13 @@ const PAGES: { value: DeskPage; label: string }[] = [
   { value: "desk", label: "Desk" },
   { value: "history", label: "History" },
   { value: "analysis", label: "Analysis" },
+  { value: "strategy", label: "Strategy" },
   { value: "orders", label: "Orders" },
   { value: "assets", label: "Assets" },
   { value: "system", label: "System" },
 ];
 
-/** Keys 1–6 switch the desktop's pages (App.tsx); the nav's tooltips say which. */
+/** Keys 1–7 switch the desktop's pages (App.tsx); the nav's tooltips say which. */
 export const PAGE_KEYS: Record<string, DeskPage> = Object.fromEntries(PAGES.map((p, i) => [String(i + 1), p.value]));
 
 /**

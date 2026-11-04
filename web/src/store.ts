@@ -10,6 +10,7 @@ export type Page =
   | "desk"
   | "history"
   | "analysis"
+  | "strategy"
   | "orders"
   | "assets"
   | "system"
@@ -17,7 +18,7 @@ export type Page =
   | "more"
   | "fills"
   | "markets";
-export type DeskPage = "desk" | "history" | "analysis" | "orders" | "assets" | "system";
+export type DeskPage = "desk" | "history" | "analysis" | "strategy" | "orders" | "assets" | "system";
 /** An instrument: `{ symbol, venue }`. */
 export interface Instrument {
   symbol: string;
@@ -381,7 +382,7 @@ function chartOwner(): Route {
 
 // ---- routes: the page lives in the URL hash, so a reload, a shared link or the back button keeps it ----
 
-const PAGES: Page[] = ["desk", "history", "analysis", "orders", "assets", "system", "alerts", "more", "fills", "markets"];
+const PAGES: Page[] = ["desk", "history", "analysis", "strategy", "orders", "assets", "system", "alerts", "more", "fills", "markets"];
 /** The pages' former names: old links and bookmarks still land. */
 const ALIAS: Record<string, Page> = { markouts: "analysis", accounts: "assets", engine: "system", instruments: "markets" };
 const DETAIL_PAGE: Record<Detail["kind"], Page> = {
@@ -396,6 +397,7 @@ const ON_DESKTOP: Record<Page, DeskPage> = {
   desk: "desk",
   history: "history",
   analysis: "analysis",
+  strategy: "strategy",
   orders: "orders",
   assets: "assets",
   system: "system",
