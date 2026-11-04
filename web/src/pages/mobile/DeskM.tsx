@@ -1,7 +1,8 @@
 import { memo, useMemo, useRef, useState } from "react";
 import { UnstyledButton } from "@mantine/core";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
-import { isHidden, openMarkets, serverNow, useStore } from "../../store";
+import { isHidden, navigate, openMarkets, serverNow, useStore } from "../../store";
+import { useEngineHedge } from "../strategy/engine";
 import { useNow } from "../../hooks";
 import { hm, int, num } from "../../format";
 import { LevelIcon } from "../../components/ui";
@@ -31,6 +32,7 @@ export function DeskM() {
   // the day's figures follow every message; the lists, chart and quotes take theirs 4 times a second
   const sm = useLive((s) => s.snap?.summary, FIG_MS);
   const exposure = useLive((s) => s.snap?.exposure, FIG_MS);
+  const engine = useEngineHedge(useNow(5000) + useStore.getState().skew);
   const accounts = useLive((s) => s.snap?.accounts, PAGE_MS);
   // the movers and the latest fills hold still under a resting finger
   const [held, hold] = useHold();
@@ -108,7 +110,7 @@ export function DeskM() {
       {quotesEl}
 
       <Section title="Risk" className="dk-risk">
-        <ExposureBar x={exposure} />
+        {engine ? <EngineHedgeBar e={engine} /> : <ExposureBar x={exposure} />}
         {o10 && (
           <RateMeter
             label="Orders 10 s"
@@ -331,6 +333,20 @@ function AlertLine() {
 }
 
 // ---- risk ----
+
+/** The engine's own hedge (when it is pushing): what Strategy shows, a tap away. */
+function EngineHedgeBar({ e }: { e: NonNullable<ReturnType<typeof useEngineHedge>> }) {
+  return (
+    <button type="button" className="m-plain-btn" onClick={() => navigate({ page: "strategy" })}>
+      <LimitBar
+        label={e.word === "Within the band" ? "Unhedged" : e.word}
+        value={e.unhedged ?? 0}
+        limit={e.band ?? 0}
+        centered
+      />
+    </button>
+  );
+}
 
 function ExposureBar({ x }: { x: Exposure }) {
   const money = useMoney();

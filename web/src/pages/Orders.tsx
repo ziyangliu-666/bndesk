@@ -8,7 +8,7 @@ import { IconSearch, IconX } from "@tabler/icons-react";
 import { selectInstrument, useStore } from "../store";
 import type { Account, OpenOrder } from "../protocol";
 import { gridTheme } from "../gridTheme";
-import { hms, int, pct } from "../format";
+import { compact, hms, int, pct } from "../format";
 import { fBps, fPrice, DEFAULT_COL } from "../grid";
 import { QuoteControls, QuoteLegend, QuoteMapEC, RANGES, useMapCounts, useQuoteMapState, type QuoteMapState } from "../components/quotes";
 import { TextToggle, useExPref } from "../components/ex";
@@ -153,17 +153,18 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
         field: "since",
         headerName: "Time",
         headerTooltip: "When the order was placed",
-        width: 66,
-        minWidth: 66,
-        flex: 66,
+        width: 76,
+        minWidth: 74,
+        flex: 76,
         cellClass: "num muted-cell",
         valueFormatter: (p) => hms(p.value as number | null, tz),
         initialSort: "desc",
       },
       { field: "symbol", headerName: "Symbol", width: 96, minWidth: 92, flex: 96, cellRenderer: SymbolCell },
       { field: "side", headerName: "Side", width: 44, minWidth: 40, flex: 44, cellRenderer: SideCell },
-      n({ field: "price", headerName: "Price", headerTooltip: "Limit price", width: 78, minWidth: 72, flex: 78, valueFormatter: fPrice }),
-      n({ field: "qty", headerName: "Amount", headerTooltip: "Remaining quantity, base asset", width: 66, minWidth: 60, flex: 66, valueFormatter: (p) => qtyText(p.value as number, hideNow()), cellClass: hide ? "num masked" : "num" }),
+      n({ field: "price", headerName: "Price", headerTooltip: "Limit price", width: 92, minWidth: 88, flex: 92, valueFormatter: fPrice }),
+      // a large amount (a meme coin's millions) compact, so the column stays narrow and never cuts a figure
+      n({ field: "qty", headerName: "Amount", headerTooltip: "Remaining quantity, base asset", width: 78, minWidth: 74, flex: 78, valueFormatter: (p) => (Math.abs(p.value as number) >= 1e5 ? (hideNow() ? qtyText(p.value as number, true) : compact(p.value as number)) : qtyText(p.value as number, hideNow())), cellClass: hide ? "num masked" : "num" }),
       n({
         field: "notional",
         headerName: "Notional",
@@ -184,7 +185,7 @@ function OpenOrders({ orders }: { orders: OpenOrder[] }) {
         headerTooltip: "Distance from fair, bps; positive = passive, negative = through fair",
         cellClassRules: { "warn-text": (p) => p.value != null && p.value < 0 },
       }),
-      { field: "account", headerName: "Account", width: 60, minWidth: 56, flex: 60, cellClass: "muted-cell" },
+      { field: "account", headerName: "Account", width: 76, minWidth: 72, flex: 76, cellClass: "muted-cell" },
     ];
   }, [tz, hide]);
   return (

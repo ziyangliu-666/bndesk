@@ -11,6 +11,9 @@ import { maskNode, signTone, useHide } from "../mask";
 import { tradingPnl, unpriced, useHedgePnl } from "../selectors";
 import { cur, baseOf, useDesk, isHedge, roled, hedgeWord, inventoryWord, exchangeOf, exchangeWord, notionalCur } from "../desk";
 import { hasTickerSocket } from "./ex/ticker";
+import { useEngineHedge } from "../pages/strategy/engine";
+import { navigate } from "../store";
+import { useNow } from "../hooks";
 
 const betaNote = (x: Exposure) =>
   x.beta_source === "estimate" ? "β: desk estimate, may differ from the engine's" : "β: configured per market";
@@ -46,6 +49,25 @@ function exposureFact(x: Exposure, m: (s: string) => ReactNode, hide: boolean): 
   };
 }
 
+function engineFact(e: NonNullable<ReturnType<typeof useEngineHedge>>, m: (s: string) => ReactNode): Fact {
+  const over = e.unhedged != null && e.band != null && Math.abs(e.unhedged) > e.band;
+  return {
+    label: (
+      <button type="button" className="dk-tk-link" onClick={() => navigate({ page: "strategy" })}>
+        {e.word === "Within the band" ? "Unhedged" : e.word}
+      </button>
+    ),
+    value: (
+      <>
+        {m(pnl(e.unhedged))}
+        <span className="dk-tk-of"> / ±{m(num(e.band, 0))}</span>
+      </>
+    ),
+    tone: over ? "warn" : undefined,
+    title: `The engine's beta-weighted inventory its hedge does not offset, against its band (Strategy has the history). ${cur()}.`,
+  };
+}
+
 /** The desk's head. `name`: the name slot at the left (the picker / back control). Day PnL is the one large
  *  figure (green / red: it answers "did we make money"); its split is a line under it in ink; equity, exposure,
  *  volume, markout and fills sit quieter at the right. */
@@ -55,6 +77,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const exposure = useStore((st) => st.snap?.exposure);
   const tz = useStore((st) => st.tz);
   const hide = useHide();
+  const engine = useEngineHedge(useNow(5000) + useStore.getState().skew);
   const m = (s: string) => maskNode(hide, s);
   const tone = (v: number | null | undefined) => (hide ? undefined : signTone(v) || undefined);
   const p = sm?.pnl;
@@ -75,7 +98,8 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
   const facts: Fact[][] = [
     [
-      ...(exposure ? [exposureFact(exposure, m, hide)] : []),
+      // the engine's own figure when it is pushing (Strategy shows the same), else the desk's estimate
+      ...(engine ? [engineFact(engine, m)] : exposure ? [exposureFact(exposure, m, hide)] : []),
       { label: "Equity", value: m(num(sm?.equity, 2)), title: `All accounts: spot balances at mid plus futures margin balance, ${cur()}` },
     ],
     [

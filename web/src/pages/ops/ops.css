@@ -185,7 +185,7 @@
 
 /* ---------- Orders ---------- */
 .ops-orders {
-  grid-template-columns: minmax(0, 1fr) 552px;
+  grid-template-columns: minmax(0, 1fr) 680px;
   grid-template-rows: auto minmax(0, 1fr);
 }
 .ops-limits {
@@ -577,7 +577,7 @@
 /* under 1400 px the map's legend and controls take two lines */
 @media (max-width: 87.49em) {
   .ops-orders {
-    grid-template-columns: minmax(0, 1fr) 500px;
+    grid-template-columns: minmax(0, 1fr) 610px;
   }
   .ops-qmap-legend {
     height: auto;

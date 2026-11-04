@@ -22,7 +22,7 @@ const TABS: { value: Tab; label: string; title: string }[] = [
 ];
 
 const IVS = [
-  { value: "line", label: "Line", title: "The 5 s series" },
+  { value: "line", label: "5s", title: "Every 5 s sample, no bars" },
   { value: "1m", label: "1m" },
   { value: "5m", label: "5m" },
   { value: "15m", label: "15m" },

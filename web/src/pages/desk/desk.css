@@ -720,3 +720,13 @@
 .dk-mk-k {
   color: var(--muted);
 }
+/* a fact's label that opens its page (the engine's hedge → Strategy) */
+.dk-tk-link {
+  all: unset;
+  cursor: pointer;
+}
+.dk-tk-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

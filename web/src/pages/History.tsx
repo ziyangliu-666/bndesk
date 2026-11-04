@@ -212,7 +212,9 @@ export function History() {
 
   // ---- toolbar ----
   const ivOptions = INTERVALS.map((v) => ({ value: v, label: IV_LABEL[v] }));
-  const span = from == null || dayStart == null ? "" : `${ymd(desk.bars[0] ? desk.bars[0].t : from)} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
+  // from the first bar there is (the desk's first day kept, or the instrument's first fill or kline), not "All"'s ten years
+  const first = inst ? (allFills.fills[0]?.t ?? kl.bars[0]?.time) : desk.bars[0]?.t;
+  const span = from == null || dayStart == null || first == null ? "" : `${ymd(Math.max(first, from))} – ${ymd(dayStart)} ${tz === "utc" ? "UTC" : ""}`;
 
   const instTitle = inst ? `${inst.symbol}${venueTag(inst.venue) ? ` ${venueTag(inst.venue)}` : ""}` : "";
   return (

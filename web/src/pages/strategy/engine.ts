@@ -147,29 +147,45 @@ export const skey = (k: MKey) => "metrics." + M[k];
 /** A push older than this is stale (three missed). */
 export const STALE_MS = 50_000;
 
+// one poller for every view that reads the last payload (Strategy, the Desk's head, the phone's Desk): it runs
+// while one is mounted
+let shared: { latest: Latest | null; error: string | null } = { latest: null, error: null };
+const subs = new Set<() => void>();
+let timer: ReturnType<typeof setTimeout> | null = null;
+async function poll() {
+  try {
+    shared = { latest: await getJSON<Latest>("/api/engine/latest", {}), error: null };
+  } catch (e) {
+    shared = { ...shared, error: String(e) };
+  }
+  for (const f of subs) f();
+  timer = subs.size ? setTimeout(poll, 15_000) : null;
+}
+
 /** The last payload, again every 15 s. */
 export function useEngineLatest(): { latest: Latest | null; error: string | null } {
-  const [latest, setLatest] = useState<Latest | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [, tick] = useState(0);
   useEffect(() => {
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      try {
-        const r = await getJSON<Latest>("/api/engine/latest", {});
-        if (live) setLatest(r), setError(null);
-      } catch (e) {
-        if (live) setError(String(e));
-      }
-      if (live) timer = setTimeout(load, 15_000);
-    };
-    void load();
+    const f = () => tick((n) => n + 1);
+    subs.add(f);
+    if (timer == null) void poll();
     return () => {
-      live = false;
-      clearTimeout(timer);
+      subs.delete(f);
+      if (!subs.size && timer != null) clearTimeout(timer), (timer = null);
     };
   }, []);
-  return { latest, error };
+  return shared;
+}
+
+/** The engine's hedge now, when its last push is fresh (else null: the views fall back to the desk's own estimate). */
+export function useEngineHedge(now: number) {
+  const { latest } = useEngineLatest();
+  return useMemo(() => {
+    if (latest?.t == null || !latest.payload || latest.payload.ok === false || now - latest.t > STALE_MS) return null;
+    const m = metrics(latest.payload);
+    if (mv(m, "pos") == null || mv(m, "bw") == null || mv(m, "band") == null) return null;
+    return { m, ...hedgeState(m, false, null, () => "") };
+  }, [latest, Math.floor(now / 5000)]);
 }
 
 /** `keys` over the last `spanMs`, again every minute. */

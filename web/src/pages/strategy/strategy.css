@@ -46,7 +46,7 @@
 
 /* Hedge: the two charts down the left, the hedge's P&L, funding and rebalances down the right */
 .st-hedge {
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.42fr);
+  grid-template-columns: minmax(0, 1fr) minmax(560px, 0.5fr);
   grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
 }
 .st-hedge > .st-side {
@@ -63,7 +63,7 @@
 
 /* Quoting: the quotes table on the left, capital and rejects on the right */
 .st-quoting {
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.42fr);
+  grid-template-columns: minmax(0, 1fr) minmax(460px, 0.42fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
 .st-quoting > .st-side {
@@ -143,4 +143,14 @@
 }
 .st-page .ops-table td.down {
   color: var(--down);
+}
+
+/* the side column's tables: tighter cells, so funding and the legs keep every column at 1366 px */
+.st-side .ops-table th,
+.st-side .ops-table td {
+  padding: 0 8px;
+}
+.st-side .ops-table th:first-child,
+.st-side .ops-table td:first-child {
+  padding-left: 16px;
 }

@@ -1,11 +1,26 @@
 // The engine's pushed figures, simulated for the demo (VITE_MOCK): two days of 15 s samples of a hedge that
 // follows a beta-weighted inventory within its band, and a quoting table. Shapes as server telemetry.rs answers.
 import { M } from "./pages/strategy/engine";
+import { useStore } from "./store";
 
 const STEP = 15_000;
 const SPAN = 2 * 86_400_000;
-const ACCOUNTS = ["mm1", "mm2", "mm3", "mm4"];
-const SYMBOLS = ["NVDAUSDT", "TSLAUSDT", "AAPLUSDT", "MSFTUSDT", "AMZNUSDT", "METAUSDT", "GOOGLUSDT", "AMDUSDT", "COINUSDT", "MSTRUSDT", "PLTRUSDT", "CRMUSDT", "PYPLUSDT", "ZMBUSDT"];
+// the demo desk's own accounts and instruments, so every page names the same ones
+const ACCOUNTS = () => {
+  const a = useStore.getState().snap?.accounts ?? [];
+  const subs = a.filter((x) => x.role === "sub").map((x) => x.id);
+  return subs.length ? subs : a.length ? a.map((x) => x.id) : ["sub-a", "sub-b"];
+};
+const SYMBOLS = (): { symbol: string; mid: number; qty: number }[] => {
+  const seen = new Set<string>();
+  const out: { symbol: string; mid: number; qty: number }[] = [];
+  for (const r of useStore.getState().snap?.symbols ?? []) {
+    if (r.venue !== "spot" || seen.has(r.symbol) || r.mid == null) continue;
+    seen.add(r.symbol);
+    out.push({ symbol: r.symbol, mid: r.mid, qty: r.inv_qty });
+  }
+  return out.slice(0, 16);
+};
 
 function rng(seed: number) {
   let s = seed >>> 0;
@@ -40,8 +55,9 @@ function build(): Built {
     slip = 1.2,
     lat = 2400;
   let chase = 0; // samples left for a maker hedge to fill
-  const free = ACCOUNTS.map(() => 9000 + r() * 4000);
-  const locked = ACCOUNTS.map(() => 3000 + r() * 2000);
+  const accts = ACCOUNTS();
+  const free = accts.map(() => 9000 + r() * 4000);
+  const locked = accts.map(() => 3000 + r() * 2000);
   for (let x = t0; x <= now; x += STEP) {
     const hour = new Date(x).getUTCHours();
     const us = hour >= 13 && hour < 21;
@@ -64,7 +80,7 @@ function build(): Built {
       lat = lat * 0.8 + (isTaker ? 300 + r() * 400 : 15_000 + r() * 60_000) * 0.2;
     }
     if (chase > 0 && --chase === 0) pos = target;
-    for (let i = 0; i < ACCOUNTS.length; i++) {
+    for (let i = 0; i < accts.length; i++) {
       const d = (r() - 0.5) * 300;
       locked[i] = Math.max(500, Math.min(8000, locked[i]! + d));
       free[i] = Math.max(200, free[i]! - d);
@@ -99,7 +115,7 @@ function build(): Built {
     m("poolLocked", locked.reduce((a, b) => a + b, 0));
     m("quoteNotional", 500);
     m("maxUnits", 8);
-    ACCOUNTS.forEach((a, i) => {
+    accts.forEach((a, i) => {
       f[`balances.${a}.USDT.free`] = free[i]!;
       f[`balances.${a}.USDT.locked`] = locked[i]!;
     });
@@ -116,16 +132,17 @@ function latest() {
   const metrics = Object.entries(f)
     .filter(([k]) => k.startsWith("metrics."))
     .map(([k, v]) => ({ name: k.slice(8), value: v }));
-  const balances = Object.fromEntries(ACCOUNTS.map((a) => [a, { USDT: { free: f[`balances.${a}.USDT.free`]!, locked: f[`balances.${a}.USDT.locked`]! } }]));
+  const balances = Object.fromEntries(ACCOUNTS().map((a) => [a, { USDT: { free: f[`balances.${a}.USDT.free`]!, locked: f[`balances.${a}.USDT.locked`]! } }]));
   const now = Date.now();
-  const quotes = SYMBOLS.flatMap((symbol, i) => {
-    const mid = 40 + i * 37.3 + r() * 2;
-    const blockOf = (side: number) => (i === 13 ? 5 : i === 12 ? 7 : i === 11 && side === 1 ? 1 : i === 10 && side === 0 ? 8 : 0);
+  const syms = SYMBOLS();
+  const n = syms.length;
+  const quotes = syms.flatMap(({ symbol, mid, qty: held }, i) => {
+    const blockOf = (side: number) => (i === n - 1 ? 5 : i === n - 2 ? 7 : i === n - 3 && side === 1 ? 1 : i === n - 4 && side === 0 ? 8 : 0);
     return [0, 1].map((side) => {
       const block = blockOf(side);
       const half = mid * (4 + i * 0.6 + r()) * 1e-4;
       const px = side === 0 ? mid - half : mid + half;
-      const qty = Math.round((800 + r() * 1500) / mid * 100) / 100;
+      const qty = (800 + r() * 1500) / mid;
       return {
         symbol,
         venue: 0,
@@ -140,11 +157,16 @@ function latest() {
         reason: block === 8 ? "PostOnlyWouldCross" : "None",
         note: "",
         block_since_ns: block === 0 ? 0 : (now - (60_000 + i * 45_000)) * 1e6,
-        position: Math.round((r() - 0.3) * 3000 / mid * 100) / 100,
+        position: held,
         mid,
       };
     });
   });
+  // the sides as the quotes show them
+  const sides = metrics.find((x) => x.name === M.sidesQuoting);
+  if (sides) sides.value = quotes.filter((q) => q.block === 0).length;
+  const warm = metrics.find((x) => x.name === M.sidesWarm);
+  if (warm) warm.value = quotes.filter((q) => q.block !== 1).length;
   return {
     t: b.t[b.t.length - 1],
     now,

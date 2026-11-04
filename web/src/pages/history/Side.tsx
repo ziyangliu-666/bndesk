@@ -66,6 +66,10 @@ export function DeskSide({
   const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : true));
   const max = Math.max(1e-9, ...parts.filter((k) => k !== "pi").map((k) => Math.abs(tot[k] ?? 0)));
   const m = (s: string) => maskText(hide, s);
+  const unsplitPnl = useMemo(() => {
+    const xs = rows.filter((r) => !r.split && r.pnl != null);
+    return xs.length ? xs.reduce((k, r) => k + r.pnl!, 0) : null;
+  }, [rows]);
   const tone = (v: number | null | undefined) => (hide ? "masked" : signClass(v));
   return (
     <>
@@ -85,12 +89,9 @@ export function DeskSide({
             <Fig big label="Day PnL" value={m(sg(day.pnl))} tone={tone(day.pnl)} />
             <Fig label="Fills" value={int(day.fills)} />
             <Fig label="Volume" value={m(compact(day.volume))} tone={hide ? "masked" : undefined} title={`Filled notional, ${notionalCur()}`} />
-            <div className="hx-fig">
-              <span className="hx-fig-l">Chart</span>
-              <button type="button" className="hx-link hx-fig-v" onClick={onIntraday} title={intraday ? "Back to one bar a day" : "The day in 15 minute bars, as on the phone's day page"}>
-                {intraday ? "Days (1D)" : "Intraday (15m)"}
-              </button>
-            </div>
+            <button type="button" className="hx-link hx-fig-v" onClick={onIntraday} title={intraday ? "One bar a day" : "The day in 15 minute bars"}>
+              {intraday ? "Back to days" : "Show intraday"}
+            </button>
           </div>
           {!day.split && (
             <div className="hx-note muted">
@@ -118,9 +119,7 @@ export function DeskSide({
           </div>
         </>
       )}
-      <div className="hx-sect" title={!day && sm.unsplit ? "The parts are kept only for the days the desk recorded its split" : undefined}>
-        Split{!day && sm.unsplit > 0 && <span className="muted"> · kept {rows.length - sm.unsplit} of the {rows.length} days</span>}
-      </div>
+      <div className="hx-sect">Split</div>
       <div className="hx-split">
         {parts.map((k) => {
           const v = tot[k];
@@ -136,6 +135,15 @@ export function DeskSide({
             </div>
           );
         })}
+        {/* the days from before the desk kept its split: their Day PnL as one row, so the rows add up to the PnL */}
+        {!day && unsplitPnl != null && (
+          <div className="hx-split-row" title="Days from before the desk recorded its split: their Day PnL, not split">
+            <span />
+            <span>{`Before the split (${sm.unsplit} d)`}</span>
+            <span className="hx-bar-cell" />
+            <span className={"fig" + (hide ? " masked" : "")}>{m(sg(unsplitPnl))}</span>
+          </div>
+        )}
       </div>
       <div className="hx-sect">Last 5 weeks</div>
       <Calendar rows={rows} todayDay={todayDay} selected={selected} onDay={onDay} hide={hide} />

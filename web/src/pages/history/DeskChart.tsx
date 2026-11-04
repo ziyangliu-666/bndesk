@@ -2,7 +2,7 @@
 // volume under it. One chart, no modes: the split, the per-day bars and the inventory are in the tables and the
 // side column, not here.
 import { useMemo } from "react";
-import { ExChart, rgba, signColor, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView } from "../../components/ex";
+import { ExChart, rgba, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView } from "../../components/ex";
 import { maskFormat } from "../../mask";
 import { REF_LINE } from "../../components/ex/palette";
 import { C, PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
@@ -111,7 +111,6 @@ export function DeskChart({
   );
   const legendExtra = useMemo<ExLegendItem[]>(
     () => [
-      { label: word, line: 1, title: `What this ${word.toLowerCase()} made`, value: (t) => { const r = byT.get(t); return r ? [sgn(r.pnl), signColor(r.pnl)] : "--"; } },
       { label: "Fills", pane: 1, line: 1, value: (t) => [int(byT.get(t)?.fills), C.ink] },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps

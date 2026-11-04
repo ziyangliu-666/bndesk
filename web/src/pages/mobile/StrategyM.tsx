@@ -39,7 +39,6 @@ function HedgeM({ latest }: { latest: Latest }) {
     <>
       <div className="h-sum">
         <div className="h-sum-l">
-          <div className="h-sum-label">Hedge</div>
           <div className={"h-sum-v " + tone}>{word}</div>
           {h.inBands != null && <div className="h-sum-note">{`Unhedged ${num(h.inBands, 2, true)} bands`}</div>}
         </div>
@@ -51,7 +50,7 @@ function HedgeM({ latest }: { latest: Latest }) {
           { label: "Band", value: h.band == null ? "--" : maskText(hide, "±" + compact(h.band)) },
           { label: "Beta", value: mv(m, "beta") == null ? "--" : num(mv(m, "beta"), 2) },
           { label: "Target", value: a(target) },
-          { label: "Hedge", value: a(pos) },
+          { label: "Position", value: a(pos) },
           { label: "Beta-weighted", value: a(mv(m, "bw")) },
           { label: "Inventory", value: a(mv(m, "invNet")) },
           { label: "Slippage", value: mv(m, "slipBp") == null ? "--" : bps(mv(m, "slipBp")) + " bps" },
@@ -64,7 +63,7 @@ function HedgeM({ latest }: { latest: Latest }) {
       <div className="r-chart">
         <ExposureChart s={s} hide={hide} height={240} />
       </div>
-      <Sec title="Rebalances" right={`${day.reduce((k, r) => k + r.n, 0)} in 24 h`}>
+      <Sec title="Rebalances" right={rebal.length ? `${day.length} in 24 h` : undefined}>
         {rebal
           .slice()
           .reverse()
@@ -73,7 +72,7 @@ function HedgeM({ latest }: { latest: Latest }) {
             <Row
               dense
               key={r.t}
-              title={hms(r.t, tz)}
+              title={(new Date(r.t).toDateString() === new Date().toDateString() ? "" : `${new Date(r.t).toISOString().slice(5, 10)} `) + hms(r.t, tz)}
               sub={[r.taker == null ? null : r.taker ? "Taker" : "Maker", r.trigger].filter(Boolean).join(" · ")}
               value={<span className="r-fig">{a(r.target)}</span>}
               valueSub={`from ${a(r.prevTarget)}`}

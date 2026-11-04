@@ -4,7 +4,7 @@
 // Quoting: where the pools' capital is, and each instrument's quotes and what stops them.
 import { useMemo, type ReactNode } from "react";
 import { useStore } from "../store";
-import { bps, compact, dur, hms, int, num, pct } from "../format";
+import { bps, compact, dur, hms, int, num, pct, price } from "../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR } from "../theme";
 import { ExChart, Tabs, useExPref, type ExMarker, type ExSeries } from "../components/ex";
 import { amount, maskText, useHide } from "../mask";
@@ -82,7 +82,7 @@ function HedgeFigures({ m, rebal, hide }: { m: Record<string, number>; rebal: Re
         {a(target)}
         {h.behind != null && Math.abs(h.behind) > 0.5 && <span className="ops-unit">{maskText(hide, compact(h.behind, 1, true) + " to fill")}</span>}
       </Fig>
-      <Fig label="Hedge" title="The engine's SOXL perp notional">{a(pos)}</Fig>
+      <Fig label="Hedge position" title="The engine's position in the hedge perpetual, at its mid">{a(pos)}</Fig>
       <Fig label="Beta-weighted inventory">{a(mv(m, "bw"))}</Fig>
       <Fig label="Inventory" title="Net, at mid; gross after it">
         {a(mv(m, "invNet"))}
@@ -172,12 +172,14 @@ export function GapChart({ s, rebal, hide, height }: { s: ReturnType<typeof useE
 export function ExposureChart({ s, hide, height }: { s: ReturnType<typeof useEngineSeries>["s"]; hide: boolean; height?: number }) {
   const series = useMemo<ExSeries[]>(() => {
     const fmt = (v: number) => amount(v, "pnlMoney", hide);
+    // the hedge drawn as the size of its short, so it lies on the beta-weighted line when hedged
+    const size = (v: number) => amount(v, "money", hide);
     return [
       { key: "inv", kind: "line", label: "Inventory", color: INV_COLOR, width: 1, data: pts(s, skey("invNet")), format: fmt, lastValue: false },
       { key: "bw", kind: "line", label: "Beta-weighted", color: C.ink, width: 2, data: pts(s, skey("bw")), format: fmt },
       // the hedge and its target as what they offset (their negatives): on top of the beta-weighted line when hedged
-      { key: "hedge", kind: "line", label: "Hedge, short", color: FUT_COLOR, width: 2, data: pts(s, skey("pos"), (v) => -v), format: fmt },
-      { key: "target", kind: "line", label: "Target", color: FUT_COLOR, width: 1, lineStyle: "dotted", data: pts(s, skey("target"), (v) => -v), format: fmt, lastValue: false, options: { lineType: 1 } },
+      { key: "hedge", kind: "line", label: "Short hedge", color: FUT_COLOR, width: 2, data: pts(s, skey("pos"), (v) => -v), format: size },
+      { key: "target", kind: "line", label: "Short target", color: FUT_COLOR, width: 1, lineStyle: "dotted", data: pts(s, skey("target"), (v) => -v), format: size, lastValue: false, options: { lineType: 1 } },
     ];
   }, [s, hide]);
   const last24 = series[1]!.data.filter((p) => p.time >= Date.now() - DAY).length;
@@ -225,7 +227,10 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.t}>
-                  <td className="l fig">{hms(r.t, tz)}</td>
+                  <td className="l fig">
+                    {new Date(r.t).toDateString() !== new Date().toDateString() && <span className="muted">{new Date(r.t).toISOString().slice(5, 10)} </span>}
+                    {hms(r.t, tz)}
+                  </td>
                   <td className={"l" + (r.taker ? " warn-text" : "")}>{r.taker == null ? "--" : r.taker ? "Taker" : "Maker"}{r.n > 1 ? ` ×${r.n}` : ""}</td>
                   <td className="l">{r.trigger ?? "--"}</td>
                   <td className="fig">
@@ -418,7 +423,7 @@ export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
         depth: depth || null,
         block: worst.block ?? 0,
         since: worst.block ? since : null,
-        why: [worst.reason, worst.note].filter((x) => x && x !== "None").join(" · ") || null,
+        why: [worst.reason && worst.reason !== "None" ? words(worst.reason) : null, worst.note].filter(Boolean).join(" · ") || null,
       };
     })
     .sort((a, b) => rank(b.block) - rank(a.block) || a.symbol.localeCompare(b.symbol));
@@ -426,10 +431,10 @@ export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
 
 function QuoteSide({ q, hide }: { q: Quote | null; hide: boolean }) {
   if (!q) return <span className="muted">--</span>;
-  if (q.working_px == null || !q.working_qty) return <span className="muted">{q.desired_px == null ? "--" : num(q.desired_px, 2)}</span>;
+  if (q.working_px == null || !q.working_qty) return <span className="muted">{q.desired_px == null ? "--" : price(q.desired_px)}</span>;
   return (
     <>
-      {num(q.working_px, 2)}
+      {price(q.working_px)}
       <span className="muted"> × {maskText(hide, compact(q.working_qty))}</span>
     </>
   );
@@ -489,6 +494,9 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
   );
 }
 
+/** A reason's CamelCase name as words: PostOnlyWouldCross → Post only would cross. */
+const words = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()).replace(/ ([A-Z])(?=[a-z])/g, (_, c: string) => " " + c.toLowerCase());
+
 function RejectList({ title, list }: { title: string; list: Reason[] | undefined }) {
   return (
     <div className="st-rej">
@@ -496,7 +504,7 @@ function RejectList({ title, list }: { title: string; list: Reason[] | undefined
       {list?.length ? (
         list.slice(0, 6).map((r) => (
           <div key={r.reason} className="st-rej-row">
-            <span>{r.reason}</span>
+            <span title={r.reason}>{words(r.reason)}</span>
             <span className="fig">{int(r.count)}</span>
           </div>
         ))

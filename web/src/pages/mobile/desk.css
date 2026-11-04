@@ -243,3 +243,10 @@
   font-size: 12px;
   font-weight: 400;
 }
+/* a figure that opens its page (the engine's hedge → Strategy) */
+.m-plain-btn {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+}
