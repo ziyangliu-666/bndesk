@@ -473,7 +473,9 @@ impl Account {
         let q0 = q - d.trades.values().map(|t| t.1).sum::<f64>();
         let fees = d.trades.values().map(|t| t.3).sum();
         let unit = m.find(s, self.perp).and_then(|i| m.unit(i)).unwrap_or(1.0);
-        let price = match mark {
+        // flat now: the day's price P&L does not depend on the mark (q × mark is 0), so a leg closed today needs none
+        let mk = mark.or(if q.abs() < 1e-12 { Some(0.0) } else { None });
+        let price = match mk {
             Some(mk) if d.m0.is_some() || q0.abs() < 1e-12 => Some(
                 (d.m0.map_or(0.0, |m0| q0 * (mk - m0)) + d.trades.values().map(|&(_, sq, px, _)| sq * (mk - px)).sum::<f64>()) * unit,
             ),

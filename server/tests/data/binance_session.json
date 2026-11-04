@@ -5486,6 +5486,41 @@
         {
           "account": "mm",
           "conversion": false,
+          "edge_bps": null,
+          "fair": null,
+          "fee": 0.01,
+          "fee_asset": "USDT",
+          "id": "mm:usdm:CCCUSDT:7100",
+          "maker": true,
+          "mk": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_fast": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_raw": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "notional": 51.0,
+          "price": 51.0,
+          "qty": 1.0,
+          "side": "buy",
+          "symbol": "CCCUSDT",
+          "ts": 1759968120000,
+          "venue": "usdm"
+        },
+        {
+          "account": "mm",
+          "conversion": false,
           "edge_bps": -202.869866403,
           "fair": 202.1,
           "fee": 0.0001,
@@ -5674,7 +5709,7 @@
         ],
         "by_hour": [
           {
-            "fills": 7,
+            "fills": 8,
             "hour": 0,
             "mk10": -32.808700041,
             "mk60": -62.171800348,
@@ -5998,6 +6033,17 @@
               0.25
             ],
             [
+              "CCCUSDT",
+              -1.0,
+              0.0,
+              50.0,
+              null,
+              1,
+              -1.0,
+              0.01,
+              0.0
+            ],
+            [
               "HHHUSDT",
               -3.5,
               -4.0,
@@ -6287,6 +6333,42 @@
           "upnl": null,
           "venue": "spot",
           "volume_day": 0.0
+        },
+        {
+          "ask": null,
+          "ask_dist_bps": null,
+          "avg_cost": 51.0,
+          "basis_bps": null,
+          "bid": null,
+          "bid_dist_bps": null,
+          "buys_day": 1,
+          "dust": false,
+          "edge_bps": null,
+          "fair": null,
+          "fills_day": 1,
+          "float_pnl": 0.0,
+          "hedged_pnl": 0.0,
+          "inv_pnl": 0.0,
+          "inv_qty": 0.0,
+          "inv_value": 0.0,
+          "last_fill": 1759968120000,
+          "mid": null,
+          "mk10_bps": null,
+          "mk300_bps": null,
+          "mk60_bps": null,
+          "mm_pnl": 0.0,
+          "open_asks": 0,
+          "open_bids": 0,
+          "realized_pnl": 0.0,
+          "ref_mid": null,
+          "reference": null,
+          "sells_day": 0,
+          "spread_bps": null,
+          "symbol": "CCCUSDT",
+          "trading_pnl": 0.0,
+          "upnl": null,
+          "venue": "usdm",
+          "volume_day": 51.0
         },
         {
           "ask": 202.2,
@@ -6667,6 +6749,41 @@
         {
           "account": "mm",
           "conversion": false,
+          "edge_bps": null,
+          "fair": null,
+          "fee": 0.01,
+          "fee_asset": "USDT",
+          "id": "mm:usdm:CCCUSDT:7100",
+          "maker": true,
+          "mk": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_fast": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_raw": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "notional": 51.0,
+          "price": 51.0,
+          "qty": 1.0,
+          "side": "buy",
+          "symbol": "CCCUSDT",
+          "ts": 1759968120000,
+          "venue": "usdm"
+        },
+        {
+          "account": "mm",
+          "conversion": false,
           "edge_bps": -202.869866403,
           "fair": 202.1,
           "fee": 0.0001,
@@ -6855,7 +6972,7 @@
         ],
         "by_hour": [
           {
-            "fills": 7,
+            "fills": 8,
             "hour": 0,
             "mk10": -32.808700041,
             "mk60": -62.171800348,
@@ -7179,6 +7296,17 @@
               0.25
             ],
             [
+              "CCCUSDT",
+              -1.0,
+              0.0,
+              50.0,
+              null,
+              1,
+              -1.0,
+              0.01,
+              0.0
+            ],
+            [
               "HHHUSDT",
               -3.5,
               -4.0,
@@ -7468,6 +7596,42 @@
           "upnl": null,
           "venue": "spot",
           "volume_day": 0.0
+        },
+        {
+          "ask": null,
+          "ask_dist_bps": null,
+          "avg_cost": 51.0,
+          "basis_bps": null,
+          "bid": null,
+          "bid_dist_bps": null,
+          "buys_day": 1,
+          "dust": false,
+          "edge_bps": null,
+          "fair": null,
+          "fills_day": 1,
+          "float_pnl": 0.0,
+          "hedged_pnl": 0.0,
+          "inv_pnl": 0.0,
+          "inv_qty": 0.0,
+          "inv_value": 0.0,
+          "last_fill": 1759968120000,
+          "mid": null,
+          "mk10_bps": null,
+          "mk300_bps": null,
+          "mk60_bps": null,
+          "mm_pnl": 0.0,
+          "open_asks": 0,
+          "open_bids": 0,
+          "realized_pnl": 0.0,
+          "ref_mid": null,
+          "reference": null,
+          "sells_day": 0,
+          "spread_bps": null,
+          "symbol": "CCCUSDT",
+          "trading_pnl": 0.0,
+          "upnl": null,
+          "venue": "usdm",
+          "volume_day": 51.0
         },
         {
           "ask": 204.4,
@@ -7845,6 +8009,41 @@
         {
           "account": "mm",
           "conversion": false,
+          "edge_bps": null,
+          "fair": null,
+          "fee": 0.01,
+          "fee_asset": "USDT",
+          "id": "mm:usdm:CCCUSDT:7100",
+          "maker": true,
+          "mk": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_fast": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "mk_raw": {
+            "1": null,
+            "10": null,
+            "300": null,
+            "60": null
+          },
+          "notional": 51.0,
+          "price": 51.0,
+          "qty": 1.0,
+          "side": "buy",
+          "symbol": "CCCUSDT",
+          "ts": 1759968120000,
+          "venue": "usdm"
+        },
+        {
+          "account": "mm",
+          "conversion": false,
           "edge_bps": -202.869866403,
           "fair": 202.1,
           "fee": 0.0001,
@@ -8033,7 +8232,7 @@
         ],
         "by_hour": [
           {
-            "fills": 7,
+            "fills": 8,
             "hour": 0,
             "mk10": -32.808700041,
             "mk60": -62.171800348,
@@ -8357,6 +8556,17 @@
               0.25
             ],
             [
+              "CCCUSDT",
+              -1.0,
+              0.0,
+              50.0,
+              null,
+              1,
+              -1.0,
+              0.01,
+              0.0
+            ],
+            [
               "HHHUSDT",
               -3.5,
               -4.0,
@@ -8648,6 +8858,42 @@
           "volume_day": 0.0
         },
         {
+          "ask": null,
+          "ask_dist_bps": null,
+          "avg_cost": 51.0,
+          "basis_bps": null,
+          "bid": null,
+          "bid_dist_bps": null,
+          "buys_day": 1,
+          "dust": false,
+          "edge_bps": null,
+          "fair": null,
+          "fills_day": 1,
+          "float_pnl": 0.0,
+          "hedged_pnl": 0.0,
+          "inv_pnl": 0.0,
+          "inv_qty": 0.0,
+          "inv_value": 0.0,
+          "last_fill": 1759968120000,
+          "mid": null,
+          "mk10_bps": null,
+          "mk300_bps": null,
+          "mk60_bps": null,
+          "mm_pnl": 0.0,
+          "open_asks": 0,
+          "open_bids": 0,
+          "realized_pnl": 0.0,
+          "ref_mid": null,
+          "reference": null,
+          "sells_day": 0,
+          "spread_bps": null,
+          "symbol": "CCCUSDT",
+          "trading_pnl": 0.0,
+          "upnl": null,
+          "venue": "usdm",
+          "volume_day": 51.0
+        },
+        {
           "ask": 206.2,
           "ask_dist_bps": null,
           "avg_cost": 198.0,
@@ -8871,6 +9117,14 @@
       "AAA",
       2.0,
       ""
+    ],
+    [
+      "fill",
+      "mm:usdm:CCCUSDT:7100",
+      1759968120000,
+      0.01,
+      "USDT",
+      true
     ],
     [
       "fill",
@@ -9253,6 +9507,25 @@
       true
     ],
     [
+      "/fapi/v1/income",
+      [
+        [
+          "incomeType",
+          "REALIZED_PNL"
+        ],
+        [
+          "startTime",
+          "1759968000000"
+        ],
+        [
+          "limit",
+          "1000"
+        ]
+      ],
+      30,
+      true
+    ],
+    [
       "/fapi/v1/userTrades",
       [
         [
@@ -9277,6 +9550,48 @@
         [
           "symbol",
           "AAAUSDT"
+        ],
+        [
+          "interval",
+          "1m"
+        ],
+        [
+          "startTime",
+          "1759968000000"
+        ],
+        [
+          "limit",
+          "1"
+        ]
+      ],
+      1,
+      false
+    ],
+    [
+      "/fapi/v1/userTrades",
+      [
+        [
+          "symbol",
+          "CCCUSDT"
+        ],
+        [
+          "limit",
+          "1000"
+        ],
+        [
+          "startTime",
+          "1759968000000"
+        ]
+      ],
+      5,
+      true
+    ],
+    [
+      "/fapi/v1/markPriceKlines",
+      [
+        [
+          "symbol",
+          "CCCUSDT"
         ],
         [
           "interval",

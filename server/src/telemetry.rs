@@ -146,8 +146,17 @@ impl Telemetry {
     pub fn series(&self, from: i64, to: i64, step: i64, keys: &[String]) -> Result<Value> {
         let rows: Vec<(i64, Vec<u8>)> = {
             let c = Connection::open_with_flags(&self.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            let mut q = c.prepare("SELECT t, z FROM samples WHERE t >= ?1 AND t <= ?2 ORDER BY t")?;
-            q.query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            // one row per bucket chosen in SQL (the last): only those are read and inflated
+            if step > 0 {
+                let mut q = c.prepare(
+                    "SELECT t, z FROM samples WHERE t IN \
+                     (SELECT MAX(t) FROM samples WHERE t >= ?1 AND t <= ?2 GROUP BY t / ?3) ORDER BY t",
+                )?;
+                q.query_map(params![from, to, step], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            } else {
+                let mut q = c.prepare("SELECT t, z FROM samples WHERE t >= ?1 AND t <= ?2 ORDER BY t")?;
+                q.query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            }
         };
         // the last row of each bucket
         let mut picked: Vec<&(i64, Vec<u8>)> = Vec::new();
@@ -323,7 +332,8 @@ struct SeriesQ {
 async fn series(State(t): State<Arc<Telemetry>>, Query(q): Query<SeriesQ>) -> Response {
     let now = now_ms();
     let to = q.to.unwrap_or(now);
-    let from = q.from.unwrap_or(to - 86_400_000);
+    // never more than what is kept: a wider range reads nothing more and costs memory
+    let from = q.from.unwrap_or(to.saturating_sub(86_400_000)).max(to.saturating_sub(KEEP_MS));
     if from > to {
         return text(StatusCode::BAD_REQUEST, "from after to");
     }
@@ -331,7 +341,7 @@ async fn series(State(t): State<Arc<Telemetry>>, Query(q): Query<SeriesQ>) -> Re
     if keys.is_empty() || keys.len() > MAX_KEYS {
         return text(StatusCode::BAD_REQUEST, "keys: 1 to 128");
     }
-    let step = q.step.unwrap_or(0).max(0) * 1000;
+    let step = q.step.unwrap_or(0).clamp(0, KEEP_MS / 1000) * 1000;
     let step = step.max((to - from) / MAX_POINTS);
     match tokio::task::spawn_blocking(move || t.series(from, to, step, &keys)).await {
         Ok(Ok(v)) => axum::Json(v).into_response(),

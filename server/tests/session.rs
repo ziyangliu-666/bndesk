@@ -482,9 +482,15 @@ async fn a_binance_session_gives_the_figures_it_always_did() {
         {"id": 34, "divTime": t(6), "asset": "AAA", "amount": "2"}], "total": 4}));
     dividends(&mm, &r).await.unwrap();
     r.on("/fapi/v1/income", json!([{"symbol": "HHHUSDT", "income": "-1.5", "time": t(1)}, {"symbol": "AAAUSDT", "income": "0.25", "time": t(2)}, {"symbol": "HHHUSDT", "income": "0.75", "time": t(3)}]));
+    // CCCUSDT: a short closed before a restart (no position, nothing in memory): its realized P&L names it, so its day
+    // (opening mark 50, bought back at 51) is still a hedge leg
+    r.on("/fapi/v1/income", json!([{"symbol": "CCCUSDT", "income": "-1", "time": t(2)}]));
     // AAAUSDT: no trades, its opening mark from the mark klines; HHHUSDT: REST's fills, one the stream already gave
     r.on("/fapi/v1/userTrades", json!([]));
     r.on("/fapi/v1/markPriceKlines", json!([[D, "99.5", "100", "99", "99.8", "0"]]));
+    r.on("/fapi/v1/userTrades", json!([
+        {"id": 7100, "time": t(2), "side": "BUY", "qty": "1", "price": "51", "commission": "0.01", "commissionAsset": "USDT", "maker": true}]));
+    r.on("/fapi/v1/markPriceKlines", json!([[D, "50", "50.5", "49.5", "50.2", "0"]]));
     r.on("/fapi/v1/userTrades", json!([
         {"id": 7001, "time": t(5) + 20, "side": "BUY", "qty": "1", "price": "202", "commission": "0.04", "commissionAsset": "USDT", "maker": true},
         {"id": 7000, "time": t(4), "side": "SELL", "qty": "2", "price": "198", "commission": "0.0001", "commissionAsset": "BNB", "maker": false}]));

@@ -360,7 +360,26 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
             _ => break,
         }
     }
-    let mut all: Vec<String> = syms.into_iter().chain(funding.keys().cloned()).collect::<HashSet<_>>().into_iter().collect();
+    // the symbols that closed today: a leg traded flat before a restart has no position and no stream fill left in
+    // memory, yet its day (price since the day start, fees) is today's P&L; its realized P&L names it
+    let mut closed: HashSet<String> = HashSet::new();
+    let mut t = ds;
+    loop {
+        let q: Params = params!["incomeType" => "REALIZED_PNL", "startTime" => t, "limit" => 1000];
+        let r = rest.get_json("/fapi/v1/income", &q, 30, true).await?;
+        let rows = r.as_array().ok_or_else(|| anyhow!("income: not a list"))?;
+        for x in rows {
+            let sym = s(x, "symbol")?;
+            if !sym.is_empty() {
+                closed.insert(sym.to_string());
+            }
+        }
+        match rows.last() {
+            Some(last) if rows.len() >= 1000 => t = to_i(get(last, "time")?)? + 1,
+            _ => break,
+        }
+    }
+    let mut all: Vec<String> = syms.into_iter().chain(funding.keys().cloned()).chain(closed).collect::<HashSet<_>>().into_iter().collect();
     all.sort();
     for sym in all {
         let mut d = acct.borrow().fut_day.get(&sym).cloned().unwrap_or_else(|| FutDay::new(ds));
