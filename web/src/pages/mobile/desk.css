@@ -223,15 +223,24 @@
   min-height: 44px;
   font-size: 14px;
 }
-/* its chip row wraps to a second line rather than run past the edge */
+/* its chips are one row (two rows of 44 px took a fifth of the chart); what does not fit scrolls, faded at that edge */
 .ex-chart.touch.dk-chart .ex-chips {
-  flex-wrap: wrap;
-  gap: 0 16px;
-  mask-image: none;
+  gap: 14px;
+  padding: 0 var(--m-pad-r) 0 var(--m-pad-l);
+}
+.ex-chart.touch.dk-chart .ex-chip {
+  min-width: 0;
+  font-size: 13px;
+}
+/* the interval menu: a column under its button (four to a row left 1H alone on a second one) */
+.ex-chart.touch.dk-chart .ex-more-menu {
+  grid-template-columns: minmax(64px, auto);
 }
 
 /* the quotes as one line: the counts, a tap to Markets → Quotes */
 .dk-qline {
+  box-sizing: border-box;
+  width: calc(100% + var(--m-pad-l) + var(--m-pad-r));
   margin: 0 calc(-1 * var(--m-pad-r)) 0 calc(-1 * var(--m-pad-l));
   padding-left: var(--m-pad-l);
   padding-right: var(--m-pad-r);
@@ -243,6 +252,10 @@
 .dk-qline .m-fig {
   font-size: 14px;
   color: var(--ink-2);
+}
+.dk-qcounts {
+  display: inline-flex;
+  gap: 14px;
 }
 .dk-qline .warn-text {
   color: var(--warn);
@@ -262,5 +275,9 @@
 }
 /* the hedge bar right under the day's P&L */
 .dk-hedge-line {
-  padding: 0 0 8px;
+  padding: 0 0 4px;
+}
+/* in the page's own margins: the bar's row is not a full-bleed list row */
+.dk-hedge-line .m-lim {
+  padding: 0;
 }

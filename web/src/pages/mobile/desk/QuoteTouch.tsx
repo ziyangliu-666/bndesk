@@ -228,10 +228,10 @@ export function QuotesLine({ ms }: { ms: number }) {
       className="dk-qline"
       title="Quotes"
       primary={
-        <span className="m-fig">
-          {int(n.orders)} orders
-          {n.oneSide > 0 && <> · {int(n.oneSide)} one side</>}
-          {n.through > 0 && <span className="warn-text"> · {int(n.through)} through fair</span>}
+        <span className="m-fig dk-qcounts">
+          <span>{int(n.orders)} orders</span>
+          {n.oneSide > 0 && <span>{int(n.oneSide)} one side</span>}
+          {n.through > 0 && <span className="warn-text">{int(n.through)} through fair</span>}
         </span>
       }
       onClick={() => openMarkets("quotes")}
