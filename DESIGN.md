@@ -672,7 +672,7 @@ where the page scrolls); 1200 px and up is unchanged.
 +------------------------------------+
 | Desk                       bell 2  |   title, or < and a detail's title; Stale / Disconnected only when so
 | ! active alert               >     |
-| Day PnL +51.44 USDT                |   Day PnL on one line; 1h, equity, day start under it
+| PnL +851.44 USDT since Oct 4       |   PnL since the first kept day; today, 1h, equity under it
 | Market making  ----   +9.65        |   the split as a waterfall under it
 | ...                                |
 | Risk: exposure gap, orders         |   limit bars

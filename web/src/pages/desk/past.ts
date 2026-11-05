@@ -302,6 +302,17 @@ export function useDayOffsets(dayStart: number | null | undefined): ((t: number)
   }, [loaded, days, total, dayStart]);
 }
 
+/** The running total's start: the earlier days' closes summed (`total`) and the first kept day (null: none kept, the
+ *  total is today's own). Undefined until the closes are in. */
+export function useRunningTotal(dayStart: number | null | undefined): { total: DayOffset; first: number | null } | undefined {
+  const off = useDayOffsets(dayStart);
+  const c = dayStart ? closes.get(dayStart) : undefined;
+  return useMemo(() => {
+    if (off === undefined) return undefined;
+    return { total: c?.total ?? ZERO, first: c?.days[0]?.[0] ?? null };
+  }, [off, c?.total, c?.days]);
+}
+
 /** The offset after the kept day at `i` (the day before d had rows, d itself none). */
 function nextOff(days: [number, DayOffset][], i: number, total: DayOffset): DayOffset {
   return days[i + 1]?.[1] ?? total;

@@ -4,7 +4,7 @@ import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { isHidden, navigate, serverNow, useStore } from "../../store";
 import { useEngineHedge } from "../strategy/engine";
 import { useNow } from "../../hooks";
-import { hm, int, num } from "../../format";
+import { dayName, hm, int, num } from "../../format";
 import { LevelIcon } from "../../components/ui";
 import { LimitBar, ListRow, Money, RateMeter, Section, useHold, useLive, useMoney } from "../../components/mobile";
 import { PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
@@ -16,6 +16,7 @@ import { DeskChart } from "./desk/DeskChart";
 import { QuotesLine } from "./desk/QuoteTouch";
 import "./desk.css";
 import { cur, useDesk, inventoryWord, hedgeWord } from "../../desk";
+import { useRunningTotal } from "../desk/past";
 
 /** The day's figures follow every message (8 a second); lists and the chart a little slower. */
 const FIG_MS = 125;
@@ -23,7 +24,8 @@ const PAGE_MS = 250;
 /** The quotes line's counts follow every message. */
 const QUOTES_MS = 125;
 
-// Desk, the phone's home: what the day made and its parts (hero), how it got there (the chart: P&L, equity,
+// Desk, the phone's home: what the desk has made and its parts, over all the kept days (hero; today and the last
+// hour under it), how it got there (the chart: P&L, equity,
 // exposure), the quotes in one line (the map is Markets → Quotes), how close to the limits, the latest fills.
 export function DeskM() {
   // the day's figures follow every message; the lists, chart and quotes take theirs 4 times a second
@@ -43,10 +45,14 @@ export function DeskM() {
   const chartEl = useMemo(() => <DeskChart ms={PAGE_MS} />, []);
   const quotesEl = useMemo(() => <QuotesLine ms={QUOTES_MS} />, []);
   const desk = useDesk();
+  const run = useRunningTotal(sm?.day_start);
   if (!sm || !exposure) return null;
   const p = sm.pnl;
   const hedge = exposure.hedge_day?.hedge_pnl ?? null;
-  const zone = tz === "utc" ? " UTC" : "";
+  // the running total: today's figures on the earlier days' closes (null until those are in)
+  const o = run?.total;
+  const on = (v: number | null | undefined, d: number | undefined) => (v == null || d === undefined ? null : v + d);
+  const since = run?.first != null ? `since ${dayName(run.first)}` : `since ${hm(sm.day_start, tz)}${tz === "utc" ? " UTC" : ""}`;
   const equity = (accounts ?? []).reduce((s, a) => s + a.equity, 0);
   const mk = sm.markout_net_bps_1h;
 
@@ -55,25 +61,26 @@ export function DeskM() {
       <AlertLine />
 
       <DeskHero
-        v={sm.pnl_day}
-        since={`since ${hm(sm.day_start, tz)}${zone}`}
+        v={on(sm.pnl_day, o?.c)}
+        since={since}
+        day={sm.pnl_day}
         h1={sm.pnl_1h}
         equity={equity}
         parts={[
           ...(desk.mm
             ? [
-                { key: "mm", label: "MM", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm },
-                { key: "inv", label: "Inv", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory },
+                { key: "mm", label: "MM", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: on(p.mm, o?.mm) },
+                { key: "inv", label: "Inv", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: on(p.inventory, o && o.trading - o.mm) },
               ]
-            : [{ key: "trading", label: "Trading", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
-          ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),
-          ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates }] : []),
+            : [{ key: "trading", label: "Trading", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: on(p.trading, o?.trading) }]),
+          ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: on(hedge, o?.hedge) }] : []),
+          ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: on(sm.rebates, o?.reb) }] : []),
           {
             key: "other",
             label: "Other",
             color: PNL_COLORS.other,
             stroke: PNL_STROKES.other,
-            v: sm.other,
+            v: on(sm.other, o && o.c - o.trading - o.hedge - o.reb),
             tone: reconcile ? "warn" : undefined,
           },
         ]}
@@ -135,16 +142,16 @@ export function DeskM() {
 
 // ---- head: Day PnL on one line, clear but not giant; 1h, equity and the day's start a quiet line under it ----
 
-function DeskHero({ v, since, h1, equity, parts }: { v: number; since: string; h1: number; equity: number; parts: Part[] }) {
+function DeskHero({ v, since, day, h1, equity, parts }: { v: number | null; since: string; day: number; h1: number; equity: number; parts: Part[] }) {
   const hide = useStore((s) => s.hideAmounts);
   return (
     <section className="dk-hero">
       <div className="dk-hero-top">
-        <span className="dk-hero-label">Day PnL</span>
+        <span className="dk-hero-label">PnL</span>
         <span className="dk-hero-v">
           <Money v={v} />
         </span>
-        <span className="dk-hero-unit">{cur()}</span>
+        <span className="dk-hero-unit">{cur()} {since}</span>
         <UnstyledButton
           className="dk-eye"
           aria-label={hide ? "Show amounts" : "Hide amounts"}
@@ -165,12 +172,14 @@ function DeskHero({ v, since, h1, equity, parts }: { v: number; since: string; h
       </div>
       <div className="dk-hero-sub m-fig">
         <span>
+          Today <b>{<Money v={day} color={false} />}</b>
+        </span>
+        <span>
           1h <b>{<Money v={h1} color={false} />}</b>
         </span>
         <span>
           Equity <b>{<Money v={equity} kind="full" />}</b>
         </span>
-        <span>{since}</span>
       </div>
     </section>
   );

@@ -1,10 +1,11 @@
 // The Desk's head, where an exchange has its ticker strip: the name slot, one large figure, its parts in a line
-// under it, quieter facts at the right. With nothing picked it is the desk's (Day PnL and its split; exposure,
-// equity, volume, markout, fills); with an instrument picked, that instrument's (Binance's last price and 24 h
-// figures, then ours).
+// under it, quieter facts at the right. With nothing picked it is the desk's (the P&L over the kept days and its
+// split, today beside it; exposure, equity, volume, markout, fills); with an instrument picked, that instrument's
+// (Binance's last price and 24 h figures, then ours).
 import type { ReactNode } from "react";
 import { useStore, type Instrument } from "../store";
-import { bps, compact, hm, int, num, pnl, price, qty, usd } from "../format";
+import { bps, compact, dayName, hm, int, num, pnl, price, qty, usd } from "../format";
+import { useRunningTotal } from "../pages/desk/past";
 import type { Exposure } from "../protocol";
 import { FigureHead, useTicker24h, type Fact } from "./ex";
 import { maskNode, signTone, useHide } from "../mask";
@@ -68,7 +69,7 @@ function engineFact(e: NonNullable<ReturnType<typeof useEngineHedge>>, m: (s: st
   };
 }
 
-/** The desk's head. `name`: the name slot at the left (the picker / back control). Day PnL is the one large
+/** The desk's head. `name`: the name slot at the left (the picker / back control). The running PnL is the one large
  *  figure (green / red: it answers "did we make money"); its split is a line under it in ink; equity, exposure,
  *  volume, markout and fills sit quieter at the right. */
 export function DeskTicker({ name }: { name: ReactNode }) {
@@ -84,17 +85,22 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const hedge = exposure?.hedge_day?.hedge_pnl ?? null;
   const dayStart = sm ? `${hm(sm.day_start, tz)} ${tz === "utc" ? "UTC" : "local time"}` : "the day start";
   const d = useDesk();
+  // the running total: today's figures on the earlier days' closes ("--" until those are in)
+  const run = useRunningTotal(sm?.day_start);
+  const o = run?.total;
+  const on = (v: number | null | undefined, x: number | undefined) => (v == null || x === undefined ? null : v + x);
+  const since = run?.first != null ? dayName(run.first) : dayStart;
   const parts: Fact[] = [
-    ...(d.mm ? [] : [{ label: "Trading", value: m(pnl(p?.trading)), title: "Trading PnL: what the fills and the held inventory made, fees included." }]),
+    ...(d.mm ? [] : [{ label: "Trading", value: m(pnl(on(p?.trading, o?.trading))), title: "Trading PnL: what the fills and the held inventory made, fees included." }]),
     {
       label: "Market making",
-      value: m(pnl(p?.mm)),
+      value: m(pnl(on(p?.mm, o?.mm))),
       title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
     },
-    { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
-    { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
-    { label: "Rebates", value: m(pnl(sm?.rebates)), title: `Market-maker rebates ${exchangeWord()} credited since the day start, per account.` },
-    { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus what the parts add up to: what the split does not explain." },
+    { label: "Inventory", value: m(pnl(on(p?.inventory, o && o.trading - o.mm))), title: `Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
+    { label: "Hedge", value: m(pnl(on(hedge, o?.hedge))), title: `The ${hedgeWord()} legs since ${since}: price at mark, minus fees, plus funding.` },
+    { label: "Rebates", value: m(pnl(on(sm?.rebates, o?.reb))), title: `Market-maker rebates ${exchangeWord()} credited since ${since}, per account.` },
+    { label: "Other", value: m(pnl(on(sm?.other, o && o.c - o.trading - o.hedge - o.reb))), title: "PnL minus what the parts add up to: what the split does not explain." },
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
   const facts: Fact[][] = [
     [
@@ -121,11 +127,14 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       {name}
       <FigureHead
         className="dk-tk"
-        label="Day PnL"
-        title={`Equity change since ${dayStart}, net of transfers, ${cur()}. Day PnL = ${[...(d.mm ? ["Market making", "Inventory PnL"] : ["Trading PnL"]), ...(d.hedge ? ["Hedge"] : []), ...(d.rebates ? ["Rebates"] : []), "Other"].join(" + ")}.`}
-        value={m(pnl(sm?.pnl_day))}
-        tone={tone(sm?.pnl_day)}
-        aside={[{ label: "1h", value: m(pnl(sm?.pnl_1h)), title: `The change of Day PnL over the last hour, ${cur()}` }]}
+        label="PnL"
+        title={`Equity change since ${since}, net of transfers (each day's Day PnL summed), ${cur()}. PnL = ${[...(d.mm ? ["Market making", "Inventory PnL"] : ["Trading PnL"]), ...(d.hedge ? ["Hedge"] : []), ...(d.rebates ? ["Rebates"] : []), "Other"].join(" + ")}.`}
+        value={m(pnl(on(sm?.pnl_day, o?.c)))}
+        tone={tone(on(sm?.pnl_day, o?.c))}
+        aside={[
+          { label: "Today", value: m(pnl(sm?.pnl_day)), title: `Day PnL: the equity change since ${dayStart}, net of transfers, ${cur()}` },
+          { label: "1h", value: m(pnl(sm?.pnl_1h)), title: `The change of PnL over the last hour, ${cur()}` },
+        ]}
         parts={parts}
         facts={facts}
       />
