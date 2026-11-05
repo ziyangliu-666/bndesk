@@ -63,7 +63,7 @@ export function DeskSide({
   const bestDays = ranked.slice(0, nb);
   const worstDays = ranked.slice(nb).slice(-2).reverse();
   // the parts of the PnL: market making and inventory PnL (with no split kept, the trading P&L), then the rest
-  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : k === "pi" ? !d.mm : true));
+  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : k === "pi" ? !d.mm : true));
   const max = Math.max(1e-9, ...parts.map((k) => Math.abs(tot[k] ?? 0)));
   const m = (s: string) => maskText(hide, s);
   const unsplitPnl = useMemo(() => {

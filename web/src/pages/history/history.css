@@ -508,3 +508,9 @@
 .hx-spark path.dot.down {
   stroke: var(--down);
 }
+
+/* a rule before each group of columns: the P&L, its parts, the activity */
+.hx-t th.sep,
+.hx-t td.sep {
+  border-left: 1px solid var(--rule);
+}

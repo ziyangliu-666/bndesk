@@ -34,7 +34,6 @@ export function DeskM() {
   // the latest fills hold still under a resting finger
   const [held, hold] = useHold();
   const fills = useLive((s) => s.snap?.fills, PAGE_MS, held);
-  const reconcile = useStore((s) => s.snap?.alerts.some((a) => a.active && a.rule === "reconcile") ?? false);
   const tz = useStore((s) => s.tz);
   const fill = useFillSheet();
   const o10 = useSticky(accounts ?? [], (a) => [a.orders_10s, a.orders_10s_limit]);
@@ -68,14 +67,6 @@ export function DeskM() {
             : [{ key: "trading", label: "Trading", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
           ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),
           ...(desk.rebates ? [{ key: "reb", label: "Rebates", color: PNL_COLORS.reb, stroke: PNL_STROKES.reb, v: sm.rebates }] : []),
-          {
-            key: "other",
-            label: "Other",
-            color: PNL_COLORS.other,
-            stroke: PNL_STROKES.other,
-            v: sm.other,
-            tone: reconcile ? "warn" : undefined,
-          },
         ]}
       />
 

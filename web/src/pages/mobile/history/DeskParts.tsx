@@ -66,7 +66,7 @@ export function Split({ rows, sum }: { rows: DayRow[]; sum: DaySummary }) {
     const xs = rows.filter((r) => !r.split && r.pnl != null);
     return xs.length ? xs.reduce((k, r) => k + r.pnl!, 0) : null;
   }, [rows]);
-  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) =>
+  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb"] as Part[]).filter((k) =>
     k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : k === "pi" ? !d.mm : true,
   );
   const max = Math.max(1e-9, ...parts.map((k) => Math.abs(tot[k] ?? 0)), Math.abs(unsplit ?? 0));

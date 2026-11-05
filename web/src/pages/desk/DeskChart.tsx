@@ -76,7 +76,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const id = "desk." + tab;
   const [iv, setIv] = useExPref<string>(id, "interval", "1m", IV_VALUES);
   const [style, setStyle] = useExPref<string>("desk.pnl", "style", "area", ["area", "candles"]);
-  const [part, setPart] = useExPref<string>("desk.pnl", "part", "mm", ["trading", "mm", "inv", "hedge", "reb", "other"]);
+  const [part, setPart] = useExPref<string>("desk.pnl", "part", "mm", ["trading", "mm", "inv", "hedge", "reb"]);
   const bars = useStore((s) => s.snap?.bars);
   const series = useStore((s) => s.snap?.series);
   const fills = useStore((s) => s.snap?.fills);
@@ -182,24 +182,6 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
         : [{ key: "trading", kind: "line", pane: 1, label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("trading", (r) => r.trading) } as ExSeries]),
       ...(has("hedge") ? [{ key: "hedge", kind: "line", pane: 1, label: "Hedge", color: P.hedge, width: 1.5, lineStyle: S.hedge, format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
       ...(desk.rebates && anyReb ? [{ key: "reb", kind: "line", pane: 1, label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries] : []),
-      ...(anyReb
-        ? [
-            {
-              key: "other",
-              kind: "line",
-              pane: 1,
-              label: "Other",
-              color: P.other,
-              width: 1.5,
-              lineStyle: S.other,
-              format: fPnl,
-              data: pts("other", (r) => {
-                const b = rebAt(r);
-                return r.trading == null || b == null ? null : r.c - r.trading - (r.hedge ?? 0) - b;
-              }),
-            } as ExSeries,
-          ]
-        : []),
     ];
     selectedPart = parts.find((s) => s.key === part) ?? parts[0]!;
     // Each component fits its own visible range, without larger components flattening it.

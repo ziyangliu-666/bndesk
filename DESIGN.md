@@ -644,7 +644,7 @@ and size; their sum, the trading P&L, is not a figure of its own: it appears onl
 under a Hedge figure or column. Where a list has room for one column (pickers, the phone's lists) it is market
 making. Day PnL = market making + inventory PnL + hedge legs + rebates + other. History's day table draws each day's
 shape beside every figure: the P&L and each part a line from 0 through the day at 15 minutes, its end dot green /
-red by sign; fills and volume their 15 minute bars; each day on its own scale. The figure columns share the width
+red by sign; fills and volume their 15 minute bars; each day on its own scale, and on the whole day's time axis (today's line stops at now). A rule parts the groups: the P&L, its parts, the activity. The figure columns share the width
 evenly (fixed layout), the shape filling what the figure leaves. The split has one palette on every chart and
 size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, Trading (no split kept) ink solid, market
 making blue solid, inventory PnL violet long dashes, hedge teal dashes, rebates light grey spaced dots,
@@ -653,7 +653,7 @@ cue. Spot inventory takes the inventory hue and futures the hedge hue wherever t
 
 A desk draws what it has (`Snapshot.desk`): no hedge means no Hedge figure, line, column or chip, no Futures or Exposure
 & hedge tab, no futures columns; no rebates, the same for Rebates; `mm` false, the trading P&L in place of its two parts. No
-engine configured means no Engines section or tab, and an engine shows the figures its metrics say. Other stays: it is what keeps the split adding up to Day PnL. While
+engine configured means no Engines section or tab, and an engine shows the figures its metrics say. Other (Day PnL less the parts) is not shown on the pages: it is near 0 when the books add up, and the reconcile alert says when it stays over 1 for 5 minutes. While
 the snapshot has not come, or from a server without `desk`, everything is drawn, in USDT.
 
 Hiding an alert: a warning or info alert can be hidden on this browser (localStorage `desk.hiddenAlerts`),

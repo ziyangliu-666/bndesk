@@ -108,7 +108,6 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
     ...(desk.mm ? [line("mm", "MM", data.mm), line("inv", "Inv", data.inv)] : [line("trading", "Trading", data.trading)]),
     ...(desk.hedge ? [line("hedge", "Hedge", data.hedge)] : []),
     ...(desk.rebates && data.rebates.length ? [line("reb", "Rebates", data.rebates)] : []),
-    ...(data.rebates.length ? [line("other", "Other", data.other)] : []),
     { key: "vol", kind: "histogram", label: `Vol(${notionalCur()})`, pane: 2, color: VOL, data: data.vol, format: vol, lastValue: false },
   ];
   // the view opens on today (and opens again once the first snapshot's earlier minutes and the days before are in)

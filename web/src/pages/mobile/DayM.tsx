@@ -20,7 +20,6 @@ const PARTS = [
   { key: "inventory", label: "Inventory PnL", color: P.inv, stroke: S.inv, sub: false },
   { key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge, sub: false },
   { key: "rebates", label: "Rebates", color: P.reb, stroke: S.reb, sub: false },
-  { key: "other", label: "Other", color: P.other, stroke: S.other, sub: false },
 ] as const satisfies readonly { key: string; label: string; color: string; stroke: Stroke; sub: boolean }[];
 const tradingInfo = () => `Market making plus inventory PnL, fees included; not hedged. ${cur()}.`;
 
@@ -188,7 +187,6 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
       ...(desk.mm && has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : has("trading") ? [line("trading", "Trading", P.trading, S.trading)] : []),
       ...(desk.hedge && has("hedge") ? [line("hedge", "Hedge", P.hedge, S.hedge)] : []),
       ...(desk.rebates && has("reb") ? [line("reb", "Rebates", P.reb, S.reb)] : []),
-      ...(has("reb") ? [line("other", "Other", P.other, S.other)] : []),
     ];
   }, [pts, hide, desk.mm, desk.hedge, desk.rebates]);
   const boxRows = (t: number): ExBoxRow[] => {
@@ -200,7 +198,6 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
     else if (p.trading != null) rows.push(r("Trading", p.trading, P.trading));
     if (desk.hedge && p.hedge != null) rows.push(r("Hedge", p.hedge, P.hedge));
     if (desk.rebates && p.reb != null) rows.push(r("Rebates", p.reb, P.reb));
-    if (p.reb != null) rows.push(r("Other", p.other, P.other));
     return rows;
   };
   return (

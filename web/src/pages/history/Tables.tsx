@@ -15,6 +15,8 @@ export interface Col<R> {
   /** A term a trader may not know: its label gets the dotted underline of a definition. */
   dot?: boolean;
   left?: boolean;
+  /** The first column of a group (the P&L, its parts, the activity): a rule before it. */
+  sep?: boolean;
   cell: (r: R) => ReactNode;
   cls?: (r: R) => string;
   /** Sort value: a click on the header sorts by it (largest first), again reverses, a third time back to the
@@ -27,6 +29,8 @@ export interface Col<R> {
 
 const SW = 100,
   SH = 20;
+/** A day's 15 minute bars: every row on the same time axis, so today's line stops where the day has got to. */
+const SLOTS = 96;
 /** A row's shape: its own scale (each day its own), 0 as a faint rule when the line crosses it. Drawn on a 100-wide
  *  box stretched to the cell, the strokes kept their width (the end dot is a round-capped stroke of no length). */
 function Spark({ v, signed, bars }: { v: (number | null)[] | undefined; signed?: boolean; bars?: boolean }) {
@@ -36,7 +40,7 @@ function Spark({ v, signed, bars }: { v: (number | null)[] | undefined; signed?:
   const box = { className: "hx-spark", viewBox: `0 0 ${SW} ${SH}`, preserveAspectRatio: "none", "aria-hidden": true } as const;
   if (bars) {
     const max = Math.max(...xs) || 1;
-    const w = SW / v.length;
+    const w = SW / Math.max(SLOTS, v.length);
     let d = "";
     v.forEach((x, i) => {
       if (x) d += `M${(i * w + w / 2).toFixed(2)} ${SH}V${(SH - (x / max) * SH).toFixed(2)}`;
@@ -51,7 +55,8 @@ function Spark({ v, signed, bars }: { v: (number | null)[] | undefined; signed?:
     hi = Math.max(0, ...xs);
   const span = hi - lo || 1;
   const y = (x: number) => 2 + (1 - (x - lo) / span) * (SH - 4);
-  const step = (SW - 3) / (v.length - 1);
+  // a line has the day start's 0 before its bars
+  const step = (SW - 3) / Math.max(SLOTS, v.length - 1);
   let d = "";
   let last: [number, number] | null = null;
   v.forEach((x, i) => {
@@ -118,7 +123,7 @@ export function Table<R>({
             return (
               <th
                 key={c.key}
-                className={(c.left ? "l" : "") + (c.sort ? " sortable" : "") + (on ? " on" : "")}
+                className={(c.left ? "l" : "") + (c.sep ? " sep" : "") + (c.sort ? " sortable" : "") + (on ? " on" : "")}
                 onClick={c.sort ? () => click(c.key) : undefined}
                 aria-sort={on ? (by!.desc ? "descending" : "ascending") : undefined}
               >
@@ -142,7 +147,7 @@ export function Table<R>({
             return (
               <tr key={k} className={(onRow ? "click" : "") + (k === selected ? " on" : "")} onClick={onRow ? () => onRow(r) : undefined}>
                 {cols.map((c) => (
-                  <td key={c.key} className={(c.left ? "l " : "") + (c.spark ? "barred " : "") + (c.cls?.(r) ?? "")}>
+                  <td key={c.key} className={(c.left ? "l " : "") + (c.sep ? "sep " : "") + (c.spark ? "barred " : "") + (c.cls?.(r) ?? "")}>
                     {c.spark ? (
                       <span className="hx-barcell">
                         <Spark v={c.spark.v(r)} signed={c.spark.signed} bars={c.spark.bars} />
@@ -186,13 +191,12 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
   // rebates and the rest
   return [
     { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label, sort: (r) => r.key },
-    p("pnl", pnlLabel),
+    { ...p("pnl", pnlLabel), sep: true },
     // what the desk kept no split for has its trading P&L only: said in the Day PnL's tooltip
-    ...(desk.mm ? [p("mm", "Market making", PART_META.mm.title), p("inv", "Inventory PnL", PART_META.inv.title)] : [p("pi", "Trading", PART_META.pi.title)]),
+    ...(desk.mm ? [{ ...p("mm", "Market making", PART_META.mm.title), sep: true }, p("inv", "Inventory PnL", PART_META.inv.title)] : [{ ...p("pi", "Trading", PART_META.pi.title), sep: true }]),
     ...(desk.hedge ? [p("hedge", "Hedge", PART_META.hedge.title)] : []),
     ...(desk.rebates ? [p("reb", "Rebates")] : []),
-    p("other", "Other", PART_META.other.title),
-    { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills, spark: { v: (r) => r.sp?.fills, bars: true } },
+    { key: "f", sep: true, label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills, spark: { v: (r) => r.sp?.fills, bars: true } },
     {
       key: "v",
       label: "Volume",

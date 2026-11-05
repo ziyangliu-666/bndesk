@@ -306,7 +306,8 @@ impl Alerts {
             && let Some(today) = Local.timestamp_millis_opt(now).single().map(|t| t.date_naive())
         {
             let days = (d - today).num_days();
-            if days <= 7 {
+            // a week ahead, until the day: once it has ended the warning has nothing left to warn of
+            if (0..=7).contains(&days) {
                 add("fee_change", "expiry", Level::Warn, format!("fee arrangement ends {exp} ({days} d)"));
             }
         }
