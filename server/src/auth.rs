@@ -1,7 +1,7 @@
 //! One shared password, long sessions.
 //!
 //! The password is stored only as a scrypt hash (env DESK_PASSWORD_HASH). A correct login gets a
-//! random session token in an HttpOnly, Secure, SameSite=Strict cookie, valid for a year and renewed
+//! random session token in an HttpOnly, Secure, SameSite=Lax cookie, valid for a year and renewed
 //! while in use. Sessions live in SQLite, so restarts keep everyone logged in; changing the password
 //! ends every session. Logins are slowed per IP (5 misses lock it, the lock doubles each time) and
 //! globally (one attempt per second), on top of scrypt's own cost.
@@ -236,7 +236,10 @@ impl Auth {
 
     fn cookie(&self, resp: &mut Response, secure: bool, token: &str) {
         let mut c =
-            format!("{COOKIE}={token}; HttpOnly; Max-Age={SESSION_S}; Path=/; SameSite=Strict");
+            // Lax, not Strict: a home-screen app launched cold (an Android intent) is a navigation Chrome may call
+            // cross-site, and a Strict cookie left off it sent the app to the login page every time. Lax still keeps
+            // it off another site's POST and subresources; the WebSocket checks its Origin.
+            format!("{COOKIE}={token}; HttpOnly; Max-Age={SESSION_S}; Path=/; SameSite=Lax");
         if secure {
             c.push_str("; Secure");
         }
@@ -394,7 +397,8 @@ pub async fn middleware(State(auth): State<Auth>, req: Request, next: Next) -> R
     if PUBLIC.contains(&path) || path.starts_with("/login") {
         return next.run(req).await;
     }
-    if !auth.valid(get_cookie(req.headers(), COOKIE)) {
+    let token = get_cookie(req.headers(), COOKIE).map(str::to_string);
+    if !auth.valid(token.as_deref()) {
         if path.starts_with("/api") || path == "/ws" {
             return text(StatusCode::UNAUTHORIZED, "login required");
         }
@@ -421,7 +425,14 @@ pub async fn middleware(State(auth): State<Auth>, req: Request, next: Next) -> R
             return text(StatusCode::FORBIDDEN, "cross-origin WebSocket refused");
         }
     }
-    next.run(req).await
+    // the app's page itself: the cookie again, so it stays a year from the last visit and carries today's attributes
+    let renew = req.method() == axum::http::Method::GET && path == "/";
+    let sec = secure(&req);
+    let mut resp = next.run(req).await;
+    if renew && let Some(t) = token {
+        auth.cookie(&mut resp, sec, &t);
+    }
+    resp
 }
 
 /// For `axum::middleware::from_fn(auth::security_headers)`, outermost.
@@ -464,6 +475,13 @@ pub fn page_html(error: &str) -> String {
     } else {
         format!("<p class=\"err\">{}</p>", html_escape(error))
     };
+    // a navigation that came without the cookie (an app launched cold) while the browser still holds it: the page's
+    // own request sends it, and a valid session goes straight in
+    let check = if error.is_empty() {
+        r#"<script>fetch("/api/health",{cache:"no-store",credentials:"same-origin"}).then(function(r){if(r.ok)location.replace("/")}).catch(function(){})</script>"#
+    } else {
+        ""
+    };
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>bndesk</title>
@@ -483,7 +501,7 @@ button:hover{{border-color:#7ea6f6}}
 <input type="text" name="username" value="bndesk" autocomplete="username" hidden>
 <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
 <button type="submit">Log in</button>
-</form></main></body></html>"#
+</form></main>{check}</body></html>"#
     )
 }
 
@@ -524,7 +542,7 @@ mod tests {
         // sha256 of the login page bodies
         assert_eq!(
             sha256_hex(&page_html("")),
-            "797d2a88533294e9d83265105715c57bf8a7cc33e789ae22a06e58aeec5fc9d9"
+            "84dac4e1780bc43a36b50c205b5752cc505303d9b2fdaa385c2799f25ee2de8c"
         );
         assert_eq!(
             sha256_hex(&page_html("Wrong password.")),
@@ -605,7 +623,7 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        assert!(r.status() == 303 && sc.contains("HttpOnly") && sc.contains("SameSite=Strict"));
+        assert!(r.status() == 303 && sc.contains("HttpOnly") && sc.contains("SameSite=Lax"));
         assert!(!sc.contains("Secure"));
         let token = session_of(&r);
         let ck = format!("{COOKIE}={token}");
