@@ -14,6 +14,7 @@ import { BLOCK, STALE_MS, dateTag, engineTrouble, hedgeState, capital, mv, pts, 
 import "./ops/ops.css";
 import "./strategy/strategy.css";
 import { cur } from "../desk";
+import { DeskExposure } from "./strategy/DeskExposure";
 
 const DAY = 86_400_000;
 /** The hedge charts hold two days and open on the last one. */
@@ -45,6 +46,16 @@ function NoData({ latest, error }: { latest: Latest | null; error: string | null
       {error ? "Could not load the engine's figures" : latest == null ? "Loading" : "The engine has not sent its figures yet"}
     </div>
   );
+}
+
+/** Why the Hedge tab shows the desk's estimate in place of the engine's figures. */
+export function deskNote(error: string | null, latest: Latest | null, age: number | null) {
+  const why = error
+    ? "Could not load the engine's figures"
+    : !latest?.payload
+      ? "The engine is not pushing its figures yet"
+      : `No push from the engine for ${dur(age ?? 0)}`;
+  return `${why}: the desk's own exposure and gap, from its accounts (its beta may differ from the engine's).`;
 }
 
 // ================================ hedge ================================
@@ -253,7 +264,9 @@ function Hedge({ latest, error }: { latest: Latest | null; error: string | null 
   const { age, stale } = usePush(latest);
   const { s } = useEngineSeries(HEDGE_SERIES, SPAN);
   const rebal = useMemo(() => rebalances(s), [s]);
-  if (!latest?.payload) return <NoData latest={latest} error={error} />;
+  if (latest == null && !error) return <NoData latest={latest} error={error} />;
+  // no fresh push from the engine: the desk's own exposure and gap, so the page always answers "is it hedged"
+  if (!latest?.payload || stale) return <DeskExposure note={deskNote(error, latest, age)} />;
   return (
     <div className="ops-tab-body st-hedge">
       <section className="ops-panel st-top">

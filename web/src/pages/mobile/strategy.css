@@ -34,3 +34,11 @@
   font-size: 14px;
   font-weight: 500;
 }
+
+/* why the Hedge tab shows the desk's estimate */
+.st-m-note {
+  padding: 10px 16px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}

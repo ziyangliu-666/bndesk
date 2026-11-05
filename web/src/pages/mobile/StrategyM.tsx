@@ -5,12 +5,20 @@ import { useExPref } from "../../components/ex";
 import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
-import { ExposureChart, GapChart, HEDGE_SERIES, quoteRows } from "../Strategy";
+import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, quoteRows } from "../Strategy";
+import { showInfo } from "../../components/mobile";
+import { bandDef } from "./shared";
+import { DeskChart, GapBar } from "./rest/assets";
+import type { Exposure } from "../../protocol";
+import { hedgeWord, inventoryWord, roled } from "../../desk";
 import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
 import { HedgeBridge } from "../../components/HedgeBridge";
 import { useQty } from "../../mask";
-import { Amt, Empty, PageTabs, Row, Sec, Stats } from "./rest/ui";
+import { Amt, Empty, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./strategy.css";
+
+const betaNote = (x: Exposure) =>
+  x.beta_source === "estimate" ? "β: the desk's own estimate, may differ from the engine's." : "β: configured per market.";
 
 // ---- Strategy: the engine's own figures (pushed every 15 s). Hedge: the state, the gap and exposure charts, today's
 // inventory against the hedge with its legs and funding (the desk's own day), the rebalances; Quoting: capital and
@@ -208,9 +216,74 @@ function QuotingM({ latest }: { latest: Latest }) {
   );
 }
 
+/** The desk's own exposure and gap (Assets' old Exposure tab), when the engine is not pushing its figures. */
+function DeskExposureM({ note }: { note: string }) {
+  const accounts = useStore((s) => s.snap?.accounts) ?? [];
+  const x = useStore((s) => s.snap?.exposure);
+  const sm = useStore((s) => s.snap?.summary);
+  const tz = useStore((s) => s.tz);
+  const money = useAmt();
+  if (!x || !sm) return null;
+  const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? id;
+  const gapInfo = x.paused
+    ? `${x.paused}: the hedge is off and its target is 0; the value is the hedge symbols' futures notional still open, to be closed` +
+      `${x.paused_until != null ? `, until ${hms(x.paused_until, tz)}` : ""}. ${cur()}.`
+    : `Hedge target minus the futures notional of the hedge symbols (the trade that closes it; negative = sell more), where the target is ` +
+      `−${num(x.ratio, 2)} × beta-weighted spot value. ${betaNote(x)} ${bandDef(money(x.band, "full"))} ${cur()}.`;
+  return (
+    <>
+      <div className="st-m-note">{note}</div>
+      <Sec flush>
+        {x.band != null && (x.gap != null || x.paused) && (
+          <GapBar
+            label={x.paused ? `Hedge to close (${x.paused})` : "Exposure gap"}
+            value={x.paused ? x.hedge_notional : x.gap}
+            band={x.band}
+            onLabel={() => showInfo(x.paused ? "Hedge to close" : "Exposure gap", gapInfo)}
+          />
+        )}
+        <Stats
+          cols={3}
+          items={[
+            { label: "Net exposure", info: `${inventoryWord()} value plus ${hedgeWord()} net notional, all accounts. ${cur()}.`, value: <Amt v={x.net} plain /> },
+            {
+              label: "Hedge target",
+              info: `Hedge target = −${num(x.ratio, 2)} × Spot × beta (${money(x.beta_value, "full")}). ${betaNote(x)} ${cur()}.`,
+              value: <Amt v={x.target} plain />,
+            },
+            { label: "Hedge", info: `Futures notional of the hedge symbols, ${cur()}.`, value: <Amt v={x.hedge_notional} plain /> },
+            { label: roled() ? "Inventory" : "Spot value", value: money(x.spot_value, "full") },
+            ...(Math.abs(x.futures_notional - x.hedge_notional) > 0.005
+              ? [{ label: "All futures", info: `Futures net notional of every symbol, hedge or not, ${cur()}.`, value: <Amt v={x.futures_notional} plain /> }]
+              : []),
+          ]}
+        />
+      </Sec>
+      <Sec title="By account" right="spot · futures · net">
+        {x.by_account.map((r) => (
+          <Row
+            key={r.account}
+            dense
+            title={labelOf(r.account)}
+            sub={`Spot ${money(r.spot_value, "k")} · Futures ${money(r.futures_notional, "pnlK")}`}
+            value={<Amt v={r.net} kind="pnlK" plain />}
+            to={{ page: "assets", detail: { kind: "account", id: r.account } }}
+          />
+        ))}
+      </Sec>
+      <Sec>
+        <DeskChart what="exposure" />
+      </Sec>
+      <HedgeDayM />
+      <FundingM />
+    </>
+  );
+}
+
 export function StrategyM() {
   const [tab, setTab] = useExPref<Tab>("m-strategy", "tab", "hedge", ["hedge", "quoting"]);
   const { latest, error } = useEngineLatest();
+  const { age, stale } = useAge(latest);
   return (
     <>
       <PageTabs
@@ -221,8 +294,12 @@ export function StrategyM() {
         value={tab}
         onChange={setTab}
       />
-      {!latest?.payload ? (
-        <Empty>{error ? "Could not load the engine's figures" : latest == null ? "Loading" : "The engine has not sent its figures yet"}</Empty>
+      {latest == null && !error ? (
+        <Empty>Loading</Empty>
+      ) : tab === "hedge" && (!latest?.payload || stale) ? (
+        <DeskExposureM note={deskNote(error, latest, age)} />
+      ) : !latest?.payload ? (
+        <Empty>{error ? "Could not load the engine's figures" : "The engine has not sent its figures yet"}</Empty>
       ) : tab === "hedge" ? (
         <HedgeM latest={latest} />
       ) : (
