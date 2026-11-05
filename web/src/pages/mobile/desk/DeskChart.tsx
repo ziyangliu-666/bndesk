@@ -1,7 +1,8 @@
 // The phone Desk's chart, the desktop's three views as the toolbar's own tabs: P&L | Equity | Exposure, the
-// interval behind one menu beside them. P&L is the running total over the days (a baseline at zero for Line,
-// candles for 1m 5m 15m 1H): each day's figures on the earlier days' closes, a faint rule between days, with the
-// split as lines in the desktop's palette and strokes, notional filled in a volume pane. Today from the store; the days before from /api/history, arriving behind the view (desk/past.ts), built
+// interval behind one menu beside them. P&L is the day's P&L (a baseline at zero for Line, candles for 1m 5m 15m
+// 1H) with the split as lines in the desktop's palette and strokes, notional filled in a volume pane. Each day
+// starts again at zero, a faint rule between days: the axis tag is today's P&L, never a running total over the
+// days. Today from the store; the days before from /api/history, arriving behind the view (desk/past.ts), built
 // once per load and only today's bars each tick. Long-press reads a bar, ⤢ opens #/chart/m-desk.
 import { useMemo, useRef, type ReactNode } from "react";
 import { compact, num, pnl } from "../../../format";
@@ -13,8 +14,8 @@ import { useStore } from "../../../store";
 import { maskFormat } from "../../../mask";
 import { useTodayMinutes } from "../../desk/pnlData";
 import { MIN, bucket, todayRows, type Row } from "../../desk/model";
-import { PAST_BARS_PHONE, pastStep, useDayOffsets, usePast, type DayOffset } from "../../desk/past";
-import { PNL_STEP, histBars, joinChart, todayBars, toChart, type PnlBar, type PnlData, type PnlIv } from "./pnl";
+import { PAST_BARS_PHONE, dayEnds, pastStep, usePast } from "../../desk/past";
+import { PNL_STEP, histBars, joinChart, todayBars, toChart, type PnlData, type PnlIv } from "./pnl";
 import { useDesk, notionalCur, roled } from "../../../desk";
 
 type Tab = "pnl" | "equity" | "exposure";
@@ -58,35 +59,32 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
   const mins = useTodayMinutes(dayStart);
   const past = usePast(pastStep(step), dayStart ?? 0, PAST_BARS_PHONE);
 
-  // the P&L runs on over the days: each day's stored figures plus the earlier days' closes (null: none kept); until
-  // the closes are in, nothing: the day's own figures first would jump to the running ones a moment later
-  const offAt = useDayOffsets(dayStart);
+  // the days before, each from its own start: a line stops at each day's last bar (today follows from 0)
   const pastData = useMemo(() => {
-    if (offAt === undefined) return null;
     const b = histBars(past.bars);
-    return toChart(offAt ? b.map((x) => runOn(x, offAt(x.time))) : b, iv === "line", null, null, VOL, undefined, true);
-  }, [past.bars, iv, offAt]);
+    const ends = dayEnds([...b.map((x) => x.time), dayStart ?? 0], dayStart ?? 0);
+    return toChart(b, iv === "line", null, null, VOL, ends, true);
+  }, [past.bars, iv, dayStart]);
   const pastReb = useMemo(() => past.bars.some((b) => b.rebates != null), [past.bars]);
 
   const prev = useRef<{ k: string; d: PnlData } | null>(null);
   const nToday = useRef(0);
   const todayFirst = useRef<number | "">("");
   const data = useMemo(() => {
-    const own = dayStart != null && offAt !== undefined ? todayBars(dayStart, bars, series, fills, step, mins) : [];
-    const today = offAt ? own.map((b) => runOn(b, offAt(b.time))) : own;
+    const today = dayStart != null ? todayBars(dayStart, bars, series, fills, step, mins) : [];
     nToday.current = today.length;
     todayFirst.current = today[0]?.time ?? "";
     // the rebates' lines run the whole chart once either side has any
     const reb = pastReb || today.some((b) => b.rebates != null);
     const d = toChart(today, iv === "line", null, prev.current?.k === iv ? prev.current.d : null, VOL, undefined, reb);
     prev.current = { k: iv, d };
-    return pastData?.bars.length ? joinChart(reb ? pastData : { ...pastData, rebates: [], other: [] }, d) : d;
-  }, [dayStart, bars, series, fills, step, pastReb, pastData, iv, mins, offAt]);
+    return pastData.bars.length ? joinChart(reb ? pastData : { ...pastData, rebates: [], other: [] }, d) : d;
+  }, [dayStart, bars, series, fills, step, pastReb, pastData, iv, mins]);
 
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
   const vol = maskFormat(hide, (v: number) => compact(v));
-  // at rest the legend names the lines: PnL, then Trading, Hedge and Rebates (with Other they make PnL); the two
+  // at rest the legend has two lines: Day, then Trading, Hedge and Rebates (with Other they make Day); the two
   // parts of Trading and Other are a chip away
   const line = (key: keyof typeof P, label: string, pts: PnlData["mm"]): ExSeries => ({
     key,
@@ -105,8 +103,8 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
   });
   const s: ExSeries[] = [
     iv === "line"
-      ? { key: "day", kind: "baseline", label: "PnL", data: data.main, format: money, signColor: true, toggle: false }
-      : { key: "day", kind: "candles", label: "PnL", data: data.main, format: money, toggle: false },
+      ? { key: "day", kind: "baseline", label: "Day", data: data.main, format: money, signColor: true, toggle: false }
+      : { key: "day", kind: "candles", label: "Day", data: data.main, format: money, toggle: false },
     line("trading", "Trading", data.trading),
     ...(desk.mm ? [line("mm", "MM", data.mm), line("inv", "Inv", data.inv)] : []),
     ...(desk.hedge ? [line("hedge", "Hedge", data.hedge)] : []),
@@ -140,24 +138,6 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
       chips={[...s.slice(1, -1).map((x) => ({ key: x.key, label: x.label, color: x.color, stroke: x.lineStyle })), "|", { key: "vol", label: "Vol" }]}
     />
   );
-}
-
-/** A bar's P&L figures run on from the earlier days' closes (`o`). */
-function runOn(b: PnlBar, o: DayOffset): PnlBar {
-  const add = (v: number | null, d: number) => (v == null ? v : v + d);
-  return {
-    ...b,
-    open: b.open + o.c,
-    high: b.high + o.c,
-    low: b.low + o.c,
-    close: b.close + o.c,
-    trading: add(b.trading, o.trading),
-    mm: add(b.mm, o.mm),
-    inv: add(b.inv, o.trading - o.mm),
-    hedge: add(b.hedge, o.hedge),
-    rebates: add(b.rebates, o.reb),
-    other: add(b.other, o.c - o.trading - o.hedge - o.reb),
-  };
 }
 
 /** Equity of all accounts, or the exposure (inventory value, hedge notional, the net): levels, not a day's figure,

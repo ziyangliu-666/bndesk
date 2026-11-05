@@ -145,13 +145,6 @@ export function hm(ms: number, tz: TzMode): string {
     : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** A P&L day by its start, as History names it: Oct 4 (the day start's own date, whatever the time zone). */
-export function dayName(ms: number): string {
-  const d = new Date(ms);
-  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-}
-
 /** Compact duration: 4s, 3m 05s, 2h 14m, 3d 4h. */
 export function dur(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms)) return DASH;
