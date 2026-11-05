@@ -224,16 +224,36 @@ export function useEngineSeries(keys: string[], spanMs: number): { s: Series | n
 export function pts(s: Series | null, key: string, f: (v: number, i: number) => number | null = (v) => v, gapMs = 120_000): { time: number; value: number | null }[] {
   const col = s?.v[key];
   if (!s || !col) return [];
+  // the charts draw whole seconds, strictly ascending: two pushes within one second keep the later, and a break
+  // (no push for gapMs) is a blank one second after the last point
   const out: { time: number; value: number | null }[] = [];
   let prev = -Infinity;
   for (let i = 0; i < s.t.length; i++) {
     const v = col[i];
     if (v == null) continue;
-    const t = s.t[i]!;
-    if (t - prev > gapMs && out.length) out.push({ time: prev + 1, value: null });
+    const t = Math.floor(s.t[i]! / 1000) * 1000;
     const x = f(v, i);
+    if (t === prev) {
+      out[out.length - 1] = { time: t, value: x };
+      continue;
+    }
+    if (t < prev) continue;
+    if (t - prev > gapMs && out.length && t > prev + 1000) out.push({ time: prev + 1000, value: null });
     out.push({ time: t, value: x });
     prev = t;
+  }
+  return out;
+}
+
+/** Points for a chart: whole seconds, strictly ascending, the later of two in one second kept. */
+export function asc<P extends { time: number }>(ps: P[]): P[] {
+  const out: P[] = [];
+  for (const p of ps) {
+    const q = { ...p, time: Math.floor(p.time / 1000) * 1000 };
+    const last = out[out.length - 1];
+    if (last && q.time < last.time) continue;
+    if (last && q.time === last.time) out[out.length - 1] = q;
+    else out.push(q);
   }
   return out;
 }
@@ -323,8 +343,9 @@ export function engineTrouble(p: Payload | null | undefined): string | null {
   if (!p) return null;
   if (p.ok === false) return "Engine status unreadable" + (p.error ? `: ${p.error}` : "");
   const k = p.kill;
-  if (k?.flattening || (k?.flatten_state && k.flatten_state !== "Off")) return `Flatten ${k.flatten_state ?? "working"}` + (k.reason ? `: ${k.reason}` : "");
-  if (k?.latched || (k?.flags ?? 0) !== 0) return "Killed" + (k?.reason ? `: ${k.reason}` : "");
+  const why = k?.reason && k.reason !== "None" ? `: ${k.reason}` : "";
+  if (k?.flattening || (k?.flatten_state && k.flatten_state !== "Off")) return `Flatten ${k.flatten_state ?? "working"}` + why;
+  if (k?.latched || (k?.flags ?? 0) !== 0) return "Killed" + why;
   if (p.engine?.running === false) return `Engine ${p.engine.state ?? "stopped"}`;
   return null;
 }

@@ -5,13 +5,13 @@ import { useExPref } from "../../components/ex";
 import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
-import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, quoteRows } from "../Strategy";
+import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, fillTime, quoteCounts, quoteRows } from "../Strategy";
 import { showInfo } from "../../components/mobile";
 import { bandDef } from "./shared";
 import { DeskChart, GapBar } from "./rest/assets";
 import type { Exposure } from "../../protocol";
 import { hedgeWord, inventoryWord, roled } from "../../desk";
-import { BLOCK, STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
+import { STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
 import { HedgeBridge } from "../../components/HedgeBridge";
 import { useQty } from "../../mask";
 import { Amt, Empty, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
@@ -72,7 +72,7 @@ function HedgeM({ latest }: { latest: Latest }) {
           { label: "Beta", value: mv(m, "beta") == null ? "--" : num(mv(m, "beta"), 2) },
           { label: "Taker band", value: h.takerBand == null ? "--" : maskText(hide, "±" + num(h.takerBand, 0)) },
           { label: "Slippage", value: mv(m, "slipBp") == null ? "--" : bps(mv(m, "slipBp")) + " bps" },
-          { label: "Time to fill", value: mv(m, "latencyMs") == null ? "--" : dur(mv(m, "latencyMs")) },
+          { label: "Time to fill", value: fillTime(mv(m, "latencyMs")) },
         ]}
       />
       <div className="r-chart">
@@ -96,7 +96,7 @@ function HedgeM({ latest }: { latest: Latest }) {
                 {a(r.target)}
               </span>
             }
-            valueSub={`slip ${r.slip == null ? "--" : bps(r.slip) + " bps"} · fill ${r.latency == null ? "--" : dur(r.latency)}`}
+            valueSub={`slip ${r.slip == null ? "--" : bps(r.slip) + " bps"} · fill ${fillTime(r.latency)}`}
             tone={r.taker ? "warn" : undefined}
           />
         ))}
@@ -168,7 +168,9 @@ function QuotingM({ latest }: { latest: Latest }) {
   const { now } = useAge(latest);
   const caps = useMemo(() => capital(latest.payload), [latest]);
   const rows = useMemo(() => quoteRows(latest.payload?.quotes ?? [], latest.payload?.venues), [latest]);
-  const off = rows.filter((r) => r.block !== 0);
+  // what needs a look: a side stopped by something; one-sided and idle instruments are the engine's own choice
+  const off = rows.filter((r) => r.kind === "blocked");
+  const c = quoteCounts(rows);
   const a = (v: number | null) => (v == null ? "--" : maskText(hide, compact(v)));
   const { age, stale } = useAge(latest);
   const trouble = engineTrouble(latest.payload);
@@ -199,18 +201,18 @@ function QuotingM({ latest }: { latest: Latest }) {
         })}
         {!caps.length && <Empty>No balances sent</Empty>}
       </Sec>
-      <Sec title="Not quoting" right={truncated ? undefined : `${rows.length - off.length} of ${rows.length} quoting`}>
+      <Sec title="Stopped" right={truncated ? undefined : [`${c.both} both sides`, c.one && `${c.one} one side`, c.idle && `${c.idle} idle`].filter(Boolean).join(" · ")}>
         {off.map((r) => (
           <Row
             dense
             key={r.key}
             title={r.venue ? `${r.symbol} ${r.venue}` : r.symbol}
             sub={r.why ?? undefined}
-            value={<span className={r.block >= 3 ? "warn-text" : "muted"}>{BLOCK[r.block] ?? `Code ${r.block}`}</span>}
+            value={<span className="warn-text">{r.state}</span>}
             valueSub={r.since != null ? dur(now - r.since) : undefined}
           />
         ))}
-        {truncated ? <Empty>The last push left the quotes out</Empty> : !off.length && <Empty>{rows.length ? "Every instrument is quoting" : "The engine sent no quotes"}</Empty>}
+        {truncated ? <Empty>The last push left the quotes out</Empty> : !off.length && <Empty>{rows.length ? "Nothing is stopped" : "The engine sent no quotes"}</Empty>}
       </Sec>
     </>
   );

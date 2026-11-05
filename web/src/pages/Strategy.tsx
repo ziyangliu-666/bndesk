@@ -10,7 +10,7 @@ import { ExChart, Tabs, useExPref, type ExMarker, type ExSeries } from "../compo
 import { amount, maskText, useHide } from "../mask";
 import { useNow } from "../hooks";
 import { FundingPanel, HedgePanel } from "./Accounts";
-import { BLOCK, STALE_MS, dateTag, engineTrouble, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
+import { BLOCK, STALE_MS, asc, dateTag, engineTrouble, hedgeState, capital, mv, pts, rebalances, skey, useEngineLatest, useEngineSeries, useMetrics, type Latest, type Quote, type Rebalance, type Reason } from "./strategy/engine";
 import "./ops/ops.css";
 import "./strategy/strategy.css";
 import { cur } from "../desk";
@@ -104,7 +104,7 @@ function HedgeFigures({ m, rebal, hide }: { m: Record<string, number>; rebal: Re
         <span className="ops-unit">{today.taker ? `${today.taker} taker` : "all maker"}</span>
       </Fig>
       <Fig label="Slippage" title="Against the mid when the engine decided, average">{mv(m, "slipBp") == null ? "--" : bps(mv(m, "slipBp")) + " bps"}</Fig>
-      <Fig label="Time to fill" title="From the decision to the fill, average">{mv(m, "latencyMs") == null ? "--" : dur(mv(m, "latencyMs"))}</Fig>
+      <Fig label="Time to fill" title="From the decision to the fill, average">{fillTime(mv(m, "latencyMs"))}</Fig>
     </div>
   );
 }
@@ -245,7 +245,7 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
                     {a(r.target)}
                   </td>
                   <td className="fig">{r.slip == null ? "--" : bps(r.slip)}</td>
-                  <td className="fig">{r.latency == null ? "--" : dur(r.latency)}</td>
+                  <td className="fig">{fillTime(r.latency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -357,11 +357,13 @@ function CapitalChart({ hide }: { hide: boolean }) {
         width: 1.5,
         format: (v: number) => pct(v),
         lastValue: false,
-        data: s.t.map((t, i) => {
-          const f = sumAt(e.free, i),
-            l = sumAt(e.locked, i);
-          return { time: t, value: f + l > 0 ? l / (f + l) : null };
-        }),
+        data: asc(
+          s.t.map((t, i) => {
+            const f = sumAt(e.free, i),
+              l = sumAt(e.locked, i);
+            return { time: t, value: f + l > 0 ? l / (f + l) : null };
+          }),
+        ),
       }));
   }, [s]);
   const last24 = series[0]?.data.filter((p) => p.time >= Date.now() - DAY).length ?? 0;
@@ -392,11 +394,23 @@ interface QRow {
   ask: Quote | null;
   spread: number | null;
   depth: number | null;
-  /** The worse side's block (0 quoting) and since when. */
+  /** The side that matters: a blocked one first (≥2, or -1), then a quoting one; 1 when neither side is wanted. */
   block: number;
+  /** blocked: a side is stopped by something; both / bid / ask: quoting those; idle: the engine wants neither side. */
+  kind: "blocked" | "both" | "bid" | "ask" | "idle";
+  /** The row's state in words. */
+  state: string;
   since: number | null;
   why: string | null;
 }
+
+/** A price the engine sent, or null for its 0 (no price). */
+const px = (v: number | null | undefined) => (v != null && v > 0 ? v : null);
+const ORDER: Record<QRow["kind"], number> = { blocked: 0, bid: 1, ask: 1, both: 2, idle: 3 };
+
+/** How long a hedge took to fill: milliseconds under a second. */
+export const fillTime = (ms: number | null | undefined) =>
+  ms == null ? "--" : ms < 1000 ? `${Math.round(ms)} ms` : ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : dur(ms);
 
 export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
   const named = new Set(qs.map((q) => q.venue)).size > 1;
@@ -408,18 +422,24 @@ export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
     else e.ask = q;
     by.set(key, e);
   }
-  const rank = (b: number) => (b >= 3 ? 3 : b === 2 ? 2 : b === 1 ? 1 : 0);
+  const stopped = (q: Quote | null) => q != null && q.block != null && (q.block >= 2 || q.block < 0);
+  const on = (q: Quote | null) => q != null && (q.block ?? 0) === 0;
   return [...by.entries()]
-    .map(([key, { bid, ask }]) => {
+    .map(([key, { bid, ask }]): QRow => {
       const q = bid ?? ask!;
       const mid = q.mid ?? null;
-      const bp = bid?.working_px ?? null,
-        ap = ask?.working_px ?? null;
+      const bp = on(bid) ? px(bid!.working_px) : null,
+        ap = on(ask) ? px(ask!.working_px) : null;
       const spread = bp != null && ap != null && mid ? ((ap - bp) / mid) * 1e4 : null;
-      const depth = (bid?.working_px && bid.working_qty ? bid.working_px * bid.working_qty : 0) + (ask?.working_px && ask.working_qty ? ask.working_px * ask.working_qty : 0);
-      const worst = [bid, ask].filter(Boolean).sort((x, y) => rank(y!.block ?? 0) - rank(x!.block ?? 0))[0]!;
-      const since = worst.block_since ?? (worst.block_since_ns ? worst.block_since_ns / 1e6 : null);
+      const notional = (x: Quote | null) => (on(x) && px(x!.working_px) && x!.working_qty ? x!.working_px! * x!.working_qty : 0);
+      const depth = notional(bid) + notional(ask);
+      const bad = [bid, ask].find(stopped) ?? null;
+      const kind: QRow["kind"] = bad ? "blocked" : on(bid) && on(ask) ? "both" : on(bid) ? "bid" : on(ask) ? "ask" : "idle";
+      const w = bad ?? (on(bid) ? bid : on(ask) ? ask : q)!;
+      const since = w.block_since ?? (w.block_since_ns ? w.block_since_ns / 1e6 : null);
       const v = q.venue;
+      const block = w.block ?? 0;
+      const state = kind === "blocked" ? (BLOCK[block] ?? `Code ${block}`) + (bad === bid ? ", bid" : ", ask") : kind === "both" ? "Quoting" : kind === "bid" ? "Bid only" : kind === "ask" ? "Ask only" : "Idle";
       return {
         key,
         venue: named && v != null ? (typeof v === "number" ? (venues?.[v]?.name ?? String(v)) : v) : null,
@@ -430,20 +450,28 @@ export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
         ask,
         spread,
         depth: depth || null,
-        block: worst.block ?? 0,
-        since: worst.block ? since : null,
-        why: [worst.reason && worst.reason !== "None" ? words(worst.reason) : null, worst.note].filter(Boolean).join(" · ") || null,
+        block,
+        kind,
+        state,
+        since: kind === "blocked" ? since : null,
+        why: bad ? [bad.reason && bad.reason !== "None" ? words(bad.reason) : null, bad.note].filter(Boolean).join(" · ") || null : null,
       };
     })
-    .sort((a, b) => rank(b.block) - rank(a.block) || a.symbol.localeCompare(b.symbol));
+    .sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.symbol.localeCompare(b.symbol));
+}
+
+/** The rows in a line: how many quote both sides, one side, are stopped and idle. */
+export function quoteCounts(rows: QRow[]) {
+  const c = { both: 0, one: 0, blocked: 0, idle: 0 };
+  for (const r of rows) r.kind === "both" ? c.both++ : r.kind === "blocked" ? c.blocked++ : r.kind === "idle" ? c.idle++ : c.one++;
+  return c;
 }
 
 function QuoteSide({ q, hide }: { q: Quote | null; hide: boolean }) {
-  if (!q) return <span className="muted">--</span>;
-  if (q.working_px == null || !q.working_qty) return <span className="muted">{q.desired_px == null ? "--" : price(q.desired_px)}</span>;
+  if (!q || (q.block ?? 0) !== 0 || px(q.working_px) == null || !q.working_qty) return <span className="muted">{q && px(q.desired_px) != null ? price(q.desired_px!) : "--"}</span>;
   return (
     <>
-      {price(q.working_px)}
+      {price(q.working_px!)}
       <span className="muted"> × {maskText(hide, compact(q.working_qty))}</span>
     </>
   );
@@ -453,12 +481,14 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
   const skew = useStore((s) => s.skew);
   const now = useNow(1000) + skew;
   const rows = useMemo(() => quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues), [latest]);
-  const n = rows.filter((r) => r.block === 0).length;
+  const c = quoteCounts(rows);
   return (
     <section className="ops-panel st-quotes">
       <header className="ops-head">
         <span className="ops-title">Quotes</span>
-        <span className="ops-count">{rows.length ? `${n} of ${rows.length} quoting both sides` : ""}</span>
+        <span className="ops-count">{rows.length
+            ? [`${c.both} both sides`, c.one && `${c.one} one side`, c.blocked && `${c.blocked} stopped`, c.idle && `${c.idle} idle`].filter(Boolean).join(" · ")
+            : ""}</span>
       </header>
       <div className="ops-body ops-scroll">
         {rows.length ? (
@@ -483,7 +513,7 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
                     {r.symbol}
                     {r.venue && <span className="ops-perp">{r.venue}</span>}
                   </td>
-                  <td className={"l " + (r.block >= 3 ? "warn-text" : r.block > 0 ? "muted" : "")}>{BLOCK[r.block] ?? `Code ${r.block}`}</td>
+                  <td className={"l " + (r.kind === "blocked" ? "warn-text" : r.kind === "idle" ? "muted" : "")} title={r.kind === "idle" ? "The engine wants neither side now (no budget, or nothing to sell)" : undefined}>{r.state}</td>
                   <td className="l muted st-why">{r.why ?? ""}</td>
                   <td className="fig">{r.since != null ? dur(now - r.since) : ""}</td>
                   <td className="fig"><QuoteSide q={r.bid} hide={hide} /></td>
@@ -529,10 +559,7 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
   const m = useMetrics(latest);
   const { age, stale } = usePush(latest);
   const tz = useStore((s) => s.tz);
-  const quoting = useMemo(() => {
-    const rows = quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues);
-    return { n: rows.filter((r) => r.block === 0).length, of: rows.length };
-  }, [latest]);
+  const stopped = useMemo(() => quoteCounts(quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues)).blocked, [latest]);
   if (!latest?.payload) return <NoData latest={latest} error={error} />;
   const p = latest.payload;
   const trouble = engineTrouble(p);
@@ -541,8 +568,8 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
     <div className="ops-tab-body st-quoting">
       <section className="ops-panel st-top">
         <div className="st-state">
-          <span className={"st-state-word " + (stale ? "warn-text" : trouble ? "crit-text" : quoting.n < quoting.of ? "" : "up")}>
-            {stale ? "No push for " + dur(age) : (trouble ?? `${quoting.n} of ${quoting.of} quoting`)}
+          <span className={"st-state-word " + (stale ? "warn-text" : trouble ? "crit-text" : stopped ? "warn-text" : "up")}>
+            {stale ? "No push for " + dur(age) : (trouble ?? (stopped ? `${stopped} stopped` : "Quoting"))}
           </span>
           {!stale && latest.t != null && <span className="st-state-sub fig">{`pushed ${hms(latest.t, tz)}`}</span>}
         </div>
@@ -557,7 +584,7 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
           </Fig>
           <Fig label="Clip" title={`One quote's notional; at most ${mv(m, "maxUnits") ?? "--"} clips a side, ${cur()}`}>
             {a(mv(m, "quoteNotional"))}
-            {mv(m, "maxUnits") != null && <span className="ops-unit">{`max ${int(mv(m, "maxUnits"))}`}</span>}
+            {mv(m, "maxUnits") != null && <span className="ops-unit">{`max ${num(mv(m, "maxUnits"), Number.isInteger(mv(m, "maxUnits")) ? 0 : 1)} clips`}</span>}
           </Fig>
           <Fig label="Pool locked" title="The engine's own booking">{a(mv(m, "poolLocked"))}</Fig>
           <Fig label="Pool free">{a(mv(m, "poolFree"))}</Fig>
