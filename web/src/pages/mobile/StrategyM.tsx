@@ -5,7 +5,7 @@ import { useExPref } from "../../components/ex";
 import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
-import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, fillTime, quoteCounts, quoteRows } from "../Strategy";
+import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, fillTime, quoteCounts, quoteRows, unwindCount } from "../Strategy";
 import { showInfo } from "../../components/mobile";
 import { bandDef } from "./shared";
 import { DeskChart, GapBar } from "./rest/assets";
@@ -93,7 +93,7 @@ function HedgeM({ latest }: { latest: Latest }) {
             value={
               <span className="r-fig">
                 <span className="muted">{a(r.from)} → </span>
-                {a(r.target)}
+                {a(r.pos)}
               </span>
             }
             valueSub={`slip ${r.slip == null ? "--" : bps(r.slip) + " bps"} · fill ${fillTime(r.latency)}`}
@@ -181,7 +181,10 @@ function QuotingM({ latest }: { latest: Latest }) {
       <Stats
         cols={3}
         items={[
-          { label: "Sides quoting", value: mv(m, "sidesQuoting") == null ? "--" : `${int(mv(m, "sidesQuoting"))} / ${int(mv(m, "sidesWarm"))}` },
+          {
+            label: "Sides with a clip",
+            value: mv(m, "sidesQuoting") == null ? "--" : `${int(mv(m, "sidesQuoting"))} / ${int(mv(m, "sidesWarm"))}` + (unwindCount(latest, m) > 0 ? ` +${int(unwindCount(latest, m))}` : ""),
+          },
           { label: "Budget, clips", value: mv(m, "budget") == null ? "--" : `${num(mv(m, "clipsUnspent"), 1)} / ${num(mv(m, "budget"), 1)}` },
           { label: "Unwinding", value: a(mv(m, "unwindUsd")) },
         ]}

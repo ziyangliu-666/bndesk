@@ -226,7 +226,7 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
                 <th className="l">Time</th>
                 <th className="l">Type</th>
                 <th className="l">Trigger</th>
-                <th title={`The hedge before it, and the target it went for, ${cur()}`}>Hedge → target</th>
+                <th title={`The hedge before it and after it; a rebalance aims half a band inside the target, not at it, ${cur()}`}>Hedge, before → after</th>
                 <th title="Average slippage after it, bps">Slip</th>
                 <th title="Average time to fill after it">Fill</th>
               </tr>
@@ -242,7 +242,7 @@ function Rebalances({ rebal, hide }: { rebal: Rebalance[]; hide: boolean }) {
                   <td className="l">{r.trigger ?? "--"}</td>
                   <td className="fig">
                     <span className="muted">{a(r.from)} → </span>
-                    {a(r.target)}
+                    {a(r.pos)}
                   </td>
                   <td className="fig">{r.slip == null ? "--" : bps(r.slip)}</td>
                   <td className="fig">{fillTime(r.latency)}</td>
@@ -460,6 +460,13 @@ export function quoteRows(qs: Quote[], venues?: { name: string }[]): QRow[] {
     .sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.symbol.localeCompare(b.symbol));
 }
 
+/** Working sides the allocator gave no clip: the orders unwinding inventory held. */
+export function unwindCount(latest: Latest | null, m: Record<string, number>) {
+  const working = (latest?.payload?.quotes ?? []).filter((q) => (q.block ?? 0) === 0).length;
+  const clip = mv(m, "sidesQuoting");
+  return clip == null ? 0 : Math.max(0, working - clip);
+}
+
 /** The rows in a line: how many quote both sides, one side, are stopped and idle. */
 export function quoteCounts(rows: QRow[]) {
   const c = { both: 0, one: 0, blocked: 0, idle: 0 };
@@ -560,6 +567,7 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
   const { age, stale } = usePush(latest);
   const tz = useStore((s) => s.tz);
   const stopped = useMemo(() => quoteCounts(quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues)).blocked, [latest]);
+  const unwindSides = unwindCount(latest, m);
   if (!latest?.payload) return <NoData latest={latest} error={error} />;
   const p = latest.payload;
   const trouble = engineTrouble(p);
@@ -574,9 +582,10 @@ function Quoting({ latest, error }: { latest: Latest | null; error: string | nul
           {!stale && latest.t != null && <span className="st-state-sub fig">{`pushed ${hms(latest.t, tz)}`}</span>}
         </div>
         <div className="st-figs">
-          <Fig label="Sides quoting" title="Sides with a working quote, of the warm ones">
+          <Fig label="Sides with a clip" title="Sides the allocator gave a clip in its last pass, of the ranked (warm) sides; plus the working orders it gave none, which unwind inventory held">
             {mv(m, "sidesQuoting") == null ? "--" : int(mv(m, "sidesQuoting"))}
             {mv(m, "sidesWarm") != null && <span className="ops-unit">of {int(mv(m, "sidesWarm"))}</span>}
+            {unwindSides > 0 && <span className="ops-unit">{`+ ${int(unwindSides)} unwind`}</span>}
           </Fig>
           <Fig label="Budget" title="Clips the pools' balance allows, and those left after the last re-allocation">
             {mv(m, "budget") == null ? "--" : num(mv(m, "budget"), 1)}
