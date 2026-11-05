@@ -5,7 +5,7 @@ import { useExPref } from "../../components/ex";
 import { maskText, useHide } from "../../mask";
 import { useNow } from "../../hooks";
 import { cur } from "../../desk";
-import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, fillTime, quoteCounts, quoteRows, unwindCount } from "../Strategy";
+import { ExposureChart, GapChart, HEDGE_SERIES, deskNote, fillTime, quoteCounts, quoteRows, unwindCount } from "../strategy/parts";
 import { showInfo } from "../../components/mobile";
 import { bandDef } from "./shared";
 import { DeskChart, GapBar } from "./rest/assets";
