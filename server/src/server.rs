@@ -208,8 +208,26 @@ struct Out {
     reset: bool,
 }
 
+/// What went out to every client over a window, by message type: count and bytes on the wire (logged every 5 min).
+#[derive(Default)]
+struct Wire {
+    from: f64,
+    by: std::collections::BTreeMap<String, (u64, u64)>,
+}
+
+const WIRE_LOG_S: f64 = 300.0;
+
+fn wire_bytes(m: &Message) -> usize {
+    match m {
+        Message::Text(t) => t.len(),
+        Message::Binary(b) => b.len(),
+        _ => 0,
+    }
+}
+
 struct Shared {
     tx: broadcast::Sender<Out>,
+    wire: std::sync::Mutex<Wire>,
     seq: AtomicU64,
     clients: AtomicUsize,
     req: mpsc::UnboundedSender<Req>,
@@ -223,9 +241,40 @@ impl Shared {
     }
 
     fn send(&self, text: Utf8Bytes, reset: bool) {
+        // {"type":"<kind>",... as msg() writes it
+        let kind = text.as_str().get(9..).and_then(|r| r.split('"').next()).unwrap_or("?").to_string();
         let frame = frame(text);
+        self.count(&kind, wire_bytes(&frame));
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.tx.send(Out { seq, frame, reset });
+    }
+
+    fn count(&self, kind: &str, bytes: usize) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let mut w = self.wire.lock().unwrap();
+        if w.from == 0.0 {
+            w.from = now;
+        }
+        let e = w.by.entry(kind.to_string()).or_default();
+        e.0 += 1;
+        e.1 += bytes as u64;
+        let span = now - w.from;
+        if span >= WIRE_LOG_S {
+            let total: u64 = w.by.values().map(|v| v.1).sum();
+            let parts: Vec<String> = w
+                .by
+                .iter()
+                .map(|(k, (n, b))| format!("{k} {:.1}/s avg {:.1} KB", *n as f64 / span, *b as f64 / *n as f64 / 1024.0))
+                .collect();
+            tracing::info!(
+                "ws out, {:.0} s: {:.1} KB/s to each client ({} clients); {}",
+                span,
+                total as f64 / span / 1024.0,
+                self.clients.load(Ordering::Relaxed),
+                parts.join(", ")
+            );
+            *w = Wire { from: now, ..Default::default() };
+        }
     }
 
     async fn snapshot(&self) -> Option<Snap> {
@@ -316,6 +365,7 @@ impl Hub {
         let (req, rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             tx,
+            wire: Default::default(),
             seq: AtomicU64::new(0),
             clients: AtomicUsize::new(0),
             req,
@@ -454,12 +504,25 @@ pub struct HubHandle(Arc<Shared>);
 async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
     let mut rx = shared.tx.subscribe(); // before the snapshot, so nothing between falls through
     let mut closing = shared.closing.subscribe();
+    let t0 = tokio::time::Instant::now();
     let Some((seq0, snap, older)) = shared.snapshot().await else { return };
+    let raw = snap.len();
     // deflating a snapshot takes a few ms: off the desk's thread
     let Ok(first) = tokio::task::spawn_blocking(move || frame(msg("snapshot", &snap))).await else { return };
+    let wire = wire_bytes(&first);
+    let built = t0.elapsed();
     if !matches!(tokio::time::timeout(SEND_TIMEOUT, ws.send(first)).await, Ok(Ok(()))) {
+        tracing::info!("ws client: snapshot of {} KB not sent in {} s", wire / 1024, SEND_TIMEOUT.as_secs());
         return;
     }
+    tracing::info!(
+        "ws client: snapshot {} KB ({} KB raw) built in {} ms, sent in {} ms",
+        wire / 1024,
+        raw / 1024,
+        built.as_millis(),
+        (t0.elapsed() - built).as_millis()
+    );
+    let mut why = "closed";
     // sent when the page asks (it has drawn the snapshot by then); it holds the snapshot's state, which the page
     // merges under whatever came since (fills it has not got, account points before its first)
     let mut older = Some(older);
@@ -475,10 +538,17 @@ async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
                         older = None; // the reset's own `older` follows it
                     }
                     if !matches!(tokio::time::timeout(SEND_TIMEOUT, ws.send(o.frame)).await, Ok(Ok(()))) {
+                        why = "a send timed out";
                         break;
                     }
                 }
-                Err(_) => break, // lagged (missed messages: it reconnects for a snapshot) or closed
+                Err(e) => {
+                    // lagged (missed messages: it reconnects for a snapshot) or closed
+                    if matches!(e, broadcast::error::RecvError::Lagged(_)) {
+                        why = "fell behind";
+                    }
+                    break;
+                }
             },
             m = ws.recv() => match m {
                 Some(Ok(Message::Pong(_))) => pong = true,
@@ -494,6 +564,7 @@ async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
             },
             _ = ping.tick() => {
                 if !pong {
+                    why = "no pong";
                     break;
                 }
                 pong = false;
@@ -505,6 +576,7 @@ async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
         }
     }
     shared.clients.fetch_sub(1, Ordering::Relaxed);
+    tracing::info!("ws client: gone after {} s, {why}", t0.elapsed().as_secs());
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.send(Message::Close(None))).await;
 }
 
