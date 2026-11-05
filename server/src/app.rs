@@ -318,10 +318,10 @@ impl Desk {
             betas: cfg.beta.clone().map(|b| Rc::new(RefCell::new(Betas::new(b)))),
             accounts: vec![],
             view: None,
-            // compute at 8 Hz, push once a second (the pages draw once a second)
+            // compute and push at 8 Hz: the pages move with the market
             hub: RefCell::new({
                 let mut h = Hub::new();
-                h.set_every(TICKS_1S);
+                h.set_every(1);
                 h
             }),
             market,
