@@ -351,6 +351,10 @@ pub struct Hub {
     /// each PATCH_KEYS value as last sent: its JSON, and as values for the next one's edits
     last: [Option<(Vec<u8>, Value)>; 12],
     full: bool,
+    /// Push every this many ticks (1: every tick); the fills, points and bars of the ticks between wait in `pending`.
+    every: u64,
+    n: u64,
+    pending: Vec<Utf8Bytes>,
 }
 
 impl Default for Hub {
@@ -371,7 +375,22 @@ impl Hub {
             req,
             closing: watch::channel(false).0,
         });
-        Hub { requests: Some(Requests { rx, shared: shared.clone() }), shared, last: Default::default(), full: false }
+        Hub {
+            requests: Some(Requests { rx, shared: shared.clone() }),
+            shared,
+            last: Default::default(),
+            full: false,
+            every: 1,
+            n: 0,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Push to the clients every `every` ticks: what a screen draws once a second need not cross the wire 8 times.
+    /// A client's snapshot may already hold what waits; fills upsert and points append past the last, so twice is
+    /// harmless.
+    pub fn set_every(&mut self, every: u64) {
+        self.every = every.max(1);
     }
 
     /// The request channel for `answer` (once).
@@ -398,15 +417,33 @@ impl Hub {
         // only once that is sent, and this tick's fills / points / bars are not in that snapshot
         if self.shared.tx.receiver_count() == 0 {
             self.last = Default::default();
+            self.pending.clear();
             // a client that connects later asks for its own fresh snapshot: a pending reset has nobody to reach
             self.full = false;
             return;
         }
         if self.full {
             self.full = false;
+            self.pending.clear(); // the snapshot holds them
             let (s, o) = snapshot();
             self.shared.send(msg("snapshot", &s), true);
             self.shared.broadcast(msg("older", &o));
+            return;
+        }
+        if !fills.is_empty() {
+            self.pending.push(msg("fills", &P::encode(fills)));
+        }
+        if !series.is_empty() {
+            self.pending.push(msg("series", &P::encode(series)));
+        }
+        if !acct.is_empty() {
+            self.pending.push(msg("account_series", &P::encode(acct)));
+        }
+        if !bars.is_empty() {
+            self.pending.push(msg("bars", &P::encode(bars)));
+        }
+        self.n += 1;
+        if !self.n.is_multiple_of(self.every) {
             return;
         }
         let mut body: Vec<u8> = Vec::new();
@@ -431,7 +468,8 @@ impl Hub {
             }
             self.last[i] = Some((b, val));
         }
-        if !body.is_empty() || !diff.is_empty() {
+        // pushed every second or less often: always, so a quiet second still tells the page it is live
+        if !body.is_empty() || !diff.is_empty() || self.every > 1 {
             let mut p = format!("{{\"now\":{}", v.now).into_bytes();
             p.extend_from_slice(&body);
             if !diff.is_empty() {
@@ -441,17 +479,8 @@ impl Hub {
             p.push(b'}');
             self.shared.broadcast(msg("patch", &p));
         }
-        if !fills.is_empty() {
-            self.shared.broadcast(msg("fills", &P::encode(fills)));
-        }
-        if !series.is_empty() {
-            self.shared.broadcast(msg("series", &P::encode(series)));
-        }
-        if !acct.is_empty() {
-            self.shared.broadcast(msg("account_series", &P::encode(acct)));
-        }
-        if !bars.is_empty() {
-            self.shared.broadcast(msg("bars", &P::encode(bars)));
+        for m in std::mem::take(&mut self.pending) {
+            self.shared.broadcast(m);
         }
     }
 
@@ -879,6 +908,36 @@ mod tests {
         hub.reset();
         hub.tick(&Patch::of(&s), &[f], &[], &[], &nb, || (b"{\"x\":1}".to_vec(), b"{\"y\":2}".to_vec()));
         assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}", "{\"type\":\"older\",\"data\":{\"y\":2}}"]);
+    }
+
+    #[test]
+    fn every_n_ticks_one_push_with_what_waited() {
+        let mut hub = Hub::new();
+        hub.set_every(3);
+        let mut rx = hub.shared.tx.subscribe();
+        let mut s = P::Snapshot::default();
+        let nb = P::DayBars::default();
+        let f = |id: &str| P::Fill { id: id.into(), ..Default::default() };
+        s.summary.equity = 1.0;
+        hub.tick(&Patch::of(&s), &[f("a")], &[], &[], &nb, || unreachable!());
+        s.summary.equity = 2.0;
+        hub.tick(&Patch::of(&s), &[f("b")], &[], &[], &nb, || unreachable!());
+        assert!(drain(&mut rx).is_empty()); // waiting
+        s.summary.equity = 3.0;
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        let m = drain(&mut rx);
+        assert_eq!(m.len(), 3); // the patch as of now, then the fills in order (a quiet push still sends "now")
+        let v: serde_json::Value = serde_json::from_str(&m[0]).unwrap();
+        assert_eq!(v["data"]["summary"]["equity"], 3.0);
+        assert!(m[1].contains("\"id\":\"a\"") && m[2].contains("\"id\":\"b\""));
+        // a snapshot holds what waited
+        hub.tick(&Patch::of(&s), &[f("c")], &[], &[], &nb, || unreachable!());
+        hub.reset();
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || (b"{}".to_vec(), b"{}".to_vec()));
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        hub.tick(&Patch::of(&s), &[], &[], &[], &nb, || unreachable!());
+        let m = drain(&mut rx);
+        assert!(m.iter().all(|m| !m.starts_with("{\"type\":\"fills\"")), "{m:?}");
     }
 
     #[test]
