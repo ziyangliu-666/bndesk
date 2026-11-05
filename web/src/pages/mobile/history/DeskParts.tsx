@@ -55,7 +55,8 @@ export function Summary({ sum, rows }: { sum: DaySummary; rows: DayRow[] }) {
   );
 }
 
-/** The split over every day: Trading PnL with its two parts indented, then hedge, rebates and other; the days from
+/** The split over every day: market making and inventory PnL (with no split kept: the trading P&L), then hedge,
+ *  rebates and other; the days from
  *  before the desk kept a split as one row, so the rows add up to the PnL. */
 export function Split({ rows, sum }: { rows: DayRow[]; sum: DaySummary }) {
   const hide = useStore((s) => s.hideAmounts);
@@ -66,9 +67,9 @@ export function Split({ rows, sum }: { rows: DayRow[]; sum: DaySummary }) {
     return xs.length ? xs.reduce((k, r) => k + r.pnl!, 0) : null;
   }, [rows]);
   const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) =>
-    k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : true,
+    k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : k === "pi" ? !d.mm : true,
   );
-  const max = Math.max(1e-9, ...parts.filter((k) => k !== "pi").map((k) => Math.abs(tot[k] ?? 0)), Math.abs(unsplit ?? 0));
+  const max = Math.max(1e-9, ...parts.map((k) => Math.abs(tot[k] ?? 0)), Math.abs(unsplit ?? 0));
   if (!rows.length) return null;
   const line = (key: string, label: string, v: number | null, opts: { color?: string; stroke?: (typeof PART_META)[Part]["style"]; sub?: boolean; bar?: boolean }) => (
     <div className={"hm-split-r" + (opts.sub ? " sub" : "")} key={key}>
@@ -81,7 +82,7 @@ export function Split({ rows, sum }: { rows: DayRow[]; sum: DaySummary }) {
   return (
     <Sec title="Split" right={cur()}>
       <div className="hm-split">
-        {parts.map((k) => line(k, PART_META[k].long, tot[k], { color: PART_META[k].color, stroke: PART_META[k].style, sub: k === "mm" || k === "inv", bar: k !== "pi" }))}
+        {parts.map((k) => line(k, PART_META[k].long, tot[k], { color: PART_META[k].color, stroke: PART_META[k].style, bar: true }))}
         {unsplit != null && line("before", `Before the split (${sum.unsplit} d)`, unsplit, { bar: true })}
       </div>
     </Sec>

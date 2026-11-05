@@ -86,7 +86,7 @@ export const PART_INFO: Record<PartKey, string> = {
     return `Each fill against the mid 60 s after it, minus fees. ${cur()}.`;
   },
   get inventory() {
-    return `Trading PnL minus market making: what the held inventory made after the first 60 s of each fill. ${cur()}.`;
+    return `PnL minus market making: what the held inventory made after the first 60 s of each fill. ${cur()}.`;
   },
   get hedge() {
     return `The ${hedgeWord()} legs: price at mark, minus fees, plus funding. ${cur()}.`;

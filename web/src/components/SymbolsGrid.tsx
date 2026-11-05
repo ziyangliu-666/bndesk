@@ -117,7 +117,7 @@ const moneyCls = maskCls<CellClassParams<Row>>(signCls);
 const plainCls = maskCls();
 /** A figure of what the desk trades: what hedges has none (its P&L is the hedge leg's), so `--`, not 0.00. */
 const spotOnly = (k: "mm_pnl" | "inv_pnl") => (p: ValueGetterParams<Row>) => (p.data && (p.data._total || !isHedge(p.data)) ? p.data[k] : null);
-/** Trading PnL: what the desk trades (what hedges: `--`); the total row carries the sum. */
+/** The trading P&L (no split kept): what the desk trades (what hedges: `--`); the total row carries the sum. */
 const pnlOf = (p: ValueGetterParams<Row>) => (p.data ? (p.data._total ? p.data.trading_pnl : tradingPnl(p.data)) : null);
 /** Hedge: its leg today; the total row the legs' sum; what the desk trades has none. */
 const hedgeOf = (p: ValueGetterParams<Row>) => p.data?._hedge ?? null;
@@ -142,20 +142,13 @@ function columns(hide: boolean, d: Desk): ColDef<Row>[] {
     n({ field: "inv_value", headerName: "Value", width: 84, valueFormatter: money(fUsd as VF), cellClass: plainCls, comparator: absDesc, sort: hide ? null : "desc", headerTooltip: `Quantity × mid, ${cur()}; sorted by size. The total counts spot only` }),
     n({ field: "avg_cost", headerName: "Avg cost", width: 82, valueFormatter: fPrice, headerTooltip: "Average cost from today's fills" }),
     n({ field: "mid", headerName: "Mid", width: 82, valueFormatter: fPrice, headerTooltip: "(best bid + best ask) / 2" }),
-    n({
-      colId: "pnl",
-      headerName: "Trading PnL",
-      width: 84,
-      valueGetter: pnlOf,
-      valueFormatter: money(fPnl as VF),
-      cellClass: moneyCls,
-      headerTooltip: `Today, ${cur()}: market making + inventory PnL, fees included. What hedges has none (its P&L is under Hedge)`,
-      ...flashOn(fPnl),
-    }),
+    // the instrument's P&L in its two parts (with no split kept: their sum, the trading P&L); what hedges has hers under Hedge
     ...(d.mm ? [
-    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Each fill against the mid 60 s later, minus fees, ${cur()}` }),
-    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(blankTotal(fPnl as VF)), cellClass: plainCls, headerTooltip: `Trading PnL minus market making, ${cur()}` }),
-    ] : []),
+    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, ...flashOn(fPnl), headerTooltip: `Each fill against the mid 60 s later, minus fees, ${cur()}` }),
+    n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: `PnL minus market making, ${cur()}` }),
+    ] : [
+    n({ colId: "pnl", headerName: "Trading", width: 84, valueGetter: pnlOf, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: `Today, ${cur()}: what the fills and the held inventory made, fees included. What hedges has none (its P&L is under Hedge)`, ...flashOn(fPnl) }),
+    ]),
     ...(d.hedge
       ? [
     n({

@@ -274,6 +274,8 @@ interface SpotRow {
   value: number;
   upnl: number | null;
   today: number;
+  mm: number;
+  inv: number;
   dust: boolean;
 }
 
@@ -303,13 +305,15 @@ function useSpotRows() {
           value: s.inv_value,
           upnl: s.upnl,
           today: s.trading_pnl,
+          mm: s.mm_pnl,
+          inv: s.inv_pnl,
           dust: s.dust,
         };
       })
       .sort((a, b) => b.value - a.value);
     const free = (accounts ?? []).reduce((k, a) => k + a.quote_free, 0);
     const inOrders = (accounts ?? []).reduce((k, a) => k + a.quote_locked, 0);
-    const usdt: SpotRow = { symbol: cashWord(), asset: cashWord(), venue: spotVenue(), amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, dust: false };
+    const usdt: SpotRow = { symbol: cashWord(), asset: cashWord(), venue: spotVenue(), amount: free + inOrders, locked: inOrders, free, mid: 1, avg: null, value: free + inOrders, upnl: null, today: 0, mm: 0, inv: 0, dust: false };
     return { rows, usdt };
   }, [symbols, orders, accounts]);
 }
@@ -360,6 +364,7 @@ function SpotAccounts() {
 function Spot() {
   const { rows, usdt } = useSpotRows();
   const hide = useHide();
+  const dm = useDesk().mm;
   const cols = useMemo<ColDef<SpotRow>[]>(() => {
     const n = (c: ColDef<SpotRow>): ColDef<SpotRow> => ({ type: "rightAligned", cellClass: "num", ...c });
     return flexCols([
@@ -373,9 +378,15 @@ function Spot() {
       n({ field: "avg", headerName: "Avg cost", headerTooltip: "Average cost of what is held", width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : price(p.value as number)) }),
       n({ field: "value", headerName: `Value (${cur()})`, headerTooltip: "Amount at mid", width: 100, valueFormatter: fMoney, cellClass: mCls(hide), sort: hide ? null : "desc", sortable: !hide }),
       n({ field: "upnl", headerName: "uPnL", headerTooltip: `Value − amount × avg cost, ${cur()}`, width: 84, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
-      n({ field: "today", headerName: "Trading PnL", headerTooltip: `Today, ${cur()}: market making + inventory PnL (realized + float), fees included`, width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+      // today's P&L in its two parts (with no split kept: their sum, the trading P&L)
+      ...(dm
+        ? [
+            n({ field: "mm", headerName: "Market making", headerTooltip: `Today, ${cur()}: each fill against the mid 60 s later, minus fees`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+            n({ field: "inv", headerName: "Inventory PnL", headerTooltip: `Today, ${cur()}: what the held inventory made after those 60 s`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+          ]
+        : [n({ field: "today", headerName: "Trading", headerTooltip: `Today, ${cur()}: what the fills and the held inventory made (realized + float), fees included`, width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) })]),
     ]);
-  }, [hide]);
+  }, [hide, dm]);
   const pinned = useMemo(() => [usdt], [usdt]);
   return (
     <div className="ops-tab-body ops-spot">

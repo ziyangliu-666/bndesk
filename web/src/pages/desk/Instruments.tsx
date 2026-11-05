@@ -11,7 +11,7 @@ import { tradingPnl, useHedgePnl } from "../../selectors";
 import { cur, useDesk, isPerp, isHedge, hasPerps, venueTag } from "../../desk";
 
 type Filter = "all" | "held" | "quoted" | "perp";
-type SortKey = "symbol" | "value" | "pnl";
+type SortKey = "symbol" | "value" | "mm" | "inv";
 
 const held = (r: SymbolRow) => !r.dust && Math.abs(r.inv_value) >= 1;
 const quoted = (r: SymbolRow) => r.open_bids + r.open_asks > 0;
@@ -38,14 +38,15 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
     out.sort((a, b) => {
       if (k === "symbol") return (sort.k === "symbol" && sort.desc ? -1 : 1) * byName(a, b);
       if (k === "value") return (sort.desc ? -1 : 1) * (Math.abs(a.inv_value) - Math.abs(b.inv_value));
-      // Trading PnL: what hedges (no Trading PnL) after what the desk trades
-      const x = tradingPnl(a),
-        y = tradingPnl(b);
+      // a part of the P&L (with no split kept, the trading P&L): what hedges (none) after what the desk trades
+      const part = (r: SymbolRow) => (isHedge(r) ? null : !d.mm ? tradingPnl(r) : k === "mm" ? r.mm_pnl : r.inv_pnl);
+      const x = part(a),
+        y = part(b);
       if (x == null || y == null) return x == null && y == null ? byName(a, b) : x == null ? 1 : -1;
       return (sort.desc ? -1 : 1) * (x - y);
     });
     return out;
-  }, [rows, q, filter, sort, hide]);
+  }, [rows, q, filter, sort, hide, d.mm]);
 
   // a pick from elsewhere (a fill, a grid row, the footer) brings its row into view
   const body = useRef<HTMLDivElement>(null);
@@ -70,7 +71,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
   );
 
   return (
-    <section className="dk-panel dk-mk">
+    <section className={"dk-panel dk-mk" + (d.mm ? " split" : "")}>
       <div className="dk-mk-search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
           <circle cx="11" cy="11" r="7" />
@@ -98,12 +99,19 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       <div className="dk-mk-hd">
         {head("symbol", "Symbol", "Sort by name")}
         {head("value", "Inv value", `Inventory × mid, ${cur()}; sorted by size`)}
-        {head("pnl", "Trading PnL", `Today, ${cur()}: market making + inventory PnL. What hedges: its leg's P&L, marked hedge`)}
+        {d.mm ? (
+          <>
+            {head("mm", "MM", `Market making today, ${cur()}: each fill against the mid 60 s later, minus fees. What hedges: its leg's P&L across both columns, marked hedge`)}
+            {head("inv", "Inv PnL", `Inventory PnL today, ${cur()}: what the held inventory made after those 60 s`)}
+          </>
+        ) : (
+          head("mm", "Trading", `Today, ${cur()}: what the fills and the held inventory made, fees included. What hedges: its leg's P&L, marked hedge`)
+        )}
       </div>
       <div className="dk-mk-body" ref={body}>
         {list.map((r) => {
           const hedged = isHedge(r);
-          const tp = hedged ? hedgeOf(r) : r.trading_pnl;
+          const tone = (v: number | null) => "fig " + (hide || v == null ? "" : v > 0.005 ? "up" : v < -0.005 ? "down" : "");
           const on = sel?.symbol === r.symbol && sel.venue === r.venue;
           return (
             <button
@@ -117,10 +125,19 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
                 {venueTag(r.venue) && <span className="dk-tag">{venueTag(r.venue)}</span>}
               </span>
               <span className="fig">{maskNode(hide, usd(r.inv_value))}</span>
-              <span className={"fig " + (hide || tp == null ? "" : tp > 0.005 ? "up" : tp < -0.005 ? "down" : "")}>
-                {hedged && <span className="dk-mk-k">hedge </span>}
-                {maskNode(hide, pnl(tp))}
-              </span>
+              {hedged ? (
+                <span className={tone(hedgeOf(r)) + (d.mm ? " dk-mk-span" : "")}>
+                  <span className="dk-mk-k">hedge </span>
+                  {maskNode(hide, pnl(hedgeOf(r)))}
+                </span>
+              ) : d.mm ? (
+                <>
+                  <span className={tone(r.mm_pnl)}>{maskNode(hide, pnl(r.mm_pnl))}</span>
+                  <span className={tone(r.inv_pnl)}>{maskNode(hide, pnl(r.inv_pnl))}</span>
+                </>
+              ) : (
+                <span className={tone(r.trading_pnl)}>{maskNode(hide, pnl(r.trading_pnl))}</span>
+              )}
             </button>
           );
         })}

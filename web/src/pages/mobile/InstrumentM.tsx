@@ -13,7 +13,8 @@ import { qtyText, useHide } from "../../mask";
 import { InstChart } from "./desk/InstChart";
 import "./desk.css";
 import "./desk/in.css";
-import { cur, quoteOf, baseOf, isPerp, isSpot, isHedge, venueTag } from "../../desk";
+import { cur, quoteOf, baseOf, isPerp, isSpot, isHedge, useDesk, venueTag } from "../../desk";
+import { oneCol, oneColWord } from "../../selectors";
 
 type H = "1" | "10" | "60" | "300";
 const HS: H[] = ["1", "10", "60", "300"];
@@ -132,12 +133,13 @@ function OurStats({ r }: { r: SymbolRow }) {
   const asset = baseOf(r.symbol);
   const perp = isPerp(r.venue);
   const hedged = isHedge(r);
+  const dm = useDesk().mm;
   const items: { label: string; value: ReactNode }[] = perp
     ? [
         { label: `Position (${asset})`, value: q(r.inv_qty, true) },
         { label: "Entry", value: price(r.avg_cost) },
-        // what hedges: its leg's P&L today (it has no Trading PnL, as on the Desk and Markets)
-        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
+        // what hedges: its leg's P&L today (no PnL of its own, as on the Desk and Markets)
+        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: oneColWord(dm), value: <Money v={oneCol(r, dm)} /> },
         {
           label: "Funding",
           value: funding?.rate != null ? <span className={tone(-funding.rate * Math.sign(r.inv_qty), bps(funding.rate * 1e4))}>{bpsUnit(funding.rate * 1e4)}</span> : "--",
@@ -146,7 +148,7 @@ function OurStats({ r }: { r: SymbolRow }) {
     : [
         { label: `Inventory (${asset})`, value: r.inv_qty === 0 && !hide ? "flat" : q(r.inv_qty, true) },
         { label: "Avg cost", value: r.inv_qty === 0 ? "--" : price(r.avg_cost) },
-        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: "Trading PnL", value: <Money v={r.trading_pnl} /> },
+        hedged ? { label: "Hedge", value: <Money v={leg?.pnl ?? null} /> } : { label: oneColWord(dm), value: <Money v={oneCol(r, dm)} /> },
         { label: "Edge", value: bpsUnit(r.edge_bps) },
       ];
   return (
@@ -334,7 +336,7 @@ function InfoTab({ r }: { r: SymbolRow }) {
   const items: KVItem[] = [
     { label: perp ? "Notional" : "Inventory value", value: money(r.inv_value, "usd") },
     { label: "Market making", value: <Money v={r.mm_pnl} />, info: `Each fill against the mid 60 s later, minus fees, ${cur()}.` },
-    { label: "Inventory PnL", value: <Money v={r.inv_pnl} />, info: `Trading PnL minus market making, ${cur()}.` },
+    { label: "Inventory PnL", value: <Money v={r.inv_pnl} />, info: `PnL minus market making, ${cur()}.` },
     { label: "Realized", value: <Money v={r.realized_pnl} /> },
     { label: "Floating", value: <Money v={r.float_pnl} /> },
     { label: "Last fill", value: r.last_fill != null ? `${span(serverNow() - r.last_fill)} ago` : "--" },

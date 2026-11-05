@@ -62,9 +62,9 @@ export function DeskSide({
   const nb = Math.min(2, Math.ceil(ranked.length / 2));
   const bestDays = ranked.slice(0, nb);
   const worstDays = ranked.slice(nb).slice(-2).reverse();
-  // Trading PnL is the subtotal of market making and inventory PnL (indented under it), then the rest
-  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : true));
-  const max = Math.max(1e-9, ...parts.filter((k) => k !== "pi").map((k) => Math.abs(tot[k] ?? 0)));
+  // the parts of the PnL: market making and inventory PnL (with no split kept, the trading P&L), then the rest
+  const parts: Part[] = (["pi", "mm", "inv", "hedge", "reb", "other"] as Part[]).filter((k) => (k === "hedge" ? d.hedge : k === "reb" ? d.rebates : k === "mm" || k === "inv" ? d.mm : k === "pi" ? !d.mm : true));
+  const max = Math.max(1e-9, ...parts.map((k) => Math.abs(tot[k] ?? 0)));
   const m = (s: string) => maskText(hide, s);
   const unsplitPnl = useMemo(() => {
     const xs = rows.filter((r) => !r.split && r.pnl != null);
@@ -95,7 +95,7 @@ export function DeskSide({
           </div>
           {!day.split && (
             <div className="hx-note muted">
-              The desk kept no split this day{day.pi != null ? `: only its Trading PnL (${m(sg(day.pi))}), which the chart's bars do not have` : ""}.
+              The desk kept no split this day{day.pi != null ? `: only its trading P&L (${m(sg(day.pi))}), which the chart's bars do not have` : ""}.
             </div>
           )}
         </>
@@ -125,12 +125,12 @@ export function DeskSide({
           const v = tot[k];
           const meta = PART_META[k];
           return (
-            <div className={"hx-split-row" + (k === "mm" || k === "inv" ? " sub" : "") + (k === "pi" ? " total" : "")} key={k}>
+            <div className="hx-split-row" key={k}>
               <SeriesKey color={meta.color} stroke={meta.style} />
               <span className={k === "other" ? "dotted" : undefined} title={meta.title}>
                 {meta.long}
               </span>
-              <span className="hx-bar-cell">{k !== "pi" && v != null && !hide && <span className="hx-bar" style={{ width: `${(Math.abs(v) / max) * 100}%` }} />}</span>
+              <span className="hx-bar-cell">{v != null && !hide && <span className="hx-bar" style={{ width: `${(Math.abs(v) / max) * 100}%` }} />}</span>
               <span className={"fig" + (hide ? " masked" : "")}>{m(sg(v))}</span>
             </div>
           );
@@ -249,6 +249,7 @@ export function instStats(fills: HistFill[]): InstStats {
 }
 
 export function InstSide({ title, fills, bars, loading, hide, today }: { title: string; fills: HistFill[]; bars: Candle[]; loading: boolean; hide: boolean; today: SymbolRow | undefined }) {
+  const d = useDesk();
   const s = useMemo(() => instStats(fills), [fills]);
   const last = bars[bars.length - 1]?.close ?? null;
   const first = bars[0]?.open ?? null;
@@ -277,7 +278,7 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
         <Fig
           big
           dot
-          label={hedged ? "Fills PnL" : "Trading PnL"}
+          label="Fills PnL"
           title="Our fills in the range marked at the last price: what they made, fees not included. Inventory held before the range is not counted"
           value={m(sg(pnl))}
           tone={tone(pnl)}
@@ -301,9 +302,18 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
       <div className="hx-sect">Today</div>
       <div className="hx-figs">
         {hedged ? (
-          <Fig label="Hedge" value={m(sg(tp))} tone={tone(tp)} title="Today: this instrument's hedge leg, price P&L at mark − fees + funding (what hedges has no Trading PnL)" />
+          <Fig label="Hedge" value={m(sg(tp))} tone={tone(tp)} title="Today: this instrument's hedge leg, price P&L at mark − fees + funding" />
         ) : (
-          <Fig label="Trading PnL" value={m(sg(tp))} tone={tone(tp)} title="Today: market making + inventory PnL, fees included" />
+          <>
+            {d.mm ? (
+              <>
+                <Fig label="Market making" value={m(sg(today?.mm_pnl))} tone={tone(today?.mm_pnl)} title="Today: each fill against the mid 60 s later, minus fees" />
+                <Fig label="Inventory PnL" value={m(sg(today?.inv_pnl))} tone={tone(today?.inv_pnl)} title="Today: what the held inventory made after those 60 s" />
+              </>
+            ) : (
+              <Fig label="Trading" value={m(sg(tp))} tone={tone(tp)} title="Today: what the fills and the held inventory made, fees included" />
+            )}
+          </>
         )}
         <Fig label="Fills" value={today ? int(today.fills_day) : "--"} />
         <Fig label="Inventory" value={today ? qtyText(today.inv_qty, hide, true) : "--"} tone={hide ? "masked" : undefined} />

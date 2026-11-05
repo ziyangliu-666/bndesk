@@ -91,7 +91,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       value: m(pnl(p?.mm)),
       title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
     },
-    { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: Trading PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
+    { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
     { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
     { label: "Rebates", value: m(pnl(sm?.rebates)), title: `Market-maker rebates ${exchangeWord()} credited since the day start, per account.` },
     { label: "Other", value: m(pnl(sm?.other)), title: "Day PnL minus what the parts add up to: what the split does not explain." },
@@ -148,6 +148,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   const m = (s: string) => maskNode(hide, s);
   const tone = (v: number | null | undefined) => (hide ? undefined : signTone(v) || undefined);
   const hedgeOf = useHedgePnl();
+  const dm = useDesk().mm;
   const hedged = isHedge(inst);
   const tp = row ? (hedged ? hedgeOf(row) : tradingPnl(row)) : null;
   const base = baseOf(inst.symbol);
@@ -159,9 +160,11 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
   ];
   const parts: Fact[] = [
     hedged
-      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this instrument's hedge leg, price P&L at mark − fees + funding, ${cur()}. What hedges has no Trading PnL` }
-      : { label: "Trading PnL", value: m(pnl(tp)), tone: tone(tp), title: `Today: market making + inventory PnL, fees included, ${cur()}. The desk's Day PnL adds the hedge, rebates and other` },
-    ...(hedged ? [] : [{ label: "Market making", value: m(pnl(row?.mm_pnl)), title: `Each fill against the mid 60 s later, minus fees, ${cur()}` }]),
+      ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this instrument's hedge leg, price P&L at mark − fees + funding, ${cur()}` }
+      : dm
+        ? { label: "Market making", value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl), title: `Today: each fill against the mid 60 s later, minus fees, ${cur()}` }
+        : { label: "Trading", value: m(pnl(tp)), tone: tone(tp), title: `Today: what the fills and the held inventory made, fees included, ${cur()}` },
+    ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.inv_pnl)), tone: tone(row?.inv_pnl), title: `Today: what the held inventory made after those 60 s, ${cur()}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
     { label: "Value", value: m(usd(row?.inv_value)), title: `Inventory × mid, ${cur()}` },
     { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills" },

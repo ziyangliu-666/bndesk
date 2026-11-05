@@ -10,6 +10,7 @@ import { pctOfMoney, useHide } from "../../mask";
 import { AccountsChart, DeskChart, Eye, PositionRow } from "./rest/assets";
 import { useExPref } from "../../components/ex";
 import "./accounts.css";
+import { oneCol, oneColWord } from "../../selectors";
 import { cur, baseOf, useDesk, isSpot, hasPerps, roled, cashWord } from "../../desk";
 
 // the exposure and the hedge are on Strategy (the engine's own figures); a remembered "exposure" falls back
@@ -134,6 +135,7 @@ function AccountRow({ a, now }: { a: Account; now: number }) {
 // ---- Spot: USDT and the inventory, by asset ----
 
 function SpotTab({ accounts }: { accounts: Account[] }) {
+  const desk = useDesk();
   const symbols = useLive((s) => s.snap?.symbols, 1000);
   const money = useAmt();
   const q = useQty();
@@ -154,7 +156,7 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
           ]}
         />
       </Sec>
-      <Sec title="Holdings" right="value · Trading PnL">
+      <Sec title="Holdings" right={`value · ${oneColWord(desk.mm)}`}>
         {held.map((r) => {
           const base = baseOf(r.symbol);
           return (
@@ -168,7 +170,7 @@ function SpotTab({ accounts }: { accounts: Account[] }) {
               }
               sub={`${q(r.inv_qty)} ${base}${r.avg_cost ? ` · avg ${price(r.avg_cost)}` : ""}`}
               value={<Amt v={r.inv_value} kind="full" />}
-              valueSub={<Amt v={r.trading_pnl} />}
+              valueSub={<Amt v={oneCol(r, desk.mm)} />}
               to={{ page: "desk", detail: { kind: "instrument", symbol: r.symbol, venue: r.venue } }}
             />
           );

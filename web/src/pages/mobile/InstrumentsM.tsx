@@ -6,7 +6,7 @@ import { int, price } from "../../format";
 import { Money, Segmented, useHold, useLive, useMoney } from "../../components/mobile";
 import { Tabs, useTicker24h, useTickers24h, tickerKey, type Ticker24h } from "../../components/ex";
 import type { SymbolRow, Venue } from "../../protocol";
-import { hedgePnl, legPnl, tradingPnl } from "../../selectors";
+import { hedgePnl, legPnl, oneCol, oneColWord } from "../../selectors";
 import { useHide } from "../../mask";
 import { QuotesFull } from "./desk/QuoteTouch";
 import "./desk.css";
@@ -59,7 +59,7 @@ function MarketList() {
   const [filter, setFilter] = useState<Filter>("all");
   const d = useDesk();
   const [sort, setSort] = useState<Sort>({ key: "pnl", desc: true });
-  // its Trading PnL; what hedges: its leg's P&L today, shown as such (and sorted after)
+  // its market making (or trading P&L); what hedges: its leg's P&L today, shown as such (and sorted after)
   const hedgeOf = useMemo(() => {
     const leg = legPnl(legs);
     return (r: SymbolRow) => hedgePnl(r, leg);
@@ -86,7 +86,7 @@ function MarketList() {
         case "chg":
           return tick.get(tickerKey(r.symbol, r.venue))?.changePct ?? null;
         case "pnl":
-          return tradingPnl(r);
+          return isHedge(r) ? null : oneCol(r, d.mm);
         case "inv":
           return Math.abs(r.inv_value);
       }
@@ -160,14 +160,14 @@ function MarketList() {
             Mid / {word("chg", "24h")}
           </UnstyledButton>
           <UnstyledButton className="mk-h-r" onClick={tapRight}>
-            {word("pnl", "Trading PnL")} / {word("inv", "Inv")}
+            {word("pnl", oneColWord(d.mm))} / {word("inv", "Inv")}
           </UnstyledButton>
         </div>
       </div>
       <div className="mk-list">
       <div className="m-hold" {...hold}>
         {list.map((r) => (
-          <MarketRow key={r.venue + r.symbol} r={r} hedge={hedgeOf(r)} />
+          <MarketRow key={r.venue + r.symbol} r={r} hedge={hedgeOf(r)} mm={d.mm} />
         ))}
         {list.length === 0 && (
           <div className="m-empty">{needle ? `No instrument matches “${q.trim()}”.` : "No instruments here."}</div>
@@ -179,7 +179,7 @@ function MarketList() {
 }
 
 /** One instrument, 56 px: name and venue · mid and its 24 h change · day PnL and the inventory. */
-const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: number | null }) {
+const MarketRow = memo(function MarketRow({ r, hedge, mm }: { r: SymbolRow; hedge: number | null; mm: boolean }) {
   const money = useMoney();
   const hide = useHide();
   const t: Ticker24h | null = useTicker24h(r.symbol, r.venue);
@@ -208,7 +208,7 @@ const MarketRow = memo(function MarketRow({ r, hedge }: { r: SymbolRow; hedge: n
       <span className="mk-c-r">
         <span className="mk-pnl">
           {hedged && <span className="mk-k">hedge </span>}
-          <Money v={hedged ? hedge : r.trading_pnl} />
+          <Money v={hedged ? hedge : oneCol(r, mm)} />
         </span>
         <span className="mk-sub m-fig">{inv}</span>
       </span>

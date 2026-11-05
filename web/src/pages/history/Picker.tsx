@@ -4,9 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
-import { useHedgePnl } from "../../selectors";
+import { oneCol, oneColWord, useHedgePnl } from "../../selectors";
 import type { SymbolRow, Venue } from "../../protocol";
-import { isHedge, venueTag } from "../../desk";
+import { isHedge, useDesk, venueTag } from "../../desk";
 
 export function InstrumentPicker({
   value,
@@ -19,6 +19,7 @@ export function InstrumentPicker({
 }) {
   const symbols = useStore((s) => s.snap?.symbols);
   const hide = useHide();
+  const mm = useDesk().mm;
   const hedgeOf = useHedgePnl();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -95,7 +96,7 @@ export function InstrumentPicker({
           />
           <div className="hx-pick-head">
             <span>Symbol</span>
-            <span>Trading PnL</span>
+            <span>{oneColWord(mm)}</span>
           </div>
           <div className="hx-pick-list" role="listbox">
             {list.map((r, i) => (
@@ -112,7 +113,7 @@ export function InstrumentPicker({
                   {r.symbol}
                   {venueTag(r.venue) && <span className="hx-perp">{venueTag(r.venue)}</span>}
                 </span>
-                <PnlCell r={r} hedge={hedgeOf(r)} hide={hide} />
+                <PnlCell r={r} hedge={hedgeOf(r)} hide={hide} mm={mm} />
               </button>
             ))}
             {!list.length && <div className="hx-pick-none">No instrument matches</div>}
@@ -123,10 +124,10 @@ export function InstrumentPicker({
   );
 }
 
-/** Its Trading PnL, or what hedges: its leg (marked so). */
-function PnlCell({ r, hedge, hide }: { r: SymbolRow; hedge: number | null; hide: boolean }) {
+/** Its market making (or trading P&L), or what hedges: its leg (marked so). */
+function PnlCell({ r, hedge, hide, mm }: { r: SymbolRow; hedge: number | null; hide: boolean; mm: boolean }) {
   const hedged = isHedge(r);
-  const v = hedged ? hedge : r.trading_pnl;
+  const v = hedged ? hedge : oneCol(r, mm);
   return (
     <span className={"fig " + (hide || v == null ? "" : v > 0.005 ? "up" : v < -0.005 ? "down" : "")}>
       {hedged && <span className="dk-mk-k">hedge </span>}

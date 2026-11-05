@@ -536,6 +536,13 @@
   align-items: center;
   padding: 0 12px;
 }
+/* the P&L in its two parts: market making and inventory; a hedge's leg spans both */
+.dk-mk.split :is(.dk-mk-hd, .dk-mk-row) {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+}
+.dk-mk-span {
+  grid-column: span 2;
+}
 .dk-mk-hd {
   flex: none;
   height: 26px;

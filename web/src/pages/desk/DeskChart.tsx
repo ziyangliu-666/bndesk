@@ -76,7 +76,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
   const id = "desk." + tab;
   const [iv, setIv] = useExPref<string>(id, "interval", "1m", IV_VALUES);
   const [style, setStyle] = useExPref<string>("desk.pnl", "style", "area", ["area", "candles"]);
-  const [part, setPart] = useExPref<string>("desk.pnl", "part", "trading", ["trading", "mm", "inv", "hedge", "reb", "other"]);
+  const [part, setPart] = useExPref<string>("desk.pnl", "part", "mm", ["trading", "mm", "inv", "hedge", "reb", "other"]);
   const bars = useStore((s) => s.snap?.bars);
   const series = useStore((s) => s.snap?.series);
   const fills = useStore((s) => s.snap?.fills);
@@ -173,13 +173,13 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
     const P = PNL_COLORS;
     const S = PNL_STROKES;
     parts = [
-      { key: "trading", kind: "line", pane: 1, label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("trading", (r) => r.trading) },
+      // market making and inventory PnL, not their sum: the trading P&L only where the desk keeps no split
       ...(has("mm")
         ? [
-            { key: "mm", kind: "line", pane: 1, label: "Market making", color: P.mm, lineStyle: S.mm, width: 1.5, format: fPnl, data: pts("mm", (r) => r.mm) } as ExSeries,
+            { key: "mm", kind: "line", pane: 1, label: "Market making", color: P.mm, lineStyle: S.mm, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("mm", (r) => r.mm) } as ExSeries,
             { key: "inv", kind: "line", pane: 1, label: "Inventory PnL", color: P.inv, lineStyle: S.inv, width: 1.5, format: fPnl, data: pts("invp", (r) => (r.trading != null && r.mm != null ? r.trading - r.mm : null)) } as ExSeries,
           ]
-        : []),
+        : [{ key: "trading", kind: "line", pane: 1, label: "Trading", color: P.trading, width: 1.5, format: fPnl, signColor: false, margins: { top: 0.12, bottom: 0.08 }, data: pts("trading", (r) => r.trading) } as ExSeries]),
       ...(has("hedge") ? [{ key: "hedge", kind: "line", pane: 1, label: "Hedge", color: P.hedge, width: 1.5, lineStyle: S.hedge, format: fPnl, data: pts("hedge", (r) => r.hedge) } as ExSeries] : []),
       ...(desk.rebates && anyReb ? [{ key: "reb", kind: "line", pane: 1, label: "Rebates", color: P.reb, width: 1.5, lineStyle: S.reb, format: fPnl, data: pts("reb", rebAt) } as ExSeries] : []),
       ...(anyReb
@@ -271,7 +271,7 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
           <TextToggle
             label="P&L breakdown"
             options={parts.map((s) => ({ value: s.key, label: s.label }))}
-            value={selectedPart?.key ?? "trading"}
+            value={selectedPart?.key ?? parts[0]?.key ?? "mm"}
             onChange={setPart}
           />
         </div>

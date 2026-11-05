@@ -638,16 +638,19 @@ no count badges on tabs unless the count asks for action, no plates around quali
 text; spot has no tag), no dotted underlines (tooltips and the phone's definition sheets carry the
 definitions). Space groups: related things close, groups apart by space or a single rule.
 
-Trading PnL is market making + inventory PnL, fees included, never the hedge, on every page and size: a
-spot market has one, a perp (the hedge) has none and shows its hedge leg's P&L under a Hedge figure or
-column. Day PnL = Trading PnL + hedge legs + rebates + other. The split has one palette on every chart and
-size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, Trading ink solid, market
+The P&L is shown in its parts, market making and inventory PnL (fees included, never the hedge), on every page
+and size; their sum, the trading P&L, is not a figure of its own: it appears only on a desk that keeps no split
+(`mm` false), as "Trading". A spot market has the parts, a perp (the hedge) has none and shows its hedge leg's P&L
+under a Hedge figure or column. Where a list has room for one column (pickers, the phone's lists) it is market
+making. Day PnL = market making + inventory PnL + hedge legs + rebates + other. History's day and hour tables draw a
+bar behind Day PnL, market making, inventory PnL, hedge and volume, scaled to the column's largest. The split has one palette on every chart and
+size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, Trading (no split kept) ink solid, market
 making blue solid, inventory PnL violet long dashes, hedge teal dashes, rebates light grey spaced dots,
 other grey dots; none of them green, red or amber, each with a stroke of its own so colour is not the only
 cue. Spot inventory takes the inventory hue and futures the hedge hue wherever they are drawn.
 
 A desk draws what it has (`Snapshot.desk`): no hedge means no Hedge figure, line, column or chip, no Futures or Exposure
-& hedge tab, no futures columns; no rebates, the same for Rebates; `mm` false, Trading PnL without its two parts. No
+& hedge tab, no futures columns; no rebates, the same for Rebates; `mm` false, the trading P&L in place of its two parts. No
 engine configured means no Engines section or tab, and an engine shows the figures its metrics say. Other stays: it is what keeps the split adding up to Day PnL. While
 the snapshot has not come, or from a server without `desk`, everything is drawn, in USDT.
 

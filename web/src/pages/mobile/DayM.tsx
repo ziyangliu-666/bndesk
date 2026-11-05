@@ -13,11 +13,11 @@ import "./rest/assets.css";
 import "./history.css";
 import { cur, useDesk, notionalCur } from "../../desk";
 
-// the split as the desk lists it: Trading PnL as the subtotal of its two parts, then the rest
+// the split as the desk lists it: market making and inventory PnL (with no split kept: the trading P&L), then the rest
 const PARTS = [
-  { key: "trading", label: "Trading PnL", color: P.trading, stroke: S.trading, sub: false },
-  { key: "mm", label: "Market making", color: P.mm, stroke: S.mm, sub: true },
-  { key: "inventory", label: "Inventory PnL", color: P.inv, stroke: S.inv, sub: true },
+  { key: "trading", label: "Trading", color: P.trading, stroke: S.trading, sub: false },
+  { key: "mm", label: "Market making", color: P.mm, stroke: S.mm, sub: false },
+  { key: "inventory", label: "Inventory PnL", color: P.inv, stroke: S.inv, sub: false },
   { key: "hedge", label: "Hedge", color: P.hedge, stroke: S.hedge, sub: false },
   { key: "rebates", label: "Rebates", color: P.reb, stroke: S.reb, sub: false },
   { key: "other", label: "Other", color: P.other, stroke: S.other, sub: false },
@@ -73,7 +73,7 @@ export function DayM({ date }: { date: string }) {
 
       {d && kept && (
         <Sec title="Split" right={cur()}>
-          {PARTS.filter((p) => (p.key === "hedge" ? desk.hedge : p.key === "rebates" ? desk.rebates : p.key === "mm" || p.key === "inventory" ? desk.mm : true)).map((p) => (
+          {PARTS.filter((p) => (p.key === "hedge" ? desk.hedge : p.key === "rebates" ? desk.rebates : p.key === "mm" || p.key === "inventory" ? desk.mm : p.key === "trading" ? !desk.mm : true)).map((p) => (
             <Row
               key={p.key}
               dense
@@ -91,7 +91,7 @@ export function DayM({ date }: { date: string }) {
       )}
       {d && !kept && d.trading != null && (
         <Sec title="Split" right={cur()}>
-          <Row dense title="Trading PnL" value={<Amt v={d.trading} />} onClick={() => showInfo("Trading PnL", tradingInfo() + " The rest of the split was not kept this day.")} />
+          <Row dense title="Trading" value={<Amt v={d.trading} />} onClick={() => showInfo("Trading", tradingInfo() + " The rest of the split was not kept this day.")} />
         </Sec>
       )}
 
@@ -177,16 +177,15 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
       lastValue: false,
       width: 1.5,
       lineStyle: stroke,
-      // as on the Desk: the legend at rest is Day PnL, then Trading, Hedge and Rebates; the rest a chip away
-      hiddenByDefault: k === "mm" || k === "inv" || k === "other",
+      // as on the Desk: the legend at rest is Day PnL and its parts; Other a chip away
+      hiddenByDefault: k === "other",
       data: pts.map((p) => ({ time: p.time, value: p[k] as number | null })),
     });
     // a day kept without its split: only the lines it has (no chips that switch nothing)
     const has = (k: keyof PathPt) => pts.some((p) => p[k] != null);
     return [
       { key: "pnl", kind: "baseline", label: "Day PnL", signColor: true, format: fmt, toggle: false, data: pts.map((p) => ({ time: p.time, value: p.pnl })) },
-      ...(has("trading") ? [line("trading", "Trading", P.trading, S.trading)] : []),
-      ...(desk.mm && has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : []),
+      ...(desk.mm && has("mm") ? [line("mm", "MM", P.mm, S.mm), line("inv", "Inv", P.inv, S.inv)] : has("trading") ? [line("trading", "Trading", P.trading, S.trading)] : []),
       ...(desk.hedge && has("hedge") ? [line("hedge", "Hedge", P.hedge, S.hedge)] : []),
       ...(desk.rebates && has("reb") ? [line("reb", "Rebates", P.reb, S.reb)] : []),
       ...(has("reb") ? [line("other", "Other", P.other, S.other)] : []),
@@ -197,8 +196,8 @@ function DayPath({ start, path }: { start: number; path: DayPathLoad }) {
     if (!p) return [];
     const r = (label: string, v: number | null, color: string): ExBoxRow => [label, money(v), color];
     const rows: ExBoxRow[] = [r("Day PnL", p.pnl, hide ? C.muted : p.pnl > 0 ? C.up : p.pnl < 0 ? C.down : C.ink)];
-    if (p.trading != null) rows.push(r("Trading", p.trading, P.trading));
     if (desk.mm && p.mm != null) rows.push(r("MM", p.mm, P.mm), r("Inv", p.inv, P.inv));
+    else if (p.trading != null) rows.push(r("Trading", p.trading, P.trading));
     if (desk.hedge && p.hedge != null) rows.push(r("Hedge", p.hedge, P.hedge));
     if (desk.rebates && p.reb != null) rows.push(r("Rebates", p.reb, P.reb));
     if (p.reb != null) rows.push(r("Other", p.other, P.other));

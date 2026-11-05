@@ -6,7 +6,7 @@ import { C } from "../../theme";
 import { ExChart, Tabs, rgba, useExPref, type ExBoxRow, type ExLegendItem, type ExSeries } from "../../components/ex";
 import { REF_LINE } from "../../components/ex/palette";
 import type { SymbolRow } from "../../protocol";
-import { useHedgePnl } from "../../selectors";
+import { oneCol, oneColWord, useHedgePnl } from "../../selectors";
 import { IV_LABEL, STEP_S, daySummary, deskRows, rangeFrom, useDeskHistory, useRangeDays, weekBars, type DayRow, type HInterval, type Row as KRow } from "../history/data";
 import { dayTitle } from "./index";
 import { Amt, Empty, PageTabs, Row, Sec, amt, useAmt } from "./rest/ui";
@@ -194,13 +194,20 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
           {today && <span className="r-tag">Today</span>}
         </>
       }
-      // what made the day: Trading and Hedge under the counts, Rebates under the figure (Other is small)
+      // what made the day: market making and inventory (or the trading P&L) and the hedge under the counts, the rebates
+      // under the figure (Other is small)
       sub={
         d.split ? (
           <>
             {int(d.fills)} fills · Vol {money(d.volume, "k")}
             <br />
-            Trading {money(d.pi)}
+            {desk.mm ? (
+              <>
+                MM {money(d.mm)} · Inv {money(d.inv)}
+              </>
+            ) : (
+              <>Trading {money(d.pi)}</>
+            )}
             {desk.hedge && <> · Hedge {money(d.hedge)}</>}
           </>
         ) : (
@@ -218,6 +225,7 @@ function DayItem({ d, today }: { d: DayRow; today: boolean }) {
 // ---- instruments: today's figures; a tap opens the instrument's candles with our fills ----
 
 function Instruments() {
+  const desk = useDesk();
   const symbols = useThrottled(
     useStore((s) => s.snap?.symbols),
     1000,
@@ -234,7 +242,7 @@ function Instruments() {
     [symbols, hide],
   );
   return (
-    <Sec title="Traded today" right={hide ? "by name · Trading PnL" : "by volume · Trading PnL"}>
+    <Sec title="Traded today" right={`${hide ? "by name" : "by volume"} · ${oneColWord(desk.mm)}`}>
       {rows.map((r) => (
         <InstRow key={r.venue + r.symbol} r={r} hedge={hedgeOf(r)} money={money} />
       ))}
@@ -257,6 +265,7 @@ function InstRow({
   ) => string;
 }) {
   const edge = r.edge_bps;
+  const desk = useDesk();
   return (
     <Row
       title={
@@ -266,7 +275,7 @@ function InstRow({
         </>
       }
       sub={`${int(r.fills_day)} fills · Vol ${money(r.volume_day, "k")}`}
-      value={isHedge(r) ? <Amt v={hedge} /> : <Amt v={r.trading_pnl} />}
+      value={isHedge(r) ? <Amt v={hedge} /> : <Amt v={oneCol(r, desk.mm)} />}
       valueSub={isHedge(r) ? "hedge leg" : edge != null ? `edge ${bps(edge)} bps` : undefined}
       to={{
         page: "history",

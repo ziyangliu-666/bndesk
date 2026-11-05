@@ -84,8 +84,8 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
   // masked with Hide amounts: ExChart re-reads a format that prints otherwise (no remount)
   const money = maskFormat(hide, (v: number) => pnl(v));
   const vol = maskFormat(hide, (v: number) => compact(v));
-  // at rest the legend has two lines: Day, then Trading, Hedge and Rebates (with Other they make Day); the two
-  // parts of Trading and Other are a chip away
+  // at rest the legend has Day, then market making, inventory, hedge and rebates (with Other they make Day); Other
+  // is a chip away. The trading P&L (their first two summed) only where the desk keeps no split
   const line = (key: keyof typeof P, label: string, pts: PnlData["mm"]): ExSeries => ({
     key,
     kind: "line",
@@ -99,14 +99,13 @@ function PnlChart({ ms, iv, setIv, tabs }: ChartProps) {
     format: money,
     signColor: false,
     lastValue: false,
-    hiddenByDefault: key === "mm" || key === "inv" || key === "other",
+    hiddenByDefault: key === "other",
   });
   const s: ExSeries[] = [
     iv === "line"
       ? { key: "day", kind: "baseline", label: "Day", data: data.main, format: money, signColor: true, toggle: false }
       : { key: "day", kind: "candles", label: "Day", data: data.main, format: money, toggle: false },
-    line("trading", "Trading", data.trading),
-    ...(desk.mm ? [line("mm", "MM", data.mm), line("inv", "Inv", data.inv)] : []),
+    ...(desk.mm ? [line("mm", "MM", data.mm), line("inv", "Inv", data.inv)] : [line("trading", "Trading", data.trading)]),
     ...(desk.hedge ? [line("hedge", "Hedge", data.hedge)] : []),
     ...(desk.rebates && data.rebates.length ? [line("reb", "Rebates", data.rebates)] : []),
     ...(data.rebates.length ? [line("other", "Other", data.other)] : []),

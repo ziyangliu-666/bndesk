@@ -453,3 +453,46 @@
   font-size: 12px;
   line-height: 16px;
 }
+
+/* a figure with its bar in the cell's empty left part: down the table, the column's shape over the rows */
+.hx-t td.barred {
+  width: 15%;
+}
+.hx-barcell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hx-barcell > span:last-child {
+  flex: none;
+  min-width: 64px;
+}
+.hx-cbar {
+  display: block;
+  position: relative;
+  flex: 1;
+  height: 10px;
+  min-width: 40px;
+}
+.hx-cbar.signed::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--rule);
+}
+.hx-cbar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #3a4350;
+  border-radius: 1px;
+}
+.hx-cbar i.up {
+  background: rgba(62, 214, 162, 0.55);
+}
+.hx-cbar i.down {
+  background: rgba(255, 106, 92, 0.55);
+}

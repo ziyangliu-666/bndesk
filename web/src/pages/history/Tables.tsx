@@ -2,7 +2,7 @@
 // hour today). Plain rows, figures coloured as text only.
 import { useMemo, useState, type ReactNode } from "react";
 import type { HistFill } from "../../api";
-import { compact, hm, int, num, price, qtyDecimals, se, signClass, type TzMode } from "../../format";
+import { compact, hm, int, num, price, qtyDecimals, signClass, type TzMode } from "../../format";
 import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
 import { dayOf, type DayRow, type Row } from "./data";
@@ -20,6 +20,22 @@ export interface Col<R> {
   /** Sort value: a click on the header sorts by it (largest first), again reverses, a third time back to the
    *  table's own order. Unknowns last. */
   sort?: (r: R) => number | string | null;
+  /** A bar behind the figure, in the cell's empty left part, scaled to the column's largest: read down the table
+   *  it is the column's shape over the rows. `signed`: from a middle zero, green / red for `tone`, else ink. */
+  bar?: { v: (r: R) => number | null; signed?: boolean; tone?: boolean };
+}
+
+/** The cell's bar: a share of the column's largest magnitude. */
+function Bar({ v, max, signed, tone }: { v: number | null; max: number; signed?: boolean; tone?: boolean }) {
+  if (v == null || !max) return <span className="hx-cbar" />;
+  const w = Math.min(1, Math.abs(v) / max) * (signed ? 50 : 100);
+  const left = signed ? (v >= 0 ? 50 : 50 - w) : 0;
+  const cls = tone ? (v >= 0 ? " up" : " down") : "";
+  return (
+    <span className={"hx-cbar" + (signed ? " signed" : "")}>
+      <i className={cls} style={{ left: `${left}%`, width: `${w}%` }} />
+    </span>
+  );
 }
 
 export function Table<R>({
@@ -59,6 +75,12 @@ export function Table<R>({
       return by.desc ? -d : d;
     });
   }, [rows, by, cols, last]);
+  // each barred column's largest magnitude over the rows
+  const maxes = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const c of cols) if (c.bar) out[c.key] = Math.max(0, ...rows.map((r) => Math.abs(c.bar!.v(r) ?? 0)));
+    return out;
+  }, [cols, rows]);
   const click = (k: string) => setBy((b) => (b?.key !== k ? { key: k, desc: true } : b.desc ? { key: k, desc: false } : null));
   return (
     <table className="hx-t">
@@ -93,8 +115,15 @@ export function Table<R>({
             return (
               <tr key={k} className={(onRow ? "click" : "") + (k === selected ? " on" : "")} onClick={onRow ? () => onRow(r) : undefined}>
                 {cols.map((c) => (
-                  <td key={c.key} className={(c.left ? "l " : "") + (c.cls?.(r) ?? "")}>
-                    {c.cell(r)}
+                  <td key={c.key} className={(c.left ? "l " : "") + (c.bar ? "barred " : "") + (c.cls?.(r) ?? "")}>
+                    {c.bar ? (
+                      <span className="hx-barcell">
+                        <Bar v={c.bar.v(r)} max={maxes[c.key] ?? 0} signed={c.bar.signed} tone={c.bar.tone} />
+                        <span>{c.cell(r)}</span>
+                      </span>
+                    ) : (
+                      c.cell(r)
+                    )}
                   </td>
                 ))}
               </tr>
@@ -112,7 +141,7 @@ type PnlRow = { label: ReactNode; key: string; split?: boolean; pnl: number | nu
 
 function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: boolean): Col<PnlRow>[] {
   const m = (s: string) => maskText(hide, s);
-  const p = (k: "pnl" | "mm" | "inv" | "hedge" | "reb" | "other", label: string, title?: string): Col<PnlRow> => ({
+  const p = (k: "pnl" | "pi" | "mm" | "inv" | "hedge" | "reb" | "other", label: string, title?: string): Col<PnlRow> => ({
     key: k,
     label,
     title,
@@ -122,28 +151,30 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     cls: (r) => "fig " + (hide ? "masked" : k === "pnl" ? signClass(r[k]) : ""),
     // no sort by a hidden figure (the order would tell it)
     sort: hide ? undefined : (r) => r[k],
+    // no bar for a hidden figure either (its length would tell it); the rebates and the rest stay plain
+    bar: hide || k === "reb" || k === "other" ? undefined : { v: (r) => r[k], signed: true, tone: k === "pnl" },
   });
   const desk = deskNow();
-  // Day PnL, then Trading PnL with its two parts after it, then the hedge, the rebates and the rest
+  // Day PnL, then its parts: market making and inventory PnL (or, with no split, the trading P&L), the hedge, the
+  // rebates and the rest
   return [
     { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label, sort: (r) => r.key },
     p("pnl", pnlLabel),
-    {
-      key: "pi",
-      label: "Trading PnL",
-      title: "Market making plus inventory PnL, fees included; the standard error is in each figure's tooltip",
-      cell: (r) => (
-        <span title={r.split === false ? "No split kept this day: not in the total" : r.se != null ? se(r.se) + " (Newey–West standard error)" : undefined}>{m(sg(r.pi))}</span>
-      ),
-      cls: (r) => "fig " + (hide ? "masked" : r.split === false ? "muted" : ""),
-      sort: hide ? undefined : (r) => r.pi,
-    },
-    ...(desk.mm ? [p("mm", "Market making", PART_META.mm.title), p("inv", "Inventory PnL", PART_META.inv.title)] : []),
+    // what the desk kept no split for has its trading P&L only: said in the Day PnL's tooltip
+    ...(desk.mm ? [p("mm", "Market making", PART_META.mm.title), p("inv", "Inventory PnL", PART_META.inv.title)] : [p("pi", "Trading", PART_META.pi.title)]),
     ...(desk.hedge ? [p("hedge", "Hedge", PART_META.hedge.title)] : []),
     ...(desk.rebates ? [p("reb", "Rebates")] : []),
     p("other", "Other", PART_META.other.title),
     { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills },
-    { key: "v", label: "Volume", title: `Filled notional, ${notionalCur()}`, cell: (r) => m(compact(r.volume)), cls: () => "fig" + (hide ? " masked" : ""), sort: hide ? undefined : (r) => r.volume },
+    {
+      key: "v",
+      label: "Volume",
+      title: `Filled notional, ${notionalCur()}`,
+      cell: (r) => m(compact(r.volume)),
+      cls: () => "fig" + (hide ? " masked" : ""),
+      sort: hide ? undefined : (r) => r.volume,
+      bar: hide ? undefined : { v: (r) => r.volume },
+    },
   ];
 }
 

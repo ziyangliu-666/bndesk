@@ -5,8 +5,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { selectInstrument, useStore, type Instrument } from "../../store";
 import { pnl } from "../../format";
 import { maskNode, useHide } from "../../mask";
-import { useHedgePnl } from "../../selectors";
-import { isHedge, venueTag } from "../../desk";
+import { oneCol, oneColWord, useHedgePnl } from "../../selectors";
+import { isHedge, useDesk, venueTag } from "../../desk";
 
 export function NamePicker({ sel, children }: { sel: Instrument | null; children: ReactNode }) {
   const symbols = useStore((s) => s.snap?.symbols);
@@ -26,7 +26,8 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
       .sort((a, b) => (hide ? 0 : Math.abs(b.inv_value) - Math.abs(a.inv_value)) || a.symbol.localeCompare(b.symbol) || a.venue.localeCompare(b.venue));
     return [...(f ? [] : [null]), ...rows];
   }, [symbols, q, hide]);
-  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (isHedge(r) ? 0 : r.trading_pnl), 0), [symbols]);
+  const mm = useDesk().mm;
+  const deskTp = useMemo(() => (symbols ?? []).reduce((a, r) => a + (isHedge(r) ? 0 : oneCol(r, mm)), 0), [symbols, mm]);
 
   useEffect(() => {
     if (!open) return;
@@ -76,13 +77,13 @@ export function NamePicker({ sel, children }: { sel: Instrument | null; children
           />
           <div className="dk-pick-head">
             <span>Symbol</span>
-            <span>Trading PnL</span>
+            <span>{oneColWord(mm)}</span>
           </div>
           <div className="dk-pick-list" role="listbox">
             {list.map((r, i) => {
               const on = r ? sel?.symbol === r.symbol && sel.venue === r.venue : !sel;
               const hedged = !!r && isHedge(r);
-              const tp = r ? (hedged ? hedgeOf(r) : r.trading_pnl) : deskTp;
+              const tp = r ? (hedged ? hedgeOf(r) : oneCol(r, mm)) : deskTp;
               return (
                 <button
                   type="button"
