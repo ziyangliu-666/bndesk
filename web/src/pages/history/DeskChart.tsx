@@ -1,6 +1,8 @@
-// The desk's P&L history on ExChart: the running P&L as candles (each bar opens where the one before it closed),
-// volume under it. One chart, no modes: the split, the per-day bars and the inventory are in the tables and the
-// side column, not here.
+// The desk's P&L history on ExChart: the running P&L as candles (each bar opens where the one before it closed);
+// under it, in a pane of their own, the parts running on the same basis (market making, inventory PnL, hedge,
+// rebates: each larger than the total and pulling against each other, so on the candles' scale they would flatten
+// them); volume at the bottom. A chip per line under the chart picks which are drawn (remembered); the parts'
+// pane folds away when none is.
 import { useMemo } from "react";
 import { ExChart, rgba, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView } from "../../components/ex";
 import { maskFormat } from "../../mask";
@@ -8,7 +10,7 @@ import { REF_LINE } from "../../components/ex/palette";
 import { C, PNL_COLORS, PNL_STROKES, type Stroke } from "../../theme";
 import { compact, num, int } from "../../format";
 import { type HInterval, type Part, type Row } from "./data";
-import { notionalCur } from "../../desk";
+import { notionalCur, useDesk } from "../../desk";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
   pi: { label: "Trading", long: "Trading", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
@@ -75,6 +77,12 @@ export function DeskChart({
   const vol = maskFormat(hide, (v: number) => compact(v));
   const word = periodWord(interval);
   const byT = useMemo(() => new Map(rows.map((r) => [r.t, r])), [rows]);
+  const d = useDesk();
+  // the parts this desk has, in the side's order (with no split kept: the trading P&L)
+  const parts = useMemo(
+    () => (d.mm ? (["mm", "inv"] as Part[]) : (["pi"] as Part[])).concat(d.hedge ? ["hedge"] : [], d.rebates ? ["reb"] : []),
+    [d.mm, d.hedge, d.rebates],
+  );
 
   const series = useMemo<ExSeries[]>(
     () => [
@@ -91,11 +99,27 @@ export function DeskChart({
           return { time: r.t, open: r.o + off, high: Math.max(r.h, r.o, r.c) + off, low: Math.min(r.l, r.o, r.c) + off, close: r.cum };
         }),
       },
+      ...parts.map(
+        (k): ExSeries => ({
+          key: k,
+          kind: "line",
+          label: PART_META[k].label,
+          pane: 1,
+          color: PART_META[k].color,
+          lineStyle: PART_META[k].style,
+          width: 2,
+          format: sgn,
+          lastValue: false,
+          signColor: false,
+          // running from where the range starts, as the candles; a bar before the split was kept has none
+          data: points("p." + k, rows, (r) => ({ time: r.t, value: r.run[k] })),
+        }),
+      ),
       {
         key: "vol",
         kind: "histogram",
         label: `Vol(${notionalCur()})`,
-        pane: 1,
+        pane: 2,
         toggle: false,
         color: rgba(C.ink2, 0.32),
         format: vol,
@@ -103,7 +127,11 @@ export function DeskChart({
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, hide],
+    [rows, hide, parts],
+  );
+  const chips = useMemo(
+    () => [...parts.map((k) => ({ key: k, label: PART_META[k].long, color: PART_META[k].color, stroke: PART_META[k].style })), "|" as const, { key: "vol", label: "Volume", bar: true }],
+    [parts],
   );
   const markers = useMemo(
     () => (chosen != null && rows.some((r) => r.t === chosen) ? [{ series: "k", time: chosen, color: C.accent, shape: "arrowUp" as const, position: "belowBar" as const, size: 1 }] : []),
@@ -111,19 +139,26 @@ export function DeskChart({
   );
   const legendExtra = useMemo<ExLegendItem[]>(
     () => [
-      { label: "Fills", pane: 1, line: 1, value: (t) => [int(byT.get(t)?.fills), C.ink] },
+      { label: "Fills", pane: 2, line: 1, value: (t) => [int(byT.get(t)?.fills), C.ink] },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [byT, word, hide],
   );
-  const zeroLine = useMemo(() => [{ series: "k", price: 0, color: REF_LINE, style: "solid" as const, axisLabel: false }], []);
+  const zeroLine = useMemo(
+    () => [
+      { series: "k", price: 0, color: REF_LINE, style: "solid" as const, axisLabel: false },
+      ...(parts[0] ? [{ series: parts[0], price: 0, color: REF_LINE, style: "solid" as const, axisLabel: false }] : []),
+    ],
+    [parts],
+  );
 
   return (
     <ExChart
       id="hist"
       fill
       series={series}
-      paneStretch={[1, 0.22]}
+      paneStretch={[1, 0.62, 0.2]}
+      chips={chips}
       intervals={intervals}
       interval={interval}
       onInterval={onInterval}
