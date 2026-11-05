@@ -460,26 +460,25 @@
   table-layout: fixed;
 }
 .hx-t.fixed th:first-child {
-  width: 150px;
+  width: 128px;
 }
 .hx-t td.barred {
-  padding-left: 8px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 .hx-barcell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .hx-barcell > span:last-child {
   flex: none;
-  min-width: 56px;
+  min-width: 50px;
 }
 .hx-spark {
   display: block;
   flex: 1;
   min-width: 0;
-  max-width: 140px;
-  margin-left: auto;
   height: 20px;
   overflow: visible;
 }
