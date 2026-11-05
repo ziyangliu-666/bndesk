@@ -454,25 +454,32 @@
   line-height: 16px;
 }
 
-/* a figure with its bar in the cell's empty left part: down the table, the column's shape over the rows */
+/* a figure with the day's shape in the cell's left part: every figure column the same width, the shape taking what
+   the figure leaves */
+.hx-t.fixed {
+  table-layout: fixed;
+}
+.hx-t.fixed th:first-child {
+  width: 150px;
+}
 .hx-t td.barred {
-  width: 1%;
-  padding-left: 4px;
+  padding-left: 8px;
 }
 .hx-barcell {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
   gap: 8px;
 }
 .hx-barcell > span:last-child {
   flex: none;
-  min-width: 52px;
+  min-width: 56px;
 }
 .hx-spark {
   display: block;
-  flex: none;
-  width: 72px;
+  flex: 1;
+  min-width: 0;
+  max-width: 140px;
+  margin-left: auto;
   height: 20px;
   overflow: visible;
 }
@@ -481,20 +488,24 @@
   stroke: var(--ink-2);
   stroke-width: 1.2;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
-.hx-spark line.zero {
+.hx-spark path.zero {
   stroke: var(--rule);
+  stroke-width: 1;
   stroke-dasharray: 2 2;
 }
-.hx-spark rect {
-  fill: #3a4350;
+.hx-spark path.bars {
+  stroke: #3a4350;
+  stroke-width: 1.5;
 }
-.hx-spark circle {
-  fill: var(--ink-2);
+.hx-spark path.dot {
+  stroke-width: 4;
+  stroke-linecap: round;
 }
-.hx-spark circle.up {
-  fill: var(--up);
+.hx-spark path.dot.up {
+  stroke: var(--up);
 }
-.hx-spark circle.down {
-  fill: var(--down);
+.hx-spark path.dot.down {
+  stroke: var(--down);
 }

@@ -25,42 +25,48 @@ export interface Col<R> {
   spark?: { v: (r: R) => (number | null)[] | undefined; signed?: boolean; bars?: boolean };
 }
 
-const SW = 72,
+const SW = 100,
   SH = 20;
-/** A row's shape: its own scale (each day its own), 0 as a faint rule when the line crosses it. */
+/** A row's shape: its own scale (each day its own), 0 as a faint rule when the line crosses it. Drawn on a 100-wide
+ *  box stretched to the cell, the strokes kept their width (the end dot is a round-capped stroke of no length). */
 function Spark({ v, signed, bars }: { v: (number | null)[] | undefined; signed?: boolean; bars?: boolean }) {
   const xs = (v ?? []).filter((x): x is number => x != null);
   if (!v) return null;
   if (xs.length < 2) return <span className="hx-spark" />;
+  const box = { className: "hx-spark", viewBox: `0 0 ${SW} ${SH}`, preserveAspectRatio: "none", "aria-hidden": true } as const;
   if (bars) {
     const max = Math.max(...xs) || 1;
-    const w = SW / v!.length;
+    const w = SW / v.length;
+    let d = "";
+    v.forEach((x, i) => {
+      if (x) d += `M${(i * w + w / 2).toFixed(2)} ${SH}V${(SH - (x / max) * SH).toFixed(2)}`;
+    });
     return (
-      <svg className="hx-spark" width={SW} height={SH} aria-hidden>
-        {v!.map((x, i) => (x ? <rect key={i} x={i * w} y={SH - (x / max) * SH} width={Math.max(1, w - 0.5)} height={(x / max) * SH} /> : null))}
+      <svg {...box}>
+        <path className="bars" d={d} />
       </svg>
     );
   }
   const lo = Math.min(0, ...xs),
     hi = Math.max(0, ...xs);
   const span = hi - lo || 1;
-  const y = (x: number) => 1.5 + (1 - (x - lo) / span) * (SH - 3);
-  const step = (SW - 4) / (v!.length - 1);
+  const y = (x: number) => 2 + (1 - (x - lo) / span) * (SH - 4);
+  const step = (SW - 3) / (v.length - 1);
   let d = "";
   let last: [number, number] | null = null;
-  v!.forEach((x, i) => {
+  v.forEach((x, i) => {
     if (x == null) return;
     const p: [number, number] = [i * step, y(x)];
-    d += (last ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1);
+    d += (last ? "L" : "M") + p[0].toFixed(2) + " " + p[1].toFixed(2);
     last = p;
   });
   const end = xs[xs.length - 1]!;
   const lp = last as [number, number] | null;
   return (
-    <svg className="hx-spark" width={SW} height={SH} aria-hidden>
-      {lo < 0 && hi > 0 && <line className="zero" x1={0} x2={SW} y1={y(0)} y2={y(0)} />}
+    <svg {...box}>
+      {lo < 0 && hi > 0 && <path className="zero" d={`M0 ${y(0).toFixed(2)}H${SW}`} />}
       <path d={d} />
-      {signed && lp && <circle className={end > 0 ? "up" : end < 0 ? "down" : ""} cx={lp[0]} cy={lp[1]} r={2} />}
+      {signed && lp && <path className={"dot" + (end > 0 ? " up" : end < 0 ? " down" : "")} d={`M${lp[0].toFixed(2)} ${lp[1].toFixed(2)}h0`} />}
     </svg>
   );
 }
@@ -104,7 +110,7 @@ export function Table<R>({
   }, [rows, by, cols, last]);
   const click = (k: string) => setBy((b) => (b?.key !== k ? { key: k, desc: true } : b.desc ? { key: k, desc: false } : null));
   return (
-    <table className="hx-t">
+    <table className="hx-t fixed">
       <thead>
         <tr>
           {cols.map((c) => {
@@ -172,8 +178,8 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     cls: (r) => "fig " + (hide ? "masked" : k === "pnl" ? signClass(r[k]) : ""),
     // no sort by a hidden figure (the order would tell it)
     sort: hide ? undefined : (r) => r[k],
-    // the day's shape (a hidden figure's too: it has no scale); the rebates and the rest stay plain
-    spark: k === "pnl" || k === "mm" || k === "inv" || k === "hedge" ? { v: (r) => r.sp?.[k], signed: true } : undefined,
+    // the day's shape (a hidden figure's too: it has no scale)
+    spark: { v: (r) => r.sp?.[k], signed: true },
   });
   const desk = deskNow();
   // Day PnL, then its parts: market making and inventory PnL (or, with no split, the trading P&L), the hedge, the
@@ -186,7 +192,7 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     ...(desk.hedge ? [p("hedge", "Hedge", PART_META.hedge.title)] : []),
     ...(desk.rebates ? [p("reb", "Rebates")] : []),
     p("other", "Other", PART_META.other.title),
-    { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills },
+    { key: "f", label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills, spark: { v: (r) => r.sp?.fills, bars: true } },
     {
       key: "v",
       label: "Volume",

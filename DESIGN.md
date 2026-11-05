@@ -643,8 +643,9 @@ and size; their sum, the trading P&L, is not a figure of its own: it appears onl
 (`mm` false), as "Trading". A spot market has the parts, a perp (the hedge) has none and shows its hedge leg's P&L
 under a Hedge figure or column. Where a list has room for one column (pickers, the phone's lists) it is market
 making. Day PnL = market making + inventory PnL + hedge legs + rebates + other. History's day table draws each day's
-shape beside Day PnL, market making, inventory PnL and hedge (a line from 0 through the day at 15 minutes, its end
-dot green / red by sign) and volume (its 15 minute bars), each day on its own scale. The split has one palette on every chart and
+shape beside every figure: the P&L and each part a line from 0 through the day at 15 minutes, its end dot green /
+red by sign; fills and volume their 15 minute bars; each day on its own scale. The figure columns share the width
+evenly (fixed layout), the shape stretching to what the figure leaves. The split has one palette on every chart and
 size (theme.ts `PNL_COLORS`, `PNL_STROKES`): Day PnL an area coloured by sign, Trading (no split kept) ink solid, market
 making blue solid, inventory PnL violet long dashes, hedge teal dashes, rebates light grey spaced dots,
 other grey dots; none of them green, red or amber, each with a stroke of its own so colour is not the only
