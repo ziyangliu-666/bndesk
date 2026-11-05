@@ -456,43 +456,45 @@
 
 /* a figure with its bar in the cell's empty left part: down the table, the column's shape over the rows */
 .hx-t td.barred {
-  width: 15%;
+  width: 1%;
+  padding-left: 4px;
 }
 .hx-barcell {
   display: flex;
+  justify-content: flex-end;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .hx-barcell > span:last-child {
   flex: none;
-  min-width: 64px;
+  min-width: 52px;
 }
-.hx-cbar {
+.hx-spark {
   display: block;
-  position: relative;
-  flex: 1;
-  height: 10px;
-  min-width: 40px;
+  flex: none;
+  width: 72px;
+  height: 20px;
+  overflow: visible;
 }
-.hx-cbar.signed::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: -2px;
-  bottom: -2px;
-  width: 1px;
-  background: var(--rule);
+.hx-spark path {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
 }
-.hx-cbar i {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: #3a4350;
-  border-radius: 1px;
+.hx-spark line.zero {
+  stroke: var(--rule);
+  stroke-dasharray: 2 2;
 }
-.hx-cbar i.up {
-  background: rgba(62, 214, 162, 0.55);
+.hx-spark rect {
+  fill: #3a4350;
 }
-.hx-cbar i.down {
-  background: rgba(255, 106, 92, 0.55);
+.hx-spark circle {
+  fill: var(--ink-2);
+}
+.hx-spark circle.up {
+  fill: var(--up);
+}
+.hx-spark circle.down {
+  fill: var(--down);
 }

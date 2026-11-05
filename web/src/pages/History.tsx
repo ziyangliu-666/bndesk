@@ -27,6 +27,7 @@ import {
   rangeRows,
   todayOf,
   useDeskHistory,
+  daySparks,
   weekOf,
   weekBars,
   type HInterval,
@@ -108,6 +109,9 @@ export function History() {
   const desk = useDeskHistory(STEP_S[iv], inst || dayStart == null ? null : from);
   const daily = useDeskHistory(86_400, inst ? null : from);
   const hours = useDeskHistory(3600, !inst && tab === "hour" ? dayStart : null);
+  // each day's shape through the day for the day table, from its 15 minute bars
+  const quarter = useDeskHistory(900, !inst && tab === "day" ? from : null);
+  const sparks = useMemo(() => (dayStart == null ? new Map() : daySparks(quarter.bars, dayStart)), [quarter.bars, dayStart]);
   const prevRows = useRef<Row[] | null>(null);
   const allRows = useMemo(() => {
     if (dayStart == null || !desk.bars.length) return (prevRows.current = []);
@@ -312,7 +316,7 @@ export function History() {
               <InstHours fills={fills.fills} dayStart={dayStart ?? 0} tz={tz} hide={hide} />
             )
           ) : tab === "day" ? (
-            <DeskDays rows={days} todayDay={todayDay} selected={focusDay} onDay={onDay} hide={hide} />
+            <DeskDays rows={days} sparks={sparks} todayDay={todayDay} selected={focusDay} onDay={onDay} hide={hide} />
           ) : (
             <DeskHours rows={hourRows} tz={tz} hide={hide} />
           )}

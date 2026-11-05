@@ -5,7 +5,7 @@ import type { HistFill } from "../../api";
 import { compact, hm, int, num, price, qtyDecimals, signClass, type TzMode } from "../../format";
 import { maskText, qtyText } from "../../mask";
 import { PART_META } from "./DeskChart";
-import { dayOf, type DayRow, type Row } from "./data";
+import { dayOf, type DayRow, type DaySparks, type Row, type SparkKey } from "./data";
 import { deskNow, notionalCur } from "../../desk";
 
 export interface Col<R> {
@@ -20,21 +20,48 @@ export interface Col<R> {
   /** Sort value: a click on the header sorts by it (largest first), again reverses, a third time back to the
    *  table's own order. Unknowns last. */
   sort?: (r: R) => number | string | null;
-  /** A bar behind the figure, in the cell's empty left part, scaled to the column's largest: read down the table
-   *  it is the column's shape over the rows. `signed`: from a middle zero, green / red for `tone`, else ink. */
-  bar?: { v: (r: R) => number | null; signed?: boolean; tone?: boolean };
+  /** The row's shape through its period, drawn in the cell's empty left part: a line from 0, its end dot green /
+   *  red by sign (`signed`), or the volume's bars. */
+  spark?: { v: (r: R) => (number | null)[] | undefined; signed?: boolean; bars?: boolean };
 }
 
-/** The cell's bar: a share of the column's largest magnitude. */
-function Bar({ v, max, signed, tone }: { v: number | null; max: number; signed?: boolean; tone?: boolean }) {
-  if (v == null || !max) return <span className="hx-cbar" />;
-  const w = Math.min(1, Math.abs(v) / max) * (signed ? 50 : 100);
-  const left = signed ? (v >= 0 ? 50 : 50 - w) : 0;
-  const cls = tone ? (v >= 0 ? " up" : " down") : "";
+const SW = 72,
+  SH = 20;
+/** A row's shape: its own scale (each day its own), 0 as a faint rule when the line crosses it. */
+function Spark({ v, signed, bars }: { v: (number | null)[] | undefined; signed?: boolean; bars?: boolean }) {
+  const xs = (v ?? []).filter((x): x is number => x != null);
+  if (!v) return null;
+  if (xs.length < 2) return <span className="hx-spark" />;
+  if (bars) {
+    const max = Math.max(...xs) || 1;
+    const w = SW / v!.length;
+    return (
+      <svg className="hx-spark" width={SW} height={SH} aria-hidden>
+        {v!.map((x, i) => (x ? <rect key={i} x={i * w} y={SH - (x / max) * SH} width={Math.max(1, w - 0.5)} height={(x / max) * SH} /> : null))}
+      </svg>
+    );
+  }
+  const lo = Math.min(0, ...xs),
+    hi = Math.max(0, ...xs);
+  const span = hi - lo || 1;
+  const y = (x: number) => 1.5 + (1 - (x - lo) / span) * (SH - 3);
+  const step = (SW - 4) / (v!.length - 1);
+  let d = "";
+  let last: [number, number] | null = null;
+  v!.forEach((x, i) => {
+    if (x == null) return;
+    const p: [number, number] = [i * step, y(x)];
+    d += (last ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1);
+    last = p;
+  });
+  const end = xs[xs.length - 1]!;
+  const lp = last as [number, number] | null;
   return (
-    <span className={"hx-cbar" + (signed ? " signed" : "")}>
-      <i className={cls} style={{ left: `${left}%`, width: `${w}%` }} />
-    </span>
+    <svg className="hx-spark" width={SW} height={SH} aria-hidden>
+      {lo < 0 && hi > 0 && <line className="zero" x1={0} x2={SW} y1={y(0)} y2={y(0)} />}
+      <path d={d} />
+      {signed && lp && <circle className={end > 0 ? "up" : end < 0 ? "down" : ""} cx={lp[0]} cy={lp[1]} r={2} />}
+    </svg>
   );
 }
 
@@ -75,12 +102,6 @@ export function Table<R>({
       return by.desc ? -d : d;
     });
   }, [rows, by, cols, last]);
-  // each barred column's largest magnitude over the rows
-  const maxes = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const c of cols) if (c.bar) out[c.key] = Math.max(0, ...rows.map((r) => Math.abs(c.bar!.v(r) ?? 0)));
-    return out;
-  }, [cols, rows]);
   const click = (k: string) => setBy((b) => (b?.key !== k ? { key: k, desc: true } : b.desc ? { key: k, desc: false } : null));
   return (
     <table className="hx-t">
@@ -115,10 +136,10 @@ export function Table<R>({
             return (
               <tr key={k} className={(onRow ? "click" : "") + (k === selected ? " on" : "")} onClick={onRow ? () => onRow(r) : undefined}>
                 {cols.map((c) => (
-                  <td key={c.key} className={(c.left ? "l " : "") + (c.bar ? "barred " : "") + (c.cls?.(r) ?? "")}>
-                    {c.bar ? (
+                  <td key={c.key} className={(c.left ? "l " : "") + (c.spark ? "barred " : "") + (c.cls?.(r) ?? "")}>
+                    {c.spark ? (
                       <span className="hx-barcell">
-                        <Bar v={c.bar.v(r)} max={maxes[c.key] ?? 0} signed={c.bar.signed} tone={c.bar.tone} />
+                        <Spark v={c.spark.v(r)} signed={c.spark.signed} bars={c.spark.bars} />
                         <span>{c.cell(r)}</span>
                       </span>
                     ) : (
@@ -137,7 +158,7 @@ export function Table<R>({
 
 const sg = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
 
-type PnlRow = { label: ReactNode; key: string; split?: boolean; pnl: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
+type PnlRow = { sp?: Record<SparkKey, (number | null)[]>; label: ReactNode; key: string; split?: boolean; pnl: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
 
 function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: boolean): Col<PnlRow>[] {
   const m = (s: string) => maskText(hide, s);
@@ -151,8 +172,8 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     cls: (r) => "fig " + (hide ? "masked" : k === "pnl" ? signClass(r[k]) : ""),
     // no sort by a hidden figure (the order would tell it)
     sort: hide ? undefined : (r) => r[k],
-    // no bar for a hidden figure either (its length would tell it); the rebates and the rest stay plain
-    bar: hide || k === "reb" || k === "other" ? undefined : { v: (r) => r[k], signed: true, tone: k === "pnl" },
+    // the day's shape (a hidden figure's too: it has no scale); the rebates and the rest stay plain
+    spark: k === "pnl" || k === "mm" || k === "inv" || k === "hedge" ? { v: (r) => r.sp?.[k], signed: true } : undefined,
   });
   const desk = deskNow();
   // Day PnL, then its parts: market making and inventory PnL (or, with no split, the trading P&L), the hedge, the
@@ -173,14 +194,15 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
       cell: (r) => m(compact(r.volume)),
       cls: () => "fig" + (hide ? " masked" : ""),
       sort: hide ? undefined : (r) => r.volume,
-      bar: hide ? undefined : { v: (r) => r.volume },
+      spark: { v: (r) => r.sp?.vol, bars: true },
     },
   ];
 }
 
-export function DeskDays({ rows, todayDay, selected, onDay, hide }: { rows: DayRow[]; todayDay: string | null; selected: string | null; onDay: (d: string) => void; hide: boolean }) {
+export function DeskDays({ rows, sparks, todayDay, selected, onDay, hide }: { rows: DayRow[]; sparks: DaySparks; todayDay: string | null; selected: string | null; onDay: (d: string) => void; hide: boolean }) {
   const data: PnlRow[] = rows.map((r) => ({
     ...r,
+    sp: sparks.get(r.start),
     key: r.day,
     label: (
       <>

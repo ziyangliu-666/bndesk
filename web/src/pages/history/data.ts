@@ -586,3 +586,30 @@ export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split">
     volume: rows.reduce((a, r) => a + r.volume, 0),
   };
 }
+
+/** Each day's shape for the day table: its figures through the day, one point a bar (15 min), each from 0 at the
+ *  day start (P&L and its parts) or the bar's own (volume). Keyed by the day's start. */
+export type SparkKey = "pnl" | "mm" | "inv" | "hedge" | "vol";
+export type DaySparks = Map<number, Record<SparkKey, (number | null)[]>>;
+export function daySparks(bars: HistBar[], dayStart: number): DaySparks {
+  const out: DaySparks = new Map();
+  let day = NaN;
+  let cur: Record<SparkKey, (number | null)[]> | null = null;
+  const run = { mm: 0, inv: 0, hedge: 0 };
+  for (const r of deskRows(bars, "day", dayStart, null)) {
+    const d = dayOf(r.t, dayStart);
+    if (d !== day) {
+      day = d;
+      // each line starts at 0 at the day start
+      out.set(d, (cur = { pnl: [0], mm: [0], inv: [0], hedge: [0], vol: [] }));
+      run.mm = run.inv = run.hedge = 0;
+    }
+    const add = (k: "mm" | "inv" | "hedge", v: number | null) => (v == null ? null : (run[k] += v));
+    cur!.pnl.push(r.c);
+    cur!.mm.push(add("mm", r.bar.mm));
+    cur!.inv.push(add("inv", r.bar.inv));
+    cur!.hedge.push(add("hedge", r.bar.hedge));
+    cur!.vol.push(r.volume);
+  }
+  return out;
+}
