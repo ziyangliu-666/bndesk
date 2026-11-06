@@ -381,7 +381,7 @@ function Spot() {
       // today's P&L in its two parts (with no split kept: their sum, the trading P&L)
       ...(dm
         ? [
-            n({ field: "mm", headerName: "Market making", headerTooltip: `Today, ${cur()}: each fill against the mid 60 s later, minus fees`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+            n({ field: "mm", headerName: "Market making", headerTooltip: `Today, ${cur()}: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
             n({ field: "inv", headerName: "Inventory PnL", headerTooltip: `Today, ${cur()}: what the held inventory made after those 60 s`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
           ]
         : [n({ field: "today", headerName: "Trading", headerTooltip: `Today, ${cur()}: what the fills and the held inventory made (realized + float), fees included`, width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) })]),

@@ -101,7 +101,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         {head("value", "Inv value", `Inventory × mid, ${cur()}; sorted by size`)}
         {d.mm ? (
           <>
-            {head("mm", "MM", `Market making today, ${cur()}: each fill against the mid 60 s later, minus fees. What hedges: its leg's P&L across both columns, marked hedge`)}
+            {head("mm", "MM", `Market making today, ${cur()}: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees. What hedges: its leg's P&L across both columns, marked hedge`)}
             {head("inv", "Inv PnL", `Inventory PnL today, ${cur()}: what the held inventory made after those 60 s`)}
           </>
         ) : (

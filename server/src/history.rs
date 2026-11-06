@@ -338,7 +338,6 @@ pub struct DeskRow {
     pub realized: Option<f64>,
     pub hedge: Option<f64>,
     pub mm: Option<f64>,
-    pub mm_fair: Option<f64>,
     pub rebates: Option<f64>,
     pub inventory: f64,
     pub futures: f64,
@@ -350,8 +349,8 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
     let have: Vec<String> = c.prepare("PRAGMA table_info(equity)")?.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
     let col = |n: &str| if have.iter().any(|h| h == n) { n.to_string() } else { "NULL".into() };
     let sql = format!(
-        "SELECT t, pnl_day, {}, {}, {}, inventory, futures_notional, {}, {}, equity, {} FROM equity WHERE account = '*' AND t >= ? AND t < ? ORDER BY t",
-        col("trading"), col("realized"), col("hedge"), col("mm"), col("rebates"), col("mm_fair"));
+        "SELECT t, pnl_day, {}, {}, {}, inventory, futures_notional, {}, {}, equity FROM equity WHERE account = '*' AND t >= ? AND t < ? ORDER BY t",
+        col("trading"), col("realized"), col("hedge"), col("mm"), col("rebates"));
     let mut st = c.prepare(&sql)?;
     st.query_map([from, to], |r| {
         Ok(DeskRow {
@@ -365,7 +364,6 @@ fn desk_rows(c: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<DeskRow
             mm: r.get(7)?,
             rebates: r.get(8)?,
             equity: r.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
-            mm_fair: r.get(10)?,
         })
     })?
     .collect()
@@ -439,24 +437,23 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
     let rows = &rows[..];
     let anchor = day_start_min * 60_000;
     let mut out: Vec<P::HistoryBar> = vec![];
-    let (mut pnl, mut pi, mut re, mut he, mut mm, mut rb, mut mf) =
-        (Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default());
+    let (mut pnl, mut pi, mut re, mut he, mut mm, mut rb) =
+        (Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default());
     let mut day = None;
     for r in rows {
         let ds = sessions::day_start(r.t, day_start_min);
         if per_day {
-            for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb, &mut mf] {
+            for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
                 *c = Cum { seen: true, ..Cum::default() };
             }
         } else if day != Some(ds) {
-            for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb, &mut mf] {
+            for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
                 c.roll();
             }
             day = Some(ds);
         }
         let v = pnl.at(Some(r.pnl_day)).unwrap_or(0.0);
         let (vpi, vre, vhe, vmm, vrb) = (pi.at(r.trading), re.at(r.realized), he.at(r.hedge), mm.at(r.mm), rb.at(r.rebates));
-        let vmf = mf.at(r.mm_fair);
         let b = bar_of(r.t, step_ms, anchor);
         match out.last_mut() {
             Some(x) if x.t == b => {
@@ -466,7 +463,6 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
                 x.pi = vpi.or(x.pi);
                 x.realized = vre.or(x.realized);
                 x.mm = vmm.or(x.mm);
-                x.mm_fair = vmf.or(x.mm_fair);
                 x.hedge = vhe.or(x.hedge);
                 x.rebates = vrb.or(x.rebates);
                 x.inventory = Some(r.inventory);
@@ -482,7 +478,6 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
                 pi: vpi,
                 realized: vre,
                 mm: vmm,
-                mm_fair: vmf,
                 hedge: vhe,
                 rebates: vrb,
                 inventory: Some(r.inventory),
@@ -517,7 +512,7 @@ fn clean(rows: &[DeskRow], day_start_min: i64) -> Vec<DeskRow> {
         }
         let mut r = r.clone();
         if r.t == sessions::day_start(r.t, day_start_min) {
-            (r.trading, r.realized, r.hedge, r.mm, r.rebates, r.mm_fair) = (None, None, None, None, None, None);
+            (r.trading, r.realized, r.hedge, r.mm, r.rebates) = (None, None, None, None, None);
         }
         out.push(r);
     }
@@ -636,7 +631,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     fn row(t: i64, pnl: f64, tr: Option<f64>) -> DeskRow {
-        DeskRow { t, pnl_day: pnl, trading: tr, realized: tr.map(|x| x / 2.0), hedge: None, mm: None, mm_fair: None, rebates: None, inventory: t as f64,
+        DeskRow { t, pnl_day: pnl, trading: tr, realized: tr.map(|x| x / 2.0), hedge: None, mm: None, rebates: None, inventory: t as f64,
                   futures: -1.0, equity: 0.0 }
     }
 
@@ -804,7 +799,7 @@ mod tests {
         let b = v["bars"].as_array().unwrap();
         assert_eq!(b.len(), 3);
         assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 0.0, "h": 0.0, "l": 0.0, "c": 0.0, "pi": 0.0,
-            "realized": 0.0, "mm": null, "mm_fair": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
+            "realized": 0.0, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
         assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&1.0.into(), &1.0.into(), &0.5.into()));
         // the spot fill only: the perp's (hedge) is not the desk's volume
         assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&6.0.into(), &1.into()));

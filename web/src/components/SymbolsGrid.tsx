@@ -144,7 +144,7 @@ function columns(hide: boolean, d: Desk): ColDef<Row>[] {
     n({ field: "mid", headerName: "Mid", width: 82, valueFormatter: fPrice, headerTooltip: "(best bid + best ask) / 2" }),
     // the instrument's P&L in its two parts (with no split kept: their sum, the trading P&L); what hedges has hers under Hedge
     ...(d.mm ? [
-    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, ...flashOn(fPnl), headerTooltip: `Each fill against the mid 60 s later, minus fees, ${cur()}` }),
+    n({ field: "mm_pnl", valueGetter: spotOnly("mm_pnl"), headerName: "Market making", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, ...flashOn(fPnl), headerTooltip: `Each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees, ${cur()}` }),
     n({ field: "inv_pnl", valueGetter: spotOnly("inv_pnl"), headerName: "Inventory PnL", width: 96, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: `PnL minus market making, ${cur()}` }),
     ] : [
     n({ colId: "pnl", headerName: "Trading", width: 84, valueGetter: pnlOf, valueFormatter: money(fPnl as VF), cellClass: moneyCls, headerTooltip: `Today, ${cur()}: what the fills and the held inventory made, fees included. What hedges has none (its P&L is under Hedge)`, ...flashOn(fPnl) }),

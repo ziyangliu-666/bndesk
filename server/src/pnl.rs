@@ -1537,7 +1537,6 @@ impl PnlBook {
             realized_old,
             floating,
             mm: 0.0,          // set by the desk from the fills' markouts (metrics::mm_split)
-            mm_fair: 0.0,
             mm_spread: 0.0,
             mm_unmarked_fills: 0,
             mm_unmarked_notional: 0.0,

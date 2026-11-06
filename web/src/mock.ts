@@ -1135,7 +1135,6 @@ function summary(): Summary {
       realized_old: realizedOld,
       floating: p.floating,
       mm: p.mm,
-      mm_fair: p.mm * 0.6 + 25,
       mm_spread: mmSpread0 + mmLiveSpread,
       mm_unmarked_fills: 0,
       mm_unmarked_notional: 0,
@@ -1619,7 +1618,6 @@ function buildDays() {
       rebates: kept ? d("rb") : null,
       other: kept ? d("ot") : null,
       mm: kept ? d("mm") : null,
-      mm_fair: kept ? d("mm") + 40 + 30 * Math.sin(k) : null,
       inventory: kept ? tr - d("mm") : null,
     });
   }
@@ -1646,7 +1644,6 @@ function days(sum: Summary): DayPnl[] {
     rebates: sum.rebates,
     other: sum.other,
     mm: p.mm,
-    mm_fair: p.mm + 35,
     inventory: p.inventory,
   };
   return pastDays.concat(today);

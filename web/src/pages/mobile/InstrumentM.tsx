@@ -335,7 +335,7 @@ function InfoTab({ r }: { r: SymbolRow }) {
   const perp = isPerp(r.venue);
   const items: KVItem[] = [
     { label: perp ? "Notional" : "Inventory value", value: money(r.inv_value, "usd") },
-    { label: "Market making", value: <Money v={r.mm_pnl} />, info: `Each fill against the mid 60 s later, minus fees, ${cur()}.` },
+    { label: "Market making", value: <Money v={r.mm_pnl} />, info: `Each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees, ${cur()}.` },
     { label: "Inventory PnL", value: <Money v={r.inv_pnl} />, info: `PnL minus market making, ${cur()}.` },
     { label: "Realized", value: <Money v={r.realized_pnl} /> },
     { label: "Floating", value: <Money v={r.float_pnl} /> },

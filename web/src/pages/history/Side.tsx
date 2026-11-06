@@ -307,7 +307,7 @@ export function InstSide({ title, fills, bars, loading, hide, today }: { title: 
           <>
             {d.mm ? (
               <>
-                <Fig label="Market making" value={m(sg(today?.mm_pnl))} tone={tone(today?.mm_pnl)} title="Today: each fill against the mid 60 s later, minus fees" />
+                <Fig label="Market making" value={m(sg(today?.mm_pnl))} tone={tone(today?.mm_pnl)} title="Today: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees" />
                 <Fig label="Inventory PnL" value={m(sg(today?.inv_pnl))} tone={tone(today?.inv_pnl)} title="Today: what the held inventory made after those 60 s" />
               </>
             ) : (

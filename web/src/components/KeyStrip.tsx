@@ -89,7 +89,7 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     {
       label: "Market making",
       value: m(pnl(p?.mm)),
-      title: `Each fill against the mid 60 s after it, minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
+      title: `Each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
     },
     { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
     { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
@@ -161,7 +161,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
     hedged
       ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this instrument's hedge leg, price P&L at mark − fees + funding, ${cur()}` }
       : dm
-        ? { label: "Market making", value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl), title: `Today: each fill against the mid 60 s later, minus fees, ${cur()}` }
+        ? { label: "Market making", value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl), title: `Today: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees, ${cur()}` }
         : { label: "Trading", value: m(pnl(tp)), tone: tone(tp), title: `Today: what the fills and the held inventory made, fees included, ${cur()}` },
     ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.inv_pnl)), tone: tone(row?.inv_pnl), title: `Today: what the held inventory made after those 60 s, ${cur()}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
