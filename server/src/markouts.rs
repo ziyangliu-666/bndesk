@@ -197,6 +197,13 @@ struct Inst {
 /// The report for one view of today's fills (less the conversions between stablecoins); `now` and
 /// `day_start` in ms.
 pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::MarkoutReport {
+    report_over(fills, q, day_start, now, BUCKET_MS)
+}
+
+/// The same report over any range [from, now) (the fills given are those in it), `by_time` in buckets of
+/// `bucket_ms` from `from` (2000 at most): what `/api/agent/markouts` gives for a past range.
+pub fn report_over(fills: &[FillRec], q: &Query, from: i64, now: i64, bucket_ms: i64) -> P::MarkoutReport {
+    let day_start = from;
     let mut sides = [[Mom::default(); PATH_N]; 3]; // all, buy, sell: fills with a path
     let mut every = [[Mom::default(); PATH_N]; 3]; // the same with every fill at its own horizons
     let mut tox = [Mom::default(); PATH_N];
@@ -204,8 +211,8 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
     let (mut n, mut notional, mut pnl) = (0i64, 0.0, 0.0);
     let mut path_fills = 0i64;
     let mut at_h: Vec<(f64, f64)> = vec![];
-    let nb = ((now - day_start).max(0) / BUCKET_MS + 1) as usize;
-    let mut buckets: Vec<(i64, f64, Mom, Mom)> = vec![(0, 0.0, Mom::default(), Mom::default()); nb.min(200)];
+    let nb = ((now - day_start).max(0) / bucket_ms + 1) as usize;
+    let mut buckets: Vec<(i64, f64, Mom, Mom)> = vec![(0, 0.0, Mom::default(), Mom::default()); nb.min(2000)];
     let mut insts: HashMap<(&str, Venue), Inst> = HashMap::new();
     for f in fills {
         if f.conversion() || q.account.as_ref().is_some_and(|a| *a != f.account) || q.venue.is_some_and(|v| v != f.venue) {
@@ -249,7 +256,7 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
         if let Some(v) = vals[q.h] {
             at_h.push((v, w));
         }
-        let k = (f.ts - day_start).div_euclid(BUCKET_MS);
+        let k = (f.ts - day_start).div_euclid(bucket_ms);
         if let Some(b) = usize::try_from(k).ok().and_then(|k| buckets.get_mut(k)) {
             b.0 += 1;
             b.1 += f.notional();
@@ -307,7 +314,7 @@ pub fn report(fills: &[FillRec], q: &Query, now: i64, day_start: i64) -> P::Mark
             .into_iter()
             .enumerate()
             .map(|(k, (fills, notional, m10, m60))| P::MarkoutBucket {
-                t: day_start + k as i64 * BUCKET_MS,
+                t: day_start + k as i64 * bucket_ms,
                 fills,
                 notional,
                 mk10: m10.mean(),

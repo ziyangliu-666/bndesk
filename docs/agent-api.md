@@ -49,7 +49,7 @@ q '/pnl?from=-30d&step=86400'
 | `/api/agent/pnl` | P&L per bar, as changes. `pnl = mm + inventory_pnl + hedge + rebates + other`, with fills, volume and levels | `from`, `to`, `step` (60–86400 s), `format` |
 | `/api/agent/fills` | Every fill: fee, edge, the mark market making counts, raw/net/fast markouts at 1/10/60/300 s, toxicity, price path | `from`, `to`, `symbol`, `venue`, `account`, `side`, `limit` (≤ 200k), `format` |
 | `/api/agent/events` | Alerts, transfers (amounts only), distributions, definition changes | `from`, `to` |
-| `/api/agent/markouts` | Today's markout curves and distribution, as on the Analysis page | as `/api/markouts` |
+| `/api/agent/markouts` | The Analysis page's report: price path around the fills (all / buys / sells / reference), distribution at `h`, markout per time bucket, per instrument (edge, markouts, SE, adverse share, PnL). Today's by default; any range with `from` / `to` (100k fills at most) | `account`, `venue`, `side`, `ref`, `weight`, `h`; `from`, `to`, `bucket` (s) |
 | `/api/agent/klines` | Candles from the exchange | as `/api/klines` |
 
 ### Series keys

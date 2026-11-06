@@ -791,10 +791,42 @@ async fn state(State(a): State<Arc<Agent>>) -> Result<Response, ApiError> {
     Ok(([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], out).into_response())
 }
 
+/// Fills one past-range markout report reads at most: each is held whole (about 1.1 KB) while the report is made,
+/// on a machine of 1 GB.
+const MAX_REPORT_FILLS: usize = 100_000;
+
+/// The Analysis page's report: today's from the desk, or with `from` / `to` the same over any range, read from the
+/// stored fills (`by_time` in `bucket` s buckets, by default about 200 of them).
 async fn markouts(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiError> {
-    let q = crate::markouts::Query::parse(&q).map_err(bad)?;
-    let b = a.hub.markouts(q).await.ok_or((StatusCode::SERVICE_UNAVAILABLE, "the desk did not answer".to_string()))?;
-    Ok(([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], b).into_response())
+    let mq = crate::markouts::Query::parse(&q).map_err(bad)?;
+    if !q.contains_key("from") && !q.contains_key("to") {
+        let b = a.hub.markouts(mq).await.ok_or((StatusCode::SERVICE_UNAVAILABLE, "the desk did not answer".to_string()))?;
+        return Ok(([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], b).into_response());
+    }
+    let (from, to) = range(&q, DAY)?;
+    let bucket = match q.get("bucket").filter(|v| !v.is_empty()) {
+        Some(v) => v.parse::<i64>().map_err(|_| bad(format!("bad bucket {v:?}")))?.max(60) * 1000,
+        None => [900_000, 3_600_000, 14_400_000, DAY].into_iter().find(|b| (to - from) / b <= 200).unwrap_or(DAY),
+    };
+    let mut cond = String::new();
+    let mut args: Vec<rusqlite::types::Value> = vec![from.into(), to.into()];
+    if let Some(acc) = &mq.account {
+        cond.push_str(" AND account = ?");
+        args.push(acc.clone().into());
+    }
+    if let Some(v) = mq.venue {
+        cond.push_str(" AND venue = ?");
+        args.push(v.as_str().to_string().into());
+    }
+    let sql = format!("SELECT {} FROM fills WHERE ts >= ? AND ts < ?{cond} ORDER BY ts LIMIT {}", crate::store::FILL_COLS, MAX_REPORT_FILLS + 1);
+    let fills: Vec<FillRec> = a.history.read(move |c| c.prepare(&sql)?.query_map(params_from_iter(args), crate::store::row_fill)?.collect()).await?;
+    if fills.len() > MAX_REPORT_FILLS {
+        return Err(bad(format!("more than {MAX_REPORT_FILLS} fills in the range: a shorter one, or an account or venue")));
+    }
+    let r = tokio::task::spawn_blocking(move || crate::markouts::report_over(&fills, &mq, from, to, bucket))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], crate::protocol::encode(&r)).into_response())
 }
 
 // ================================ catalog ================================
@@ -819,7 +851,7 @@ async fn catalog(State(a): State<Arc<Agent>>) -> Result<Response, ApiError> {
             { "path": "/api/agent/pnl", "params": "from, to (default 7 d), step (s: 60 300 900 3600 14400 86400; default 3600), format", "means": "The desk's P&L per bar as changes: pnl = mm + inventory_pnl + hedge + rebates + other, with fills, volume and the levels at the bar's end" },
             { "path": "/api/agent/fills", "params": "from, to, symbol, venue (spot|usdm|...), account, side (buy|sell), limit (default 50000, max 200000), format", "means": "Every fill with its fee, edge, the mark market making counts, raw / net / fast markouts at 1 10 60 300 s, toxicity, and the price path (JSON)" },
             { "path": "/api/agent/events", "params": "from, to (default 7 d)", "means": "Alerts raised, transfers, distributions (airdrops, rebates), and changes to what a series means" },
-            { "path": "/api/agent/markouts", "params": "account, venue, side, ref (net|fast|raw), weight (notional|fill), h (s)", "means": "Today's markout curves and distribution, as the Analysis page has them" },
+            { "path": "/api/agent/markouts", "params": "account, venue, side, ref (net|fast|raw), weight (notional|fill), h (s); from, to, bucket (s) for a past range", "means": "The Analysis page's report: the price path around the fills (all, buys, sells, the reference's move), the distribution at h, markout through the range per bucket, and per instrument (fills, notional, edge, markout at each horizon, SE, adverse share, markout PnL). Today's without from / to; any range with them (100k fills at most, about a week)" },
             { "path": "/api/agent/klines", "params": "symbol, venue, interval (1m 5m 15m 1h 4h 1d ...), from, to (epoch ms)", "means": "An instrument's candles from the exchange (cached)" },
         ],
         "series": {
