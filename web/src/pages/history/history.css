@@ -514,3 +514,7 @@
 .hx-t td.sep {
   border-left: 1px solid var(--rule);
 }
+.hx-from {
+  font-size: 12px;
+  white-space: nowrap;
+}

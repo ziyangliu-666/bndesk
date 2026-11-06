@@ -246,6 +246,9 @@ export interface ExChartProps {
   onNearStart?: () => void;
   /** Called as the user moves the view with the time of its first bar, ms (load what goes with those bars). */
   onViewStart?: (t: number) => void;
+  /** Called whenever the view's first bar changes, the opening fit included, with its time (ms): a chart that
+   *  draws its lines from where the view starts. */
+  onFirstBar?: (t: number) => void;
   /** Controlled hidden keys (else per-id in the store). */
   hidden?: string[];
   onToggle?: (key: string) => void;
@@ -561,6 +564,10 @@ export function ExChart(p: ExChartProps) {
       setAway(cbs.current.view ? moved.current : ts.scrollPosition() < -2);
       if (r) setDense(ts.width() / Math.max(1, r.to - r.from) < 5);
       if (r && r.from < 40 && moved.current) cbs.current.onNearStart?.();
+      if (cbs.current.onFirstBar) {
+        const t = ts.getVisibleRange()?.from;
+        if (t != null) cbs.current.onFirstBar((t as number) * 1000);
+      }
       if (moved.current && cbs.current.onViewStart) {
         const t = ts.getVisibleRange()?.from;
         if (t != null) cbs.current.onViewStart((t as number) * 1000);

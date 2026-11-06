@@ -3,7 +3,7 @@
 // P&L as a line with its parts running on the same basis and the same scale over the whole plot (market making,
 // inventory PnL, hedge, rebates: at any bar the parts add up to it), a chip per part under the chart drawing or
 // hiding it (remembered). Volume under both.
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ExChart, rgba, useExPref, type ExLegendItem, type ExPoint, type ExOhlc, type ExSeries, type ExView } from "../../components/ex";
 import { maskFormat } from "../../mask";
 import { REF_LINE } from "../../components/ex/palette";
@@ -80,6 +80,15 @@ export function DeskChart({
   const d = useDesk();
   const [mode, setMode] = useExPref<string>("hist", "view", "candles", ["candles", "parts"]);
   const split = mode === "parts";
+  // Breakdown draws every line from 0 at the view's first bar (as a compare chart does), so the scale fits what
+  // the view shows: from the range's start, a part that ran far off it (rebates up, market making down over a
+  // month) would squeeze a couple of days into a flat band. Moving the view moves the 0.
+  const [first, setFirst] = useState<number | null>(null);
+  const base = useMemo(() => {
+    if (!split || first == null) return null;
+    const i = rows.findIndex((r) => r.t >= first);
+    return i > 0 ? rows[i]! : null;
+  }, [split, first, rows]);
   // the parts this desk has, in the side's order (with no split kept: the trading P&L)
   const parts = useMemo(
     () => (d.mm ? (["mm", "inv"] as Part[]) : (["pi"] as Part[])).concat(d.hedge ? ["hedge"] : [], d.rebates ? ["reb"] : []),
@@ -98,7 +107,7 @@ export function DeskChart({
             width: 2.5,
             format: sgn,
             signColor: false,
-            data: points("l", rows, (r) => ({ time: r.t, value: r.cum })),
+            data: rows.map((r) => ({ time: r.t, value: r.cum - (base?.cum ?? 0) })),
           } as ExSeries)
         : {
         key: "k",
@@ -124,7 +133,10 @@ export function DeskChart({
           format: sgn,
           signColor: false,
           // running from where the range starts, as the candles; a bar before the split was kept has none
-          data: points("p." + k, rows, (r) => ({ time: r.t, value: r.run[k] })),
+          data: rows.map((r) => {
+            const v = r.run[k];
+            return { time: r.t, value: v == null ? null : v - (base?.run[k] ?? 0) };
+          }),
         }),
       ),
       {
@@ -139,7 +151,7 @@ export function DeskChart({
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, hide, parts, split],
+    [rows, hide, parts, split, base],
   );
   const chips = useMemo(
     () => (split ? parts.map((k) => ({ key: k, label: PART_META[k].long, color: PART_META[k].color, stroke: PART_META[k].style })) : false),
@@ -184,6 +196,14 @@ export function DeskChart({
       legendTime={legendTime}
       markers={markers}
       onBarClick={onBarClick}
+      onFirstBar={split ? setFirst : undefined}
+      toolbarLeft={split && base ? <span className="hx-from muted">{`From ${fromLabel(base.t, interval)}`}</span> : undefined}
     />
   );
+}
+
+/** Where Breakdown's lines start, as the toolbar says it: a date for days and weeks, else date and time (UTC). */
+function fromLabel(t: number, iv: HInterval): string {
+  const d = new Date(t).toISOString();
+  return iv === "1d" || iv === "1w" ? d.slice(0, 10) : `${d.slice(5, 10)} ${d.slice(11, 16)}`;
 }
