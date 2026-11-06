@@ -207,6 +207,8 @@ struct Quotes {
 #[derive(Debug, Default)]
 pub struct MmSplit {
     pub total: f64,
+    /// the same against the reference fair (`FillRec::fair_bps`), the own-mid mark where a fill has no reference
+    pub fair: f64,
     pub spread: f64,
     pub by_base: HashMap<String, f64>,
     pub by_hour: HashMap<i64, f64>,
@@ -230,9 +232,12 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, rol
         let fee = if f.fee != 0.0 && !f.fee_asset.is_empty() { f.fee * m.asset_price(&f.fee_asset).unwrap_or(0.0) } else { 0.0 };
         let notional = f.notional() * qpx;
         let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
-        let gross = match f.mark_at(h, now) {
-            MarkAt::Bps(bps) => notional * bps / 1e4,
-            MarkAt::Young => mid.map_or(0.0, |x| s * f.qty * (x - f.price) * qpx),
+        let (gross, fair) = match f.mark_at(h, now) {
+            MarkAt::Bps(bps) => (notional * bps / 1e4, notional * f.fair_bps(h).unwrap_or(bps) / 1e4),
+            MarkAt::Young => {
+                let g = mid.map_or(0.0, |x| s * f.qty * (x - f.price) * qpx);
+                (g, g)
+            }
             MarkAt::Unmarked => {
                 out.unmarked += 1;
                 out.unmarked_notional += notional;
@@ -241,6 +246,7 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, rol
         };
         let v = gross - fee;
         out.total += v;
+        out.fair += fair - fee;
         out.spread += f.edge_bps.map_or(0.0, |e| notional * e / 1e4) - fee;
         *out.by_base.entry(base).or_insert(0.0) += v;
         *out.by_hour.entry(f.ts - f.ts.rem_euclid(3_600_000)).or_insert(0.0) += v;
@@ -766,6 +772,32 @@ mod tests {
         let s = mm_split(&mut m, &[marked, back], 60, now, &Roles::default(), |_| true);
         assert_relative_eq!(s.total, 0.05 - 0.02, epsilon = 1e-9);
         assert_eq!((s.unmarked, s.unmarked_notional), (0, 0.0));
+    }
+
+    /// Market making against the reference fair: the mid 10 s before the fill moved as the reference moved to
+    /// t + h, beside the own-mid mark; a fill without the reference keeps its own-mid mark in both.
+    #[test]
+    fn mm_fair_marks_against_the_reference_moved_from_before_the_fill() {
+        let mut info: Info = HashMap::new();
+        info.insert(Venue::SPOT, HashMap::from([("AAAUSDT".to_string(), SymbolInfo::new("AAA", "USDT", 0.0))]));
+        let mut m = Market::new(info, 120.0, 50.0);
+        m.ensure("AAAUSDT", Venue::SPOT, None);
+        m.on_book(Venue::SPOT, &Book::new("AAAUSDT", 12.0, 12.0, Some(1)));
+        let now = 10 * 3_600_000;
+        // sold at 10.0; our asks pulled the mid to 9.95 at t + 60 s (−50 bps own-mid), while the mid 10 s before
+        // was 10.02 and the reference rose 0.1 % since: fair 10.02 · 1.001 = 10.03002, −30.02 bps
+        let mut sold = FillRec::new("s", 0, "a", "AAAUSDT", Venue::SPOT, Side::Sell, 10.0, 1.0);
+        sold.mk_raw.0[2] = Some(50.0);
+        (sold.pm[0], sold.pr[0], sold.pr[crate::fills::PATH_OF_H[2]]) = (Some(10.02), Some(100.0), Some(100.1));
+        assert_relative_eq!(sold.fair_bps(2).unwrap(), -30.02, epsilon = 1e-9);
+        let mut bare = FillRec::new("b", 1000, "a", "AAAUSDT", Venue::SPOT, Side::Buy, 10.0, 1.0);
+        bare.mk_raw.0[2] = Some(-10.0);
+        assert_eq!(bare.fair_bps(2), None);
+        let mut ff = sold.clone();
+        ff.mk_raw.0[2] = Some(-50.0);
+        let s = mm_split(&mut m, &[ff, bare], 60, now, &Roles::default(), |_| true);
+        assert_relative_eq!(s.total, -0.05 - 0.01, epsilon = 1e-9);
+        assert_relative_eq!(s.fair, -0.03002 - 0.01, epsilon = 1e-9);
     }
 
     /// USDCUSDT (and any pair of two stablecoins) is a conversion: out of market making, the fill aggregate

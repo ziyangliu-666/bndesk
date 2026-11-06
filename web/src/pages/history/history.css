@@ -514,3 +514,14 @@
 .hx-t td.sep {
   border-left: 1px solid var(--rule);
 }
+
+/* a figure beside the one before it (market making against the reference fair), not a part of the sum: muted */
+.hx-t th.sub {
+  font-style: italic;
+}
+.hx-t tbody td.sub {
+  color: var(--ink-2);
+}
+.hx-t td.sub .hx-spark path:not(.dot):not(.zero) {
+  stroke-dasharray: 2 2;
+}

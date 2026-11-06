@@ -110,6 +110,7 @@ export interface DayPnl {
   rebates: number | null;
   other: number | null;
   mm: number | null;
+  mm_fair: number | null; // market making against the reference fair
   inventory: number | null;
 }
 
@@ -140,6 +141,7 @@ export interface PnlSummary {
   realized_old: number; // sells matched to the inventory held at the day start, against its opening price
   floating: number; // the inventory left, at its price now against its cost
   mm: number; // market making: Σ s q (M(t+60s) − p) − fee, own mid
+  mm_fair: number; // the same against a reference fair: M(t−10s) · R(t+60s) / R(t−10s), our quotes' pull on the mid left out
   mm_spread: number; // the same at h = 0 against the fair at the fill
   inventory: number; // trading − mm
   funding_day: number; // of inventory: the funding of the perps traded

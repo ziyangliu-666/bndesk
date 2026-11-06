@@ -169,6 +169,16 @@ impl FillRec {
         }
     }
 
+    /// Horizon j's mark (bps) against a reference fair instead of the instrument's own mid: the mid 10 s before
+    /// the fill moved as the reference moved since, M(t − 10 s) · R(t + h) / R(t − 10 s). Our own quotes' pull on
+    /// the instrument's mid after the fill (asks resting inside the spread, the mid back once they fill) is left
+    /// out. None without the reference at both ends or the mid before the fill.
+    pub fn fair_bps(&self, j: usize) -> Option<f64> {
+        let (m0, r0) = (self.pm[0].filter(|x| *x > 0.0)?, self.pr[0].filter(|x| *x > 0.0)?);
+        let rh = self.pr[PATH_OF_H[j]].filter(|x| *x > 0.0)?;
+        Some(sign(self.side) * (m0 * rh / r0 / self.price - 1.0) * 1e4)
+    }
+
     /// Klines were asked for horizon j's price and had none.
     pub fn unpriceable(&self, j: usize) -> bool {
         self.bf & (1 << (BF_NONE + j)) != 0

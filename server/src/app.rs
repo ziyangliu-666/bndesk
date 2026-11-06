@@ -164,6 +164,8 @@ pub struct DayReal {
     pub inventory: Option<f64>,
     #[serde(default)]
     pub rebates: Option<f64>,
+    #[serde(default)]
+    pub mm_fair: Option<f64>,
 }
 
 /// Accounts' day PnL now against their last points: large moves that cancel across accounts are a
@@ -704,6 +706,7 @@ impl Desk {
         let mut expo = exposure(&self.cfg, &m, &accounts, bv, self.betas.is_some(), CLOCK.now());
         let mut ps = pnl.summary(&mut m);
         ps.mm = mm.total;
+        ps.mm_fair = mm.fair;
         ps.mm_spread = mm.spread;
         ps.mm_unmarked_fills = mm.unmarked;
         ps.mm_unmarked_notional = mm.unmarked_notional;
@@ -761,6 +764,7 @@ impl Desk {
                 mm: Some(summary.pnl.mm),
                 inventory: Some(summary.pnl.inventory),
                 rebates: Some(rebates),
+                mm_fair: Some(summary.pnl.mm_fair),
             });
         }
         for d in days.iter_mut() {
@@ -776,6 +780,7 @@ impl Desk {
                 d.rebates = r.rebates;
                 d.other = r.other;
                 d.mm = r.mm;
+                d.mm_fair = r.mm_fair;
                 d.inventory = r.inventory;
             }
         }
@@ -1042,6 +1047,7 @@ impl Desk {
             hedge,
             mm: some(s.pnl.mm),
             rebates: some(s.rebates),
+            mm_fair: some(s.pnl.mm_fair),
         }));
         let mut rows = vec![];
         {

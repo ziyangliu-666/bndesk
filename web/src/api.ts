@@ -9,6 +9,7 @@ export interface HistBar {
   c: number;
   pi: number | null;
   mm: number | null; // market making, cumulative like pi
+  mm_fair?: number | null; // market making against the reference fair, cumulative like pi (null before it was kept)
   realized: number | null;
   hedge: number | null;
   rebates: number | null; // market-maker rebates, cumulative like pi

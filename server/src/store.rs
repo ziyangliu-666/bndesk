@@ -33,22 +33,23 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 14] = [
+pub const MIGRATIONS: [(&str, &str, &str); 15] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"), ("fills", "path", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
     ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"), ("fills", "bf", "INTEGER"),
+    ("equity", "mm_fair", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
     ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
-    realized, floating, hedge, mm, rebates";
+    realized, floating, hedge, mm, rebates, mm_fair";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
 pub(crate) const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
     maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
-    futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    futures_notional, trading, hedged, realized, floating, hedge, mm, rebates, mm_fair) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
     volume, covered_s, backfilled_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
 // a record is written when first seen and again once valued: the value is set once, the rest never changes
@@ -185,6 +186,7 @@ pub struct EquityRow {
     pub hedge: Option<f64>,
     pub mm: Option<f64>,
     pub rebates: Option<f64>,
+    pub mm_fair: Option<f64>,
 }
 
 /// pnl_hours row; `backfilled_s` is NULL in rows written before that column existed.
@@ -537,6 +539,7 @@ impl Store {
                     hedge: f64_opt(r, 11)?,
                     mm: f64_opt(r, 12)?,
                     rebates: f64_opt(r, 13)?,
+                    mm_fair: f64_opt(r, 14)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -670,7 +673,7 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::Equity(e)) => {
                 c.prepare_cached(SQL_EQUITY)?.execute(params![e.t, e.account, e.equity, e.pnl_day, e.markout_pnl,
                                                               e.inventory, e.futures_notional, e.trading, e.hedged,
-                                                              e.realized, e.floating, e.hedge, e.mm, e.rebates])?;
+                                                              e.realized, e.floating, e.hedge, e.mm, e.rebates, e.mm_fair])?;
             }
             Item::Row(Row::PnlHour(h)) => {
                 c.prepare_cached(SQL_HOUR)?.execute(params![h.t, h.trading, h.hedged, h.factor, h.ref_hedge,

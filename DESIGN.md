@@ -298,7 +298,13 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   are stored with the fill (`bf` bit j; bit 4 + j: klines had no price, not asked again). A fill past h + grace
   with no price at t + h is left out of mm and mm_spread (its move counts in inventory) and counted in
   mm_unmarked_fills / mm_unmarked_notional; mm_spread the same at h = 0 against the fair at the fill; inventory =
-  Π − mm (the opening inventory and each fill's position from h on). Day PnL = mm + inventory + hedge
+  Π − mm (the opening inventory and each fill's position from h on). mm_fair, beside mm and in no sum: the same
+  marks against a reference fair, M(t − 10 s) · R(t + h) / R(t − 10 s) for M(t + h) (the instrument's mid 10 s
+  before the fill moved as its reference, the leader perp, moved; the fill's stored path), so the pull of our own
+  quotes on the instrument's mid after a fill (asks resting inside the spread, the mid back once they fill) is not
+  charged to market making; a fill without the reference at both ends keeps its own-mid mark. Kept in the desk
+  equity rows (`mm_fair`) and `kv dayreal:<day>` from 2026-11-06; History's day table shows it muted beside Market
+  making ("MM vs fair") and its chart has it as a chip, off by default. Day PnL = mm + inventory + hedge
   legs + rebates + other. Rebates: today's distributions whose description has "MM Rebate", at the asset's
   price when credited; other distributions (airdrops, rewards) are kept in `dividends` and stay in other.
   Days before 2026-10-17 valued such fills at the mid now; `desk recompute-mm --from D --to D [--dry-run]`
@@ -388,7 +394,7 @@ interface Snapshot {
           factor: number; factor_se: number | null; fills: number; volume: number;
           covered_s: number; backfilled_s: number;        // last 60, incl. today; seconds booked live / from klines
           pnl_day: number | null; realized: number | null; realized_old: number | null; floating: number | null;
-          hedge: number | null; rebates: number | null; other: number | null; mm: number | null; inventory: number | null }[];  // the day's real-money split at its end (kv dayreal:<day>);
+          hedge: number | null; rebates: number | null; other: number | null; mm: number | null; mm_fair: number | null; inventory: number | null }[];  // the day's real-money split at its end (kv dayreal:<day>);
                                                            // where kept, a past day's trading is its closed-form Π
   hours: { t: number; trading: number; hedged: number; factor: number; fills: number; volume: number;
            mm: number; inventory: number }[];   // today's UTC hours
@@ -437,7 +443,7 @@ interface Summary {
          ref_hedge: number; factor_hedge: number;                                                // H, Hm
          liquidation: number; covered_s: number; backfilled_s: number;                           // haircut now; seconds booked live / from klines
          realized: number; realized_old: number; floating: number;                               // Π split FIFO, see below
-         mm: number; mm_spread: number; inventory: number; funding_day: number;                                    // Π = mm + inventory, see below
+         mm: number; mm_fair: number; mm_spread: number; inventory: number; funding_day: number;                   // Π = mm + inventory, see below
          mm_unmarked_fills: number; mm_unmarked_notional: number };                              // fills past h without a price at t + h: out of mm
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
@@ -505,6 +511,7 @@ interface HistoryBar {
   t: number;                                // bar start
   o: number; h: number; l: number; c: number;   // day PnL summed across days since `from` (`per=day`: as stored, restarting each day)
   pi: number | null; realized: number | null; mm: number | null; hedge: number | null;   // the same for Π, realized + realized_old, hedge legs; bar close
+  mm_fair: number | null;                   // the same for mm against the reference fair (null in rows before 2026-11-06)
   rebates: number | null;                   // the same for the rebates
   inventory: number | null; futures: number | null;   // last in the bar: inventory value, futures notional
   equity: number | null;                    // last in the bar: equity of all accounts

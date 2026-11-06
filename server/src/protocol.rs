@@ -302,6 +302,9 @@ pub struct PnlSummary {
     /// market making: Σ s q (M(t + h) − p) − fee over today's fills, the instrument's own mid h after each
     /// fill (mid now until h has passed; a fill past h with no price at t + h is left out)
     pub mm: f64,
+    /// the same against a reference fair: the mid 10 s before each fill moved as the reference (leader perp)
+    /// moved to t + h, so our own quotes' pull on the mid is left out; the own-mid mark where a fill has none
+    pub mm_fair: f64,
     /// the same at h = 0 against the fair at the fill: the spread alone
     pub mm_spread: f64,
     /// trading − mm: the opening inventory and each fill's position from h on, at the instrument's mid
@@ -678,6 +681,7 @@ pub struct DayPnl {
     pub rebates: Option<f64>,
     pub other: Option<f64>,
     pub mm: Option<f64>,
+    pub mm_fair: Option<f64>,
     pub inventory: Option<f64>,
 }
 
@@ -808,6 +812,8 @@ pub struct HistoryBar {
     pub realized: Option<f64>,
     pub mm: Option<f64>,
     pub hedge: Option<f64>,
+    /// market making against the reference fair (null in rows from before it was kept)
+    pub mm_fair: Option<f64>,
     pub rebates: Option<f64>,
     pub inventory: Option<f64>,
     pub futures: Option<f64>,
