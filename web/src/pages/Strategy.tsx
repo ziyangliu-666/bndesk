@@ -241,9 +241,11 @@ function CapitalChart({ hide }: { hide: boolean }) {
         kind: "line" as const,
         label: acct,
         color: ACCOUNT_SERIES[j % ACCOUNT_SERIES.length],
-        width: 1.5,
+        width: 1.25,
         format: (v: number) => pct(v),
         lastValue: false,
+        // room at the top for the legend (two lines with five accounts): the lines stay under it
+        margins: { top: 0.3, bottom: 0.04 },
         data: asc(
           s.t.map((t, i) => {
             const f = sumAt(e.free, i),
@@ -286,6 +288,9 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
   const now = useNow(1000) + skew;
   const rows = useMemo(() => quoteRows(latest?.payload?.quotes ?? [], latest?.payload?.venues), [latest]);
   const c = quoteCounts(rows);
+  // Why and Since say something only for a side that is stopped or waiting: off while no row has them
+  const why = rows.some((r) => r.why),
+    since = rows.some((r) => r.since != null);
   return (
     <section className="ops-panel st-quotes">
       <header className="ops-head">
@@ -301,8 +306,8 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
               <tr>
                 <th className="l">Symbol</th>
                 <th className="l">State</th>
-                <th className="l">Why</th>
-                <th title="For how long">Since</th>
+                {why && <th className="l">Why</th>}
+                {since && <th title="For how long">Since</th>}
                 <th title="Working bid, price × quantity">Bid</th>
                 <th title="Working ask, price × quantity">Ask</th>
                 <th title="Working ask − bid over mid, bps">Spread</th>
@@ -318,8 +323,8 @@ function QuotesTable({ latest, hide }: { latest: Latest | null; hide: boolean })
                     {r.venue && <span className="ops-perp">{r.venue}</span>}
                   </td>
                   <td className={"l " + (r.kind === "blocked" ? "warn-text" : r.kind === "idle" ? "muted" : "")} title={r.kind === "idle" ? "The engine wants neither side now (no budget, or nothing to sell)" : undefined}>{r.state}</td>
-                  <td className="l muted st-why">{r.why ?? ""}</td>
-                  <td className="fig">{r.since != null ? dur(now - r.since) : ""}</td>
+                  {why && <td className="l muted st-why">{r.why ?? ""}</td>}
+                  {since && <td className="fig">{r.since != null ? dur(now - r.since) : ""}</td>}
                   <td className="fig"><QuoteSide q={r.bid} hide={hide} /></td>
                   <td className="fig"><QuoteSide q={r.ask} hide={hide} /></td>
                   <td className="fig">{r.spread == null ? "--" : num(r.spread, 1)}</td>

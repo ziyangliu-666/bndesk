@@ -67,7 +67,16 @@
   grid-template-rows: auto minmax(0, 1fr);
 }
 .st-quoting > .st-side {
-  grid-template-rows: auto auto minmax(220px, 1fr);
+  grid-template-rows: auto auto minmax(240px, 1fr);
+}
+/* the side column's tables keep their full height (a short window scrolls the column, never stacks one panel over
+   the next); the chart takes what is left, 240 px at least */
+.st-side {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.st-side > .ops-panel:not(.ops-chart-panel):not(.st-rebal) {
+  min-height: auto;
 }
 .st-quotes {
   min-height: 0;

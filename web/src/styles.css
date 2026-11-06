@@ -672,3 +672,8 @@ kbd {
   position: relative;
   inset: auto;
 }
+
+/* a click's focus draws no ring (main.tsx sets data-pointer until the keyboard moves focus) */
+html[data-pointer] :focus-visible {
+  outline: none;
+}

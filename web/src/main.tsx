@@ -21,6 +21,16 @@ window.addEventListener("vite:preloadError", (e) => {
 
 preloadFirst();
 
+// Focus rings are for the keyboard: from a click until Tab or an arrow moves focus, `html[data-pointer]` turns them
+// off (Chrome rings a clicked tab again once any key is pressed, a copy for one, and keeps it there)
+{
+  const root = document.documentElement;
+  document.addEventListener("pointerdown", () => (root.dataset.pointer = ""), { capture: true, passive: true });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Tab" || e.key.startsWith("Arrow")) delete root.dataset.pointer;
+  }, { capture: true });
+}
+
 if (import.meta.env.VITE_MOCK === "1") {
   void import("./mock").then(({ startMock }) => {
     // Round-trip through JSON so the mock exercises the same shapes as the wire.
