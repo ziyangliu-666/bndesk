@@ -117,6 +117,8 @@ pub struct AuthInner {
     pub fails: Mutex<HashMap<String, (u32, u32, f64)>>, // ip -> (misses, locks, locked until)
     pub gate: tokio::sync::Mutex<()>,
     pub behind_fly: bool,
+    /// `BNDESK_READ_TOKEN`: a bearer for `/api/agent/*` only (GET), beside the password's sessions.
+    pub agent: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -155,7 +157,23 @@ impl Auth {
             fails: Mutex::new(HashMap::new()),
             gate: tokio::sync::Mutex::new(()),
             behind_fly: std::env::var("FLY_APP_NAME").is_ok_and(|v| !v.is_empty()),
+            agent: std::env::var("BNDESK_READ_TOKEN").ok().filter(|t| t.len() >= 32).map(String::into_bytes),
         })))
+    }
+
+    /// With `token` as the agent's read token instead of the environment's.
+    pub fn with_agent(mut self, token: Option<&str>) -> Auth {
+        if let Some(a) = Arc::get_mut(&mut self.0) {
+            a.agent = token.map(|t| t.as_bytes().to_vec());
+        }
+        self
+    }
+
+    /// The request's bearer against the agent's token: None without a bearer, else whether it is the token.
+    fn agent_bearer(&self, headers: &HeaderMap) -> Option<bool> {
+        let got = headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")?;
+        let want = self.agent.as_deref()?;
+        Some(got.len() == want.len() && bool::from(got.as_bytes().ct_eq(want)))
     }
 
     // sessions
@@ -397,6 +415,17 @@ pub async fn middleware(State(auth): State<Auth>, req: Request, next: Next) -> R
     if PUBLIC.contains(&path) || path.starts_with("/login") {
         return next.run(req).await;
     }
+    // an agent's read: its bearer opens /api/agent/* (GET) and nothing else; without one, the session as for a page
+    if (path == "/api/agent" || path.starts_with("/api/agent/")) && req.headers().contains_key(header::AUTHORIZATION) {
+        return match auth.agent_bearer(req.headers()) {
+            Some(true) if req.method() == axum::http::Method::GET => {
+                tracing::info!("agent read {}", req.uri());
+                next.run(req).await
+            }
+            Some(true) => text(StatusCode::METHOD_NOT_ALLOWED, "read only"),
+            _ => text(StatusCode::UNAUTHORIZED, "bad token"),
+        };
+    }
     let token = get_cookie(req.headers(), COOKIE).map(str::to_string);
     if !auth.valid(token.as_deref()) {
         if path.starts_with("/api") || path == "/ws" {
@@ -588,6 +617,45 @@ mod tests {
             .unwrap()
             .1
             .to_string()
+    }
+
+    /// The agent's bearer opens /api/agent/* for GET and nothing else; a wrong one is refused, none falls back to
+    /// the session.
+    #[tokio::test]
+    async fn agent_token_opens_only_the_agent_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tok = "t".repeat(40);
+        let au = Auth::new(&hash_password("pw"), &tmp.path().join("d.db")).unwrap().with_agent(Some(&tok));
+        async fn page(_: Request) -> &'static str {
+            "desk"
+        }
+        let app = Router::new()
+            .route("/api/agent", get(page))
+            .route("/api/agent/series", get(page).post(page))
+            .route("/api/snapshot", get(page))
+            .route("/api/agentx", get(page))
+            .layer(axum::middleware::from_fn_with_state(au.clone(), middleware))
+            .with_state(au);
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = l.local_addr().unwrap().to_string();
+        tokio::spawn(async move { axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+        let c = reqwest::Client::new();
+        let get = |p: &str, b: Option<&str>| {
+            let r = c.get(format!("http://{host}{p}"));
+            match b {
+                Some(b) => r.bearer_auth(b),
+                None => r,
+            }
+            .send()
+        };
+        assert_eq!(get("/api/agent", Some(&tok)).await.unwrap().status(), 200);
+        assert_eq!(get("/api/agent/series", Some(&tok)).await.unwrap().status(), 200);
+        assert_eq!(get("/api/agent/series", Some("wrong")).await.unwrap().status(), 401);
+        assert_eq!(get("/api/agent/series", None).await.unwrap().status(), 401);
+        assert_eq!(get("/api/snapshot", Some(&tok)).await.unwrap().status(), 401);
+        assert_eq!(get("/api/agentx", Some(&tok)).await.unwrap().status(), 401);
+        let r = c.post(format!("http://{host}/api/agent/series")).bearer_auth(&tok).send().await.unwrap();
+        assert_eq!(r.status(), 405);
     }
 
     #[tokio::test]

@@ -40,7 +40,7 @@ const CHUNK: i64 = 1000;
 const CACHE_MAX: usize = 512;
 const DAY: i64 = 86_400_000;
 
-type ApiError = (StatusCode, String);
+pub(crate) type ApiError = (StatusCode, String);
 
 fn bad(msg: impl Into<String>) -> ApiError {
     (StatusCode::BAD_REQUEST, msg.into())
@@ -200,6 +200,23 @@ impl Api {
             a.keep_ms = (keep_days * DAY as f64) as i64;
         }
         self
+    }
+
+    /// The desk's bars over [from, to) (`step_s` one of `STEPS`), as `/api/history` gives them: for `/api/agent`.
+    pub(crate) async fn bars_in(&self, from: i64, to: i64, step_s: i64) -> Result<Vec<P::HistoryBar>, ApiError> {
+        let sm = step_s * 1000;
+        let dsm = self.day_start_min;
+        let (rows, flows) = self.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
+        Ok(bars(&rows, &flows, sm, dsm, false))
+    }
+
+    /// `f` on a read-only connection to the desk's db, off the async threads: for `/api/agent`.
+    pub(crate) async fn read<R: Send + 'static>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static) -> Result<R, ApiError> {
+        blocking(self, f).await
+    }
+
+    pub fn day_start_min(&self) -> i64 {
+        self.day_start_min
     }
 
     /// Reads the history into memory ahead of the first request (the first read is the slow one).
@@ -618,6 +635,7 @@ pub fn routes(api: Arc<Api>) -> Router {
         .route("/api/history", get(history))
         .route("/api/fills", get(fills_handler))
         .route("/api/klines", get(klines))
+        .route("/api/agent/klines", get(klines))
         .route("/api/ticker", get(ticker))
         .with_state(api)
 }

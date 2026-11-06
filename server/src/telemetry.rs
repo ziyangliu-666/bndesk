@@ -30,6 +30,9 @@ use serde_json::{Map, Value, json};
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
+/// Sampled values by key, one per sample time (None where a sample lacks the key).
+pub type Columns = BTreeMap<String, Vec<Option<f64>>>;
+
 pub const INGEST_PATH: &str = "/api/ingest/engine";
 /// Every sample this long; older ones thinned to one per `THIN_MS`.
 const KEEP_FINE_MS: i64 = 7 * 86_400_000;
@@ -144,6 +147,14 @@ impl Telemetry {
 
     /// The samples in [from, to] for `keys` (a key, or `prefix*`), thinned to one per `step` ms (the last in each).
     pub fn series(&self, from: i64, to: i64, step: i64, keys: &[String]) -> Result<Value> {
+        let (ts, cols) = self.samples(from, to, step, keys)?;
+        let v: Map<String, Value> = cols.into_iter().map(|(k, c)| (k, json!(c))).collect();
+        Ok(json!({ "t": ts, "v": v }))
+    }
+
+    /// The samples in [from, to] (the last of each `step` ms bucket when `step` > 0): their times, and a column
+    /// per key (a key ending in `*` is a prefix: every key under it that a sample has).
+    pub fn samples(&self, from: i64, to: i64, step: i64, keys: &[String]) -> Result<(Vec<i64>, Columns)> {
         let rows: Vec<(i64, Vec<u8>)> = {
             let c = Connection::open_with_flags(&self.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             // one row per bucket chosen in SQL (the last): only those are read and inflated
@@ -195,8 +206,10 @@ impl Telemetry {
                 col.push(m.get(k).copied());
             }
         }
-        let v: Map<String, Value> = cols.into_iter().map(|(k, c)| (k, json!(c))).collect();
-        Ok(json!({ "t": ts, "v": v }))
+        for col in cols.values_mut() {
+            col.resize(ts.len(), None);
+        }
+        Ok((ts, cols))
     }
 
     pub fn latest(&self) -> Option<(i64, Arc<Value>)> {

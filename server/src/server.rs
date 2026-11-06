@@ -530,6 +530,18 @@ fn edits(old: &Value, new: &Value) -> Option<Value> {
 #[derive(Clone)]
 pub struct HubHandle(Arc<Shared>);
 
+impl HubHandle {
+    /// The full snapshot as `/api/snapshot` sends it (None while the desk does not answer).
+    pub async fn snapshot_json(&self) -> Option<Bytes> {
+        self.0.snapshot_full().await
+    }
+
+    /// Today's markouts as `/api/markouts` sends them.
+    pub async fn markouts(&self, q: crate::markouts::Query) -> Option<Bytes> {
+        self.0.markouts(q).await
+    }
+}
+
 async fn client(shared: Arc<Shared>, mut ws: WebSocket) {
     let mut rx = shared.tx.subscribe(); // before the snapshot, so nothing between falls through
     let mut closing = shared.closing.subscribe();

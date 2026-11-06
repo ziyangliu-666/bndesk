@@ -23,6 +23,16 @@ pushed every 125 ms. Libraries: `tokio-tungstenite` and `reqwest` (WebSocket and
 `rusqlite` (SQLite WAL) in a writer thread. History reads run on blocking threads with their own
 read-only connections.
 
+Agents read all of it through `/api/agent/*` (docs/agent-api.md), read-only:
+- `/series`: desk, account, capital and engine series on one grid;
+- `/pnl`: the P&L split per bar;
+- `/fills`: every fill with its marks and path;
+- `/events`: alerts, transfers, distributions and definition changes;
+- `/state`: now;
+- `GET /api/agent`: the catalog.
+
+Access is the session cookie, or a bearer `BNDESK_READ_TOKEN` (32+ characters) that opens these paths only, GET only.
+
 ### Instruments
 
 Tracked instruments are the union of:
