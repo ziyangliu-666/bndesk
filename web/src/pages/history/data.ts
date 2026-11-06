@@ -53,7 +53,7 @@ function put(key: string, v: Loaded) {
 const same = (a: number | null, b: number | null) => (a == null || b == null ? a === b : Math.abs(a - b) < 1e-9);
 function sameBar(a: HistBar, b: HistBar): boolean {
   return (
-    a.t === b.t && same(a.o, b.o) && same(a.h, b.h) && same(a.l, b.l) && same(a.c, b.c) && same(a.pi, b.pi) && same(a.mm, b.mm) && same(a.mm_fair ?? null, b.mm_fair ?? null) &&
+    a.t === b.t && same(a.o, b.o) && same(a.h, b.h) && same(a.l, b.l) && same(a.c, b.c) && same(a.pi, b.pi) && same(a.mm, b.mm) &&
     same(a.hedge, b.hedge) && same(a.rebates, b.rebates) && same(a.realized, b.realized) && same(a.inventory, b.inventory) &&
     same(a.futures, b.futures) && a.volume === b.volume && a.fills === b.fills
   );
@@ -70,10 +70,10 @@ export function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
   const j = full.findIndex((b) => b.t === tail[0]!.t);
   if (j < 0) return full;
   const off: Record<string, number> = { c: full[j]!.o - tail[0]!.o };
-  for (const k of ["pi", "mm", "mm_fair", "realized", "hedge", "rebates"] as const) {
+  for (const k of ["pi", "mm", "realized", "hedge", "rebates"] as const) {
     for (let i = j; i < full.length - 1 && i - j < tail.length; i++) {
-      const a = full[i]![k] ?? null,
-        b = tail[i - j]![k] ?? null;
+      const a = full[i]![k],
+        b = tail[i - j]![k];
       if (a != null && b != null) {
         off[k] = a - b;
         break;
@@ -82,7 +82,7 @@ export function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
     // a series that starts inside the tail starts there in the full range too
     if (off[k] == null && full.slice(j).every((b) => b[k] == null)) off[k] = 0;
   }
-  const add = (v: number | null | undefined, k: string) => (v == null || off[k] == null ? null : v + off[k]!);
+  const add = (v: number | null, k: string) => (v == null || off[k] == null ? null : v + off[k]!);
   const c = off.c!;
   let changed = full.length !== j + tail.length;
   const out = full.slice(0, j);
@@ -95,7 +95,6 @@ export function joinTail(full: HistBar[], tail: HistBar[]): HistBar[] {
       c: b.c + c,
       pi: add(b.pi, "pi"),
       mm: add(b.mm, "mm"),
-      mm_fair: add(b.mm_fair, "mm_fair"),
       realized: add(b.realized, "realized"),
       hedge: add(b.hedge, "hedge"),
       rebates: add(b.rebates, "rebates"),
@@ -267,14 +266,12 @@ export interface Row {
 export interface Split {
   pi: number | null;
   mm: number | null;
-  /** market making against the reference fair (beside mm, not a part of the sum) */
-  mmf: number | null;
   inv: number | null;
   hedge: number | null;
   reb: number | null;
   other: number | null;
 }
-export const PARTS = ["pi", "mm", "mmf", "inv", "hedge", "reb", "other"] as const;
+export const PARTS = ["pi", "mm", "inv", "hedge", "reb", "other"] as const;
 export type Part = (typeof PARTS)[number];
 
 /** Week bars from day bars: running totals are taken at the week's last day, flows summed. */
@@ -290,7 +287,6 @@ export function weekBars(days: HistBar[]): HistBar[] {
       last.c = b.c;
       last.pi = b.pi ?? last.pi;
       last.mm = b.mm ?? last.mm;
-      last.mm_fair = b.mm_fair ?? last.mm_fair;
       last.realized = b.realized ?? last.realized;
       last.hedge = b.hedge ?? last.hedge;
       last.rebates = b.rebates ?? last.rebates;
@@ -327,7 +323,7 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
   let prevC = bars[0]?.o ?? 0;
   let base = prevC; // the running P&L at the current period's start
   let per = NaN;
-  const last: Record<"pi" | "mm" | "mmf" | "hedge" | "reb" | "other", number | null> = { pi: null, mm: null, mmf: null, hedge: null, reb: null, other: null };
+  const last: Record<"pi" | "mm" | "hedge" | "reb" | "other", number | null> = { pi: null, mm: null, hedge: null, reb: null, other: null };
   // Other = P&L − (Π + hedge + rebates), from the first bar that has all three (the P&L before it is not split)
   let otherOff: number | null = null;
   for (let i = 0; i < bars.length; i++) {
@@ -339,7 +335,6 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
     }
     const pi = b.pi,
       mm = b.mm,
-      mmf = b.mm_fair ?? null,
       hedge = b.hedge,
       reb = b.rebates;
     let other: number | null = null;
@@ -347,7 +342,7 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
       if (otherOff == null) otherOff = i > 0 ? bars[i - 1]!.c : b.o;
       other = b.c - otherOff - (pi + hedge + reb);
     }
-    const run: Split = { pi, mm, mmf, inv: pi != null && mm != null ? pi - mm : null, hedge, reb, other };
+    const run: Split = { pi, mm, inv: pi != null && mm != null ? pi - mm : null, hedge, reb, other };
     const d = (k: keyof typeof last, v: number | null) => {
       if (v == null) return null;
       const x = v - (last[k] ?? 0);
@@ -356,7 +351,7 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
     };
     const bpi = d("pi", pi);
     const bmm = d("mm", mm);
-    const bar: Split = { pi: bpi, mm: bmm, mmf: d("mmf", mmf), inv: bpi != null && bmm != null ? bpi - bmm : null, hedge: d("hedge", hedge), reb: d("reb", reb), other: d("other", other) };
+    const bar: Split = { pi: bpi, mm: bmm, inv: bpi != null && bmm != null ? bpi - bmm : null, hedge: d("hedge", hedge), reb: d("reb", reb), other: d("other", other) };
     const row: Row = {
       t: b.t,
       pnl: b.c - prevC,
@@ -426,8 +421,6 @@ export interface DayRow {
   /** The desk kept the day's split (mm, inv, hedge, reb, other). */
   split: boolean;
   mm: number | null;
-  /** market making against the reference fair (null on days from before it was kept) */
-  mmf: number | null;
   inv: number | null;
   hedge: number | null;
   reb: number | null;
@@ -454,7 +447,6 @@ export function dayRows(snapDays: DayPnl[] | undefined, dayBars: HistBar[], days
       pnl: r.pnl,
       split: r.bar.mm != null && r.bar.hedge != null && r.bar.reb != null,
       mm: r.bar.mm,
-      mmf: r.bar.mmf,
       inv: r.bar.inv,
       hedge: r.bar.hedge,
       reb: r.bar.reb,
@@ -477,7 +469,6 @@ export function dayRows(snapDays: DayPnl[] | undefined, dayBars: HistBar[], days
       pnl: d.pnl_day ?? bar?.pnl ?? null,
       split: d.pnl_day != null,
       mm: d.mm,
-      mmf: d.mm_fair ?? bar?.mmf ?? null,
       inv: d.inventory,
       hedge: d.hedge,
       reb: d.rebates,
@@ -577,7 +568,7 @@ export function useRangeDays(from: number | null): { rows: DayRow[]; todayDay: s
  *  the trading PnL) sum the days with a split only, as the chart's running lines do (they start where the split
  *  was first kept); the Day PnL sums every day that has one. */
 export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split"> {
-  const s = (k: "pnl" | "mm" | "mmf" | "inv" | "hedge" | "reb" | "other" | "pi") => {
+  const s = (k: "pnl" | "mm" | "inv" | "hedge" | "reb" | "other" | "pi") => {
     const xs = (k === "pnl" ? rows : rows.filter((r) => r.split)).map((r) => r[k]).filter((x): x is number => x != null);
     return xs.length ? xs.reduce((a, x) => a + x, 0) : null;
   };
@@ -585,7 +576,6 @@ export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split">
   return {
     pnl: s("pnl"),
     mm: s("mm"),
-    mmf: s("mmf"),
     inv: s("inv"),
     hedge: s("hedge"),
     reb: s("reb"),
@@ -599,20 +589,20 @@ export function sumDays(rows: DayRow[]): Omit<DayRow, "day" | "start" | "split">
 
 /** Each day's shape for the day table: its figures through the day, one point a bar (15 min), each from 0 at the
  *  day start (P&L and its parts) or the bar's own (volume). Keyed by the day's start. */
-export type SparkKey = "pnl" | "pi" | "mm" | "mmf" | "inv" | "hedge" | "reb" | "other" | "vol" | "fills";
+export type SparkKey = "pnl" | "pi" | "mm" | "inv" | "hedge" | "reb" | "other" | "vol" | "fills";
 export type DaySparks = Map<number, Record<SparkKey, (number | null)[]>>;
 export function daySparks(bars: HistBar[], dayStart: number): DaySparks {
   const out: DaySparks = new Map();
   let day = NaN;
   let cur: Record<SparkKey, (number | null)[]> | null = null;
-  const run = { pi: 0, mm: 0, mmf: 0, inv: 0, hedge: 0, reb: 0, other: 0 };
+  const run = { pi: 0, mm: 0, inv: 0, hedge: 0, reb: 0, other: 0 };
   for (const r of deskRows(bars, "day", dayStart, null)) {
     const d = dayOf(r.t, dayStart);
     if (d !== day) {
       day = d;
       // each line starts at 0 at the day start
-      out.set(d, (cur = { pnl: [0], pi: [0], mm: [0], mmf: [0], inv: [0], hedge: [0], reb: [0], other: [0], vol: [], fills: [] }));
-      run.pi = run.mm = run.mmf = run.inv = run.hedge = run.reb = run.other = 0;
+      out.set(d, (cur = { pnl: [0], pi: [0], mm: [0], inv: [0], hedge: [0], reb: [0], other: [0], vol: [], fills: [] }));
+      run.pi = run.mm = run.inv = run.hedge = run.reb = run.other = 0;
     }
     const add = (k: keyof typeof run, v: number | null) => (v == null ? null : (run[k] += v));
     cur!.pi.push(add("pi", r.bar.pi));
@@ -621,7 +611,6 @@ export function daySparks(bars: HistBar[], dayStart: number): DaySparks {
     cur!.fills.push(r.fills);
     cur!.pnl.push(r.c);
     cur!.mm.push(add("mm", r.bar.mm));
-    cur!.mmf.push(add("mmf", r.bar.mmf));
     cur!.inv.push(add("inv", r.bar.inv));
     cur!.hedge.push(add("hedge", r.bar.hedge));
     cur!.vol.push(r.volume);

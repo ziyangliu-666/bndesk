@@ -246,7 +246,7 @@ function history(from: number, to: number, step: number, perDay = false): Histor
       o = Math.min(Math.max(o, l), h);
       bars.push({
         t: ORIGIN + s * MIN, o, h: Math.max(h, c), l: Math.min(l, c), c,
-        pi: daySplit(e, desk.pi), realized: daySplit(e, desk.re), mm: daySplit(e, desk.mm), mm_fair: fairOf(daySplit(e, desk.mm), daySplit(e, desk.pi)), hedge: daySplit(e, desk.he), rebates: daySplit(e, desk.rb),
+        pi: daySplit(e, desk.pi), realized: daySplit(e, desk.re), mm: daySplit(e, desk.mm), hedge: daySplit(e, desk.he), rebates: daySplit(e, desk.rb),
         inventory: desk.inv[e]!, futures: desk.fut[e]!, equity: eq0 + tot(e), volume: vol, fills,
       });
       continue;
@@ -273,7 +273,6 @@ function history(from: number, to: number, step: number, perDay = false): Histor
       pi: split(e, desk.pi, bpi),
       realized: split(e, desk.re, bre),
       mm: split(e, desk.mm, bmm),
-      mm_fair: fairOf(split(e, desk.mm, bmm), split(e, desk.pi, bpi)),
       hedge: split(e, desk.he, bhe),
       rebates: split(e, desk.rb, brb),
       inventory: desk.inv[e]!,
@@ -537,9 +536,4 @@ export function mockApi(path: string, q: Record<string, string | number>): unkno
       return markouts(q);
   }
   throw new Error("404 Not Found");
-}
-
-/** The mock's market making against the reference fair: a little above the own-mid mark, as on the desk. */
-function fairOf(mm: number | null, pi: number | null): number | null {
-  return mm == null ? null : 0.7 * mm + 0.15 * Math.abs(pi ?? 0);
 }

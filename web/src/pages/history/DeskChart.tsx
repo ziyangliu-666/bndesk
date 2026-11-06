@@ -15,7 +15,6 @@ import { notionalCur, useDesk } from "../../desk";
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
   pi: { label: "Trading", long: "Trading", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
   mm: { label: "Market making", long: "Market making", color: PNL_COLORS.mm, style: PNL_STROKES.mm, title: "Market making: each fill against the mid 60 s later, minus fees" },
-  mmf: { label: "MM vs fair", long: "Market making vs fair", color: PNL_COLORS.mm, style: "dotted", title: "Market making against a reference fair: each fill against the mid 10 s before it moved as the leader perp moved over the next 60 s, minus fees. Our own quotes' pull on the instrument's mid is left out. Beside market making, not added to the PnL" },
   inv: { label: "Inventory PnL", long: "Inventory PnL", color: PNL_COLORS.inv, style: PNL_STROKES.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
   hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, style: PNL_STROKES.hedge, title: "The hedge's legs: price, fees, funding" },
   reb: { label: "Rebates", long: "Rebates", color: PNL_COLORS.reb, style: PNL_STROKES.reb, title: "Market-maker rebates" },
@@ -83,7 +82,7 @@ export function DeskChart({
   const split = mode === "parts";
   // the parts this desk has, in the side's order (with no split kept: the trading P&L)
   const parts = useMemo(
-    () => (d.mm ? (["mm", "mmf", "inv"] as Part[]) : (["pi"] as Part[])).concat(d.hedge ? ["hedge"] : [], d.rebates ? ["reb"] : []),
+    () => (d.mm ? (["mm", "inv"] as Part[]) : (["pi"] as Part[])).concat(d.hedge ? ["hedge"] : [], d.rebates ? ["reb"] : []),
     [d.mm, d.hedge, d.rebates],
   );
 
@@ -121,9 +120,7 @@ export function DeskChart({
           label: PART_META[k].label,
           color: PART_META[k].color,
           lineStyle: PART_META[k].style,
-          width: k === "mmf" ? 1.5 : 2,
-          // the second mark sits beside market making: off until picked
-          hiddenByDefault: k === "mmf",
+          width: 2,
           format: sgn,
           signColor: false,
           // running from where the range starts, as the candles; a bar before the split was kept has none

@@ -303,8 +303,8 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   before the fill moved as its reference, the leader perp, moved; the fill's stored path), so the pull of our own
   quotes on the instrument's mid after a fill (asks resting inside the spread, the mid back once they fill) is not
   charged to market making; a fill without the reference at both ends keeps its own-mid mark. Kept in the desk
-  equity rows (`mm_fair`) and `kv dayreal:<day>` from 2026-11-06; History's day table shows it muted beside Market
-  making ("MM vs fair") and its chart has it as a chip, off by default. Day PnL = mm + inventory + hedge
+  equity rows (`mm_fair`) and `kv dayreal:<day>` from 2026-11-06, for the API (`/api/history`'s bars, the snapshot's
+  summary and days); no page shows it. Day PnL = mm + inventory + hedge
   legs + rebates + other. Rebates: today's distributions whose description has "MM Rebate", at the asset's
   price when credited; other distributions (airdrops, rewards) are kept in `dividends` and stay in other.
   Days before 2026-10-17 valued such fills at the mid now; `desk recompute-mm --from D --to D [--dry-run]`

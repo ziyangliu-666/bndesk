@@ -17,8 +17,6 @@ export interface Col<R> {
   left?: boolean;
   /** The first column of a group (the P&L, its parts, the activity): a rule before it. */
   sep?: boolean;
-  /** A figure beside the one before it rather than a part of the sum: muted. */
-  sub?: boolean;
   cell: (r: R) => ReactNode;
   cls?: (r: R) => string;
   /** Sort value: a click on the header sorts by it (largest first), again reverses, a third time back to the
@@ -125,7 +123,7 @@ export function Table<R>({
             return (
               <th
                 key={c.key}
-                className={(c.left ? "l" : "") + (c.sep ? " sep" : "") + (c.sub ? " sub" : "") + (c.sort ? " sortable" : "") + (on ? " on" : "")}
+                className={(c.left ? "l" : "") + (c.sep ? " sep" : "") + (c.sort ? " sortable" : "") + (on ? " on" : "")}
                 onClick={c.sort ? () => click(c.key) : undefined}
                 aria-sort={on ? (by!.desc ? "descending" : "ascending") : undefined}
               >
@@ -149,7 +147,7 @@ export function Table<R>({
             return (
               <tr key={k} className={(onRow ? "click" : "") + (k === selected ? " on" : "")} onClick={onRow ? () => onRow(r) : undefined}>
                 {cols.map((c) => (
-                  <td key={c.key} className={(c.left ? "l " : "") + (c.sep ? "sep " : "") + (c.sub ? "sub " : "") + (c.spark ? "barred " : "") + (c.cls?.(r) ?? "")}>
+                  <td key={c.key} className={(c.left ? "l " : "") + (c.sep ? "sep " : "") + (c.spark ? "barred " : "") + (c.cls?.(r) ?? "")}>
                     {c.spark ? (
                       <span className="hx-barcell">
                         <Spark v={c.spark.v(r)} signed={c.spark.signed} bars={c.spark.bars} />
@@ -171,11 +169,11 @@ export function Table<R>({
 
 const sg = (v: number | null | undefined) => (v == null ? "--" : num(v, 2, true));
 
-type PnlRow = { sp?: Record<SparkKey, (number | null)[]>; label: ReactNode; key: string; split?: boolean; pnl: number | null; mm: number | null; mmf?: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
+type PnlRow = { sp?: Record<SparkKey, (number | null)[]>; label: ReactNode; key: string; split?: boolean; pnl: number | null; mm: number | null; inv: number | null; hedge: number | null; reb: number | null; other: number | null; pi: number | null; se: number | null; fills: number; volume: number };
 
 function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: boolean): Col<PnlRow>[] {
   const m = (s: string) => maskText(hide, s);
-  const p = (k: "pnl" | "pi" | "mm" | "mmf" | "inv" | "hedge" | "reb" | "other", label: string, title?: string): Col<PnlRow> => ({
+  const p = (k: "pnl" | "pi" | "mm" | "inv" | "hedge" | "reb" | "other", label: string, title?: string): Col<PnlRow> => ({
     key: k,
     label,
     title,
@@ -184,19 +182,18 @@ function pnlCols(first: string, firstTitle: string, pnlLabel: string, hide: bool
     // colour for the Day PnL only (did the day make money); the parts in ink, the sign in the text
     cls: (r) => "fig " + (hide ? "masked" : k === "pnl" ? signClass(r[k]) : ""),
     // no sort by a hidden figure (the order would tell it)
-    sort: hide ? undefined : (r) => r[k] ?? null,
+    sort: hide ? undefined : (r) => r[k],
     // the day's shape (a hidden figure's too: it has no scale)
     spark: { v: (r) => r.sp?.[k], signed: true },
   });
   const desk = deskNow();
-  // Day PnL, then its parts: market making (and beside it, muted, the same against the reference fair: not a part
-  // of the sum) and inventory PnL (or, with no split, the trading P&L), the hedge, the
+  // Day PnL, then its parts: market making and inventory PnL (or, with no split, the trading P&L), the hedge, the
   // rebates and the rest
   return [
     { key: "d", label: first, title: firstTitle, left: true, cell: (r) => r.label, sort: (r) => r.key },
     { ...p("pnl", pnlLabel), sep: true },
     // what the desk kept no split for has its trading P&L only: said in the Day PnL's tooltip
-    ...(desk.mm ? [{ ...p("mm", "Market making", PART_META.mm.title), sep: true }, { ...p("mmf", "MM vs fair", PART_META.mmf.title), sub: true }, p("inv", "Inventory PnL", PART_META.inv.title)] : [{ ...p("pi", "Trading", PART_META.pi.title), sep: true }]),
+    ...(desk.mm ? [{ ...p("mm", "Market making", PART_META.mm.title), sep: true }, p("inv", "Inventory PnL", PART_META.inv.title)] : [{ ...p("pi", "Trading", PART_META.pi.title), sep: true }]),
     ...(desk.hedge ? [p("hedge", "Hedge", PART_META.hedge.title)] : []),
     ...(desk.rebates ? [p("reb", "Rebates")] : []),
     { key: "f", sep: true, label: "Fills", cell: (r) => int(r.fills), cls: () => "fig", sort: (r) => r.fills, spark: { v: (r) => r.sp?.fills, bars: true } },
