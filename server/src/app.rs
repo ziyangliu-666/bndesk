@@ -595,7 +595,7 @@ impl Desk {
             });
             let legacy: Option<Value> = data.kv.get(&self.money.key(&format!("pnlsym:{ds}"))).and_then(|s| serde_json::from_str(s).ok());
             pnl.load_state(state, legacy.as_ref());
-            if let Some(t) = data.kv.get(&self.money.key(&format!("hedgetrack:{ds}"))).and_then(|s| serde_json::from_str::<Track>(s).ok()) {
+            if let Some(t) = data.kv.get(&self.money.key(&format!("hedgetrack2:{ds}"))).and_then(|s| serde_json::from_str::<Track>(s).ok()) {
                 self.hedge_track.borrow_mut().0 = t;
             }
             // the grid was live where desk rows carry its P&L (rows from before it existed have none)
@@ -1158,7 +1158,7 @@ impl Desk {
     fn put_hedge_track(&self) {
         let ht = self.hedge_track.borrow();
         if let Ok(v) = serde_json::to_string(&ht.0) {
-            self.store.put(Row::Kv(self.money.key(&format!("hedgetrack:{}", ht.0.day)), v));
+            self.store.put(Row::Kv(self.money.key(&format!("hedgetrack2:{}", ht.0.day)), v));
         }
     }
 
@@ -1172,7 +1172,16 @@ impl Desk {
             self.hedge_legs_now(&mut m)
         };
         let target = self.engine_push().filter(|(t, _)| now - t <= HT::TARGET_MAX_AGE_MS).and_then(|(_, p)| HT::metric(&p, HT::TARGET));
-        self.hedge_track.borrow_mut().0.step(now, &legs, target);
+        let mut ht = self.hedge_track.borrow_mut();
+        ht.0.step(now, &legs, target);
+        let since = ht.0.start.unwrap_or(now);
+        let m = self.market.borrow();
+        for f in self.fills.borrow().fills.iter().filter(|f| f.ts >= since && self.is_hedge_fill(f)) {
+            if !ht.0.entered.contains(&f.id) {
+                ht.0.enter(&f.id, &f.key(), crate::fills::sign(f.side) * f.qty, fill_mid_value(&m, f));
+            }
+        }
+        drop((ht, m));
         if now.div_euclid(30_000) != (now - 1000).div_euclid(30_000) {
             self.put_hedge_track();
         }
@@ -1518,6 +1527,21 @@ async fn late_exchange(market: MarketRef, connector: Rc<dyn Connector>, feed: Fe
     }
 }
 
+/// A hedge fill as the seed steps it: the mid at the fill as a unit's value in the desk's currency.
+struct HedgeFill {
+    id: String,
+    ts: i64,
+    key: String,
+    sq: f64,
+    mid: f64,
+}
+
+/// The mid at a fill (its stored path, else its price), as a unit's value in the desk's currency.
+fn fill_mid_value(m: &Market, f: &FillRec) -> f64 {
+    let unit = m.get(&f.key()).map(|i| i.id).and_then(|i| m.unit(i)).unwrap_or(1.0);
+    f.pm[5].filter(|x| *x > 0.0).unwrap_or(f.price) * unit
+}
+
 /// Steps the hedge track over what the desk did not see live (it started after the day start, or was down) on 1 min
 /// klines: each leg's position from today's hedge fills, the target from the engine's samples. Then it steps live.
 async fn hedge_seed(desk: DeskRef, src: Exchanges, tel: Arc<crate::telemetry::Telemetry>) {
@@ -1537,10 +1561,11 @@ async fn hedge_seed(desk: DeskRef, src: Exchanges, tel: Arc<crate::telemetry::Te
         let mut m = d.market.borrow_mut();
         let legs = d.hedge_legs_now(&mut m);
         let from = tr.last.unwrap_or(ds);
-        let fills: Vec<(i64, String, f64)> = d.fills.borrow().fills.iter().filter(|f| f.ts > from && d.is_hedge_fill(f))
-            .map(|f| (f.ts, f.key(), crate::fills::sign(f.side) * f.qty)).collect();
+        let fills: Vec<HedgeFill> = d.fills.borrow().fills.iter().filter(|f| f.ts > from && d.is_hedge_fill(f))
+            .map(|f| HedgeFill { id: f.id.clone(), ts: f.ts, key: f.key(), sq: crate::fills::sign(f.side) * f.qty, mid: fill_mid_value(&m, f) })
+            .collect();
         let mut units: HashMap<String, f64> = HashMap::new();
-        for k in legs.iter().map(|l| l.key.clone()).chain(fills.iter().map(|f| f.1.clone())) {
+        for k in legs.iter().map(|l| l.key.clone()).chain(fills.iter().map(|f| f.key.clone())) {
             let u = m.get(&k).map(|i| i.id).and_then(|i| m.unit(i)).unwrap_or(1.0);
             units.insert(k, u);
         }
@@ -1563,7 +1588,7 @@ async fn hedge_seed(desk: DeskRef, src: Exchanges, tel: Arc<crate::telemetry::Te
 
 #[allow(clippy::too_many_arguments)]
 async fn hedge_gap(src: &Exchanges, tel: &crate::telemetry::Telemetry, tr: &mut Track, from: i64, to: i64, legs: &[Leg],
-                   fills: &[(i64, String, f64)], units: &HashMap<String, f64>) -> Result<usize> {
+                   fills: &[HedgeFill], units: &HashMap<String, f64>) -> Result<usize> {
     use crate::backfill::Prices;
     let mut bars: HashMap<String, crate::pnl::Bars> = HashMap::new();
     for k in units.keys() {
@@ -1580,7 +1605,7 @@ async fn hedge_gap(src: &Exchanges, tel: &crate::telemetry::Telemetry, tr: &mut 
     let now_q: HashMap<&str, f64> = legs.iter().map(|l| (l.key.as_str(), l.q)).collect();
     let at = |t: i64| -> Vec<Leg> {
         units.iter().map(|(k, u)| {
-            let q = now_q.get(k.as_str()).copied().unwrap_or(0.0) - fills.iter().filter(|f| f.0 > t && &f.1 == k).map(|f| f.2).sum::<f64>();
+            let q = now_q.get(k.as_str()).copied().unwrap_or(0.0) - fills.iter().filter(|f| f.ts > t && &f.key == k).map(|f| f.sq).sum::<f64>();
             Leg { key: k.clone(), q, px: bars.get(k).and_then(|b| b.at(t)).map_or(0.0, |p| p * u) }
         }).collect()
     };
@@ -1591,6 +1616,9 @@ async fn hedge_gap(src: &Exchanges, tel: &crate::telemetry::Telemetry, tr: &mut 
     let mut t = from - from.rem_euclid(60_000) + 60_000;
     while t < to - 1000 {
         tr.step(t, &at(t), target_at(t));
+        for f in fills.iter().filter(|f| f.ts > t - 60_000 && f.ts <= t) {
+            tr.enter(&f.id, &f.key, f.sq, f.mid);
+        }
         t += 60_000;
         n += 1;
     }

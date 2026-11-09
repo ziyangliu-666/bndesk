@@ -333,12 +333,14 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   `hedge_band` and `beta` among its metrics (FastMM's names). Each second the hedge legs (the perps that hedge, the
   hedge symbols when named, and the spot assets that hedge) are read at mid in the desk's currency: r(t) = Σ q (P(t)
   − P(t−1)) / Σ q P(t−1) (the legs' mean move when flat), ideal += T(t−1) r(t), carry += Σ q (P(t) − P(t−1)). A
-  target older than 60 s is none. The hedge's price P&L at mid = carry + its fills against the mid at each fill;
+  target older than 60 s is none. A fill enters the position at the step after it, and carry takes s q (P(t) −
+  M_fill) there, so carry + the fills against the mid at each fill is the closed form Q0 (P_T − P_D) + Σ s q (P_T −
+  p) at mid. The hedge's price P&L at mid = carry + its fills against the mid at each fill;
   tracking = price + funding − fees − ideal = lag + fill_markout + funding − fees, fill_markout the hedge fills
   against the mid `mm_horizon_s` after each, lag the rest (the position away from the target as the hedge moved).
   The inventory and the hedge are both at mid. Risk: the hourly standard deviation of the inventory's carry on its
   own mid (an hour's Π less its fills' edge) over today's whole hours, alone and with the hedge's price P&L added.
-  Kept in kv `hedgetrack:<day start>` every 30 s; a gap (a restart, a start after the day start) is stepped on
+  Kept in kv `hedgetrack2:<day start>` every 30 s; a gap (a restart, a start after the day start) is stepped on
   1 min klines, each leg's position from its fills and the target from the engine's samples. No ratio divides by
   a residual: the old offset (hedge over trading − mm) is gone from the pages; offset_factor / offset_total stay.
 - Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote

@@ -10,12 +10,14 @@
 //! ```
 //!
 //! P_l is a unit of leg l in the desk's currency, at mid on both the hedge and the inventory (`PnlBook` marks the
-//! inventory at its mids). The hedge's price P&L at mid is carry plus its fills against the mid at each fill; less
+//! inventory at its mids). A fill enters the position at the step after it, and carry takes s q (P(t) - M_fill) for
+//! it there, the move from the mid at the fill to that step. The hedge's price P&L at mid is carry plus its fills
+//! against the mid at each fill; less
 //! ideal, that is the tracking in price, split by the hedge fills' markout at the desk's horizon (fill markout)
 //! and the rest (position lag: the position away from the target as the hedge moved). A gap in the live steps (a
 //! restart, the desk's first start of a day) is stepped on 1 min klines with the target from the engine's
 //! samples and each leg's position from its fills.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +38,7 @@ pub struct Leg {
     pub px: f64,
 }
 
-/// One day of the track, kept in kv `hedgetrack:<day start>`.
+/// One day of the track, kept in kv `hedgetrack2:<day start>`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub day: i64,
@@ -54,6 +56,9 @@ pub struct Track {
     /// by UTC hour start: carry and ideal
     pub carry_h: BTreeMap<i64, f64>,
     pub ideal_h: BTreeMap<i64, f64>,
+    /// the hedge fills entered today (`enter`)
+    #[serde(default)]
+    pub entered: BTreeSet<String>,
 }
 
 impl Track {
@@ -106,6 +111,20 @@ impl Track {
         self.target = target;
         self.last = Some(t);
     }
+
+    /// A hedge fill entering the position at the last step: s q (P(t) - the mid at the fill, a unit's value) to carry.
+    pub fn enter(&mut self, id: &str, key: &str, sq: f64, mid_value: f64) {
+        if !self.entered.insert(id.to_string()) {
+            return;
+        }
+        let (Some(t), Some(&(_, px))) = (self.last, self.legs.get(key)) else { return };
+        if px > 0.0 && mid_value > 0.0 {
+            let d = sq * (px - mid_value);
+            let hour = (t - 1) - (t - 1).rem_euclid(HOUR);
+            self.carry += d;
+            *self.carry_h.entry(hour).or_default() += d;
+        }
+    }
 }
 
 /// The engine's named metric in a push (`{"metrics": [{"name", "value"}]}`).
@@ -151,6 +170,11 @@ mod tests {
         // a step back in time is not taken
         t.step(5500, &[leg(0.0, 1.0)], Some(1.0));
         assert_eq!(t.last, Some(6000));
+        // a buy of 2 at the mid 97.5 entering at 97.02: -0.96 to carry, once
+        let c = t.carry;
+        t.enter("f1", "usdm:HUSDT", 2.0, 97.5);
+        t.enter("f1", "usdm:HUSDT", 2.0, 97.5);
+        assert!((t.carry - c + 0.96).abs() < 1e-9);
         let r = t.roll(86_400_000);
         assert_eq!((r.ideal, r.target, r.legs.len()), (0.0, Some(-980.0), 1));
     }
