@@ -12,7 +12,7 @@ import { DeskChart, GapBar } from "./rest/assets";
 import type { Exposure } from "../../protocol";
 import { hedgeWord, inventoryWord, roled } from "../../desk";
 import { STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
-import { HedgeBridge } from "../../components/HedgeBridge";
+import { HedgeBridge, plainRows, riskCut, trackRows } from "../../components/HedgeBridge";
 import { useQty } from "../../mask";
 import { Amt, Empty, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./strategy.css";
@@ -113,11 +113,16 @@ function HedgeDayM() {
   const hide = useHide();
   const q = useQty();
   if (!hd) return null;
-  const offset = inv != null && hd.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -hd.hedge_pnl / inv : null;
+  const t = hd.track;
+  const cut = riskCut(t);
   return (
     <>
-      <Sec className="st-m-bridge" title="Inventory and hedge, today" right={offset != null ? `offset ${pct(offset, 0)}` : undefined}>
-        {hide ? <Empty>Amounts hidden</Empty> : <HedgeBridge h={hd} inventory={inv ?? 0} />}
+      <Sec className="st-m-bridge" title="Inventory and hedge, today" right={cut != null ? `risk cut ${pct(cut, 0)}` : undefined}>
+        {hide ? (
+          <Empty>Amounts hidden</Empty>
+        ) : (
+          <HedgeBridge rows={t ? trackRows(t) : plainRows(hd, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
+        )}
       </Sec>
       {hd.legs.length > 0 && (
         <Sec title="Hedge legs" right="hedge PnL · fees">

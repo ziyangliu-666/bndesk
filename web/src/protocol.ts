@@ -411,6 +411,30 @@ export interface HedgeDay {
   offset_total: number | null; // −hedge P&L / H
   net: number | null; // H + hedge P&L
   legs: HedgeLeg[];
+  track: HedgeTrack | null; // against the engine's own target; null without an engine pushing one
+}
+
+/** Today's hedge against the target the engine pushes, at mid (DESIGN.md). */
+export interface HedgeTrack {
+  since: number; // when the track starts
+  target: number | null; // the engine's target, band and beta now
+  band: number | null;
+  beta: number | null;
+  position: number; // the hedge's notional now
+  ideal: number; // a hedge held at the target: Σ T(t−1) r(t)
+  price: number; // the hedge's price P&L at mid
+  funding: number;
+  fees: number;
+  actual: number; // price + funding − fees
+  tracking: number; // actual − ideal = lag + fill_markout + funding − fees
+  lag: number;
+  fill_markout: number; // the hedge fills against the mid horizon_s after each
+  horizon_s: number;
+  fills: number;
+  target_s: number; // seconds stepped with a target
+  sd_alone: number | null; // hourly SD of the inventory's carry, alone and with the hedge
+  sd_hedged: number | null;
+  hours: number;
 }
 
 export interface HedgeLeg {

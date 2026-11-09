@@ -12,7 +12,7 @@ import { gridTheme } from "../gridTheme";
 import { AccountsGrid } from "../components/AccountsGrid";
 import { fPrice, fQtyS, flexCols, maskVF, signCls, DEFAULT_COL } from "../grid";
 import type { Account, HedgeLeg, Position, SymbolRow } from "../protocol";
-import { HedgeBridge } from "../components/HedgeBridge";
+import { HedgeBridge, plainRows, riskCut, riskTitle, trackRows } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
 import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../components/ex";
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
@@ -604,22 +604,29 @@ export function HedgePanel() {
       n({ field: "pnl", headerName: "Hedge PnL", headerTooltip: `Today: price P&L at mark − fees + funding, ${cur()}`, width: 90, valueFormatter: fSigned, cellClass: sCls(hide) }),
     ]);
   }, [hide]);
-  const offset = h && inv != null && h.hedge_pnl != null && Math.abs(inv) > 1e-9 ? -h.hedge_pnl / inv : null;
+  const t = h?.track ?? null;
+  const cut = riskCut(t);
   return (
     <section className="ops-panel ops-hedge">
       <header className="ops-head">
-        <span className="ops-title" title="Since the day start: the Inventory PnL of the Desk, against what the hedge made">
+        <span className="ops-title" title={t ? "Since the day start: what a hedge held at the engine's target would have made, and what the hedge made" : "Since the day start: the Inventory PnL of the Desk, against what the hedge made"}>
           Inventory and hedge, today
         </span>
-        {offset != null && (
-          <span className="ops-head-right fig" title="Hedge P&L over the Inventory PnL it offsets">
-            <span className="muted">Offset</span> {Math.round(offset * 100)}%
+        {cut != null && (
+          <span className="ops-head-right fig" title={riskTitle(t!, hide)}>
+            <span className="muted">Risk cut</span> {Math.round(cut * 100)}%
           </span>
         )}
       </header>
       {h ? (
         <>
-          {hide ? <div className="ops-empty">Amounts hidden</div> : <div className="ops-bridge"><HedgeBridge h={h} inventory={inv ?? 0} /></div>}
+          {hide ? (
+            <div className="ops-empty">Amounts hidden</div>
+          ) : (
+            <div className="ops-bridge">
+              <HedgeBridge rows={t ? trackRows(t) : plainRows(h, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
+            </div>
+          )}
           {h.legs.length > 0 && (
             <div className="ops-body ops-grid ops-legs">
               <AgGridReact<HedgeLeg>

@@ -23,6 +23,7 @@ pub mod markouts;
 pub mod alerts;
 pub mod server;
 pub mod history;
+pub mod hedgetrack;
 pub mod agent;
 pub mod telemetry;
 pub mod recompute;

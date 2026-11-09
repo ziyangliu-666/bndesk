@@ -7,6 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -25,6 +26,7 @@ use crate::connector::{Connector, Exchanges, PublicFeed};
 use crate::engine::{self, EngineScraper, EngineScraperRef};
 use crate::feeds::{Feed, FeedKind, FeedRef, now_ms};
 use crate::fills::{FillBook, FillRec};
+use crate::hedgetrack::{self as HT, Leg, Track};
 use crate::market::{Book, Inst, Market};
 use crate::metrics::{
     FillAgg, HOUR, MmSplit, account_row, aggregate_in, mm_split, beta_weighted_spot, exposure, hedge_day, inventory_assets, markout_stats,
@@ -217,6 +219,10 @@ pub struct Desk {
     pub book_filled: Rc<RefCell<Vec<String>>>,   // instruments the P&L book keeps filled today: in its scope (a set, insertion order)
     pub fixed_betas: Rc<HashMap<String, f64>>,
     pub on_fill: OnFill,
+    /// the hedge against the engine's target, and whether it has been stepped up to now (`hedge_seed`)
+    pub hedge_track: Rc<RefCell<(crate::hedgetrack::Track, bool)>>,
+    /// the engine's pushes (its target), once the server has opened them
+    pub telemetry: Option<Arc<crate::telemetry::Telemetry>>,
 }
 
 fn dummy_pnl(day_start: i64) -> PnlBook {
@@ -305,6 +311,8 @@ impl Desk {
             money: crate::store::Series::one(&cfg.numeraire.asset),
             series: vec![],
             series_x: vec![],
+            hedge_track: Rc::new(RefCell::new((crate::hedgetrack::Track::new(day_start), false))),
+            telemetry: None,
             new_bars: None,
             agg: None,
             mm: Rc::default(),
@@ -587,6 +595,9 @@ impl Desk {
             });
             let legacy: Option<Value> = data.kv.get(&self.money.key(&format!("pnlsym:{ds}"))).and_then(|s| serde_json::from_str(s).ok());
             pnl.load_state(state, legacy.as_ref());
+            if let Some(t) = data.kv.get(&self.money.key(&format!("hedgetrack:{ds}"))).and_then(|s| serde_json::from_str::<Track>(s).ok()) {
+                self.hedge_track.borrow_mut().0 = t;
+            }
             // the grid was live where desk rows carry its P&L (rows from before it existed have none)
             let ts: Vec<i64> = data.equity.iter().filter(|r| r.account == "*" && r.trading.is_some()).map(|r| r.t).collect();
             pnl.clip_live(&alive_spans(&ts, ALIVE_STEP_MS, ALIVE_GAP_MS));
@@ -716,7 +727,9 @@ impl Desk {
         ps.holding = ps.trading - ps.quoting;
         ps.quoting_curve = mm.own.quoting.to_vec();
         let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
-        expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs));
+        let mut hd = hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs);
+        hd.track = self.hedge_view(&mut m, &hd, &mm, now);
+        expo.hedge_day = Some(hd);
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
         let rebates: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.rebates).sum();
         let equity: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.equity).sum();
@@ -991,6 +1004,7 @@ impl Desk {
                 a.expire_fees(now);
             }
         }
+        self.hedge_step(now);
         if let Some(v) = &self.view {
             self.alerts.borrow_mut().evaluate(self, v, now);
         }
@@ -1106,8 +1120,134 @@ impl Desk {
         }
     }
 
+    /// The engine's last push, if the server reads its pushes.
+    fn engine_push(&self) -> Option<(i64, Arc<Value>)> {
+        self.telemetry.as_ref()?.latest()
+    }
+
+    /// The hedge legs now, each at mid: the perps that hedge (the hedge symbols when named) and the spot assets that hedge.
+    fn hedge_legs_now(&self, m: &mut Market) -> Vec<Leg> {
+        let named: HashSet<&str> = self.cfg.hedge_symbols.iter().map(String::as_str).collect();
+        let mut by: std::collections::BTreeMap<String, Leg> = std::collections::BTreeMap::new();
+        for a in &self.accounts {
+            let a = a.borrow();
+            for (s, &(amt, _)) in &a.positions {
+                if self.cfg.roles.traded(s, a.perp) || (!named.is_empty() && !named.contains(s.as_str())) {
+                    continue;
+                }
+                let key = crate::market::key(s, a.perp);
+                let px = m.find(s, a.perp).and_then(|i| Some(m.insts[i].mid()? * m.unit(i).unwrap_or(1.0))).unwrap_or(0.0);
+                by.entry(key.clone()).or_insert(Leg { key, q: 0.0, px }).q += amt;
+            }
+        }
+        for p in self.pnl.borrow().pos.values().filter(|p| p.hedge) {
+            let key = m.insts[p.inst].key.clone();
+            let px = m.value(p.inst).unwrap_or(0.0);
+            by.insert(key.clone(), Leg { key, q: p.q, px });
+        }
+        by.into_values().collect()
+    }
+
+    /// A fill of what hedges, as `hedge_legs_now` takes the legs.
+    fn is_hedge_fill(&self, f: &FillRec) -> bool {
+        !f.conversion()
+            && !self.cfg.roles.traded(&f.symbol, f.venue)
+            && (f.venue.is_spot() || self.cfg.hedge_symbols.is_empty() || self.cfg.hedge_symbols.contains(&f.symbol))
+    }
+
+    fn put_hedge_track(&self) {
+        let ht = self.hedge_track.borrow();
+        if let Ok(v) = serde_json::to_string(&ht.0) {
+            self.store.put(Row::Kv(self.money.key(&format!("hedgetrack:{}", ht.0.day)), v));
+        }
+    }
+
+    /// One live step of the hedge track, once `hedge_seed` has stepped it up to now; kept every 30 s.
+    fn hedge_step(&self, now: i64) {
+        if !self.hedge_track.borrow().1 {
+            return;
+        }
+        let legs = {
+            let mut m = self.market.borrow_mut();
+            self.hedge_legs_now(&mut m)
+        };
+        let target = self.engine_push().filter(|(t, _)| now - t <= HT::TARGET_MAX_AGE_MS).and_then(|(_, p)| HT::metric(&p, HT::TARGET));
+        self.hedge_track.borrow_mut().0.step(now, &legs, target);
+        if now.div_euclid(30_000) != (now - 1000).div_euclid(30_000) {
+            self.put_hedge_track();
+        }
+    }
+
+    /// The hedge against the engine's target today, for the snapshot: None until an engine has pushed one.
+    fn hedge_view(&self, m: &mut Market, hd: &P::HedgeDay, mm: &MmSplit, now: i64) -> Option<P::HedgeTrack> {
+        let ht = self.hedge_track.borrow();
+        let tr = &ht.0;
+        let since = tr.start?;
+        let push = self.engine_push().filter(|(t, _)| now - t <= HT::TARGET_MAX_AGE_MS);
+        if push.is_none() && tr.target_s == 0 {
+            return None;
+        }
+        let hj = crate::fills::HK.iter().position(|k| *k == self.cfg.mm_horizon_s.to_string()).unwrap_or(2);
+        let (mut exec, mut fm, mut n) = (0.0, 0.0, 0);
+        let mut exec_h: HashMap<i64, f64> = HashMap::new();
+        for f in self.fills.borrow().fills.iter().filter(|f| f.ts >= since && self.is_hedge_fill(f)) {
+            let (qpx, mid) = match m.get(&f.key()) {
+                Some(i) => (i.quote.clone(), i.mid()),
+                None => (String::new(), None),
+            };
+            let qpx = m.asset_price(&qpx).filter(|x| *x > 0.0).unwrap_or(1.0);
+            let o = f.own_pnl(qpx, 0.0, mid, now);
+            exec += o.edge;
+            fm += o.quoting[hj];
+            n += 1;
+            *exec_h.entry(f.ts - f.ts.rem_euclid(HOUR)).or_default() += o.edge;
+        }
+        let price = tr.carry + exec;
+        let actual = price + hd.funding - hd.fees;
+        // the inventory's hourly carry on its own mid, alone and with the hedge, over today's whole hours
+        let (mut alone, mut hedged) = (vec![], vec![]);
+        for (h, b) in self.pnl.borrow().today() {
+            if h < since || h + HOUR > now || b.booked_s() < 3000 {
+                continue;
+            }
+            let inv = b.trading - mm.own_edge_by_hour.get(&h).copied().unwrap_or(0.0);
+            let hedge = tr.carry_h.get(&h).copied().unwrap_or(0.0) + exec_h.get(&h).copied().unwrap_or(0.0);
+            alone.push(inv);
+            hedged.push(inv + hedge);
+        }
+        let pm = push.as_ref().map(|p| p.1.clone());
+        Some(P::HedgeTrack {
+            since,
+            target: pm.as_ref().and_then(|p| HT::metric(p, HT::TARGET)),
+            band: pm.as_ref().and_then(|p| HT::metric(p, HT::BAND)),
+            beta: pm.as_ref().and_then(|p| HT::metric(p, HT::BETA)),
+            position: tr.legs.values().map(|(q, px)| q * px).sum(),
+            ideal: tr.ideal,
+            price,
+            funding: hd.funding,
+            fees: hd.fees,
+            actual,
+            tracking: actual - tr.ideal,
+            lag: price - tr.ideal - fm,
+            fill_markout: fm,
+            horizon_s: self.cfg.mm_horizon_s,
+            fills: n,
+            target_s: tr.target_s,
+            sd_alone: HT::sd(&alone),
+            sd_hedged: HT::sd(&hedged),
+            hours: alone.len() as i64,
+        })
+    }
+
     fn roll(&mut self, now: i64) {
         self.put_day_real(self.day_start());   // the day that ends, as it ended
+        {
+            // the hedge track's day as it ended, and the next one from where it stands
+            self.put_hedge_track();
+            let ds = sessions::day_start(now, self.cfg.day_start_min);
+            let mut ht = self.hedge_track.borrow_mut();
+            ht.0 = ht.0.roll(ds);
+        }
         let ds = sessions::day_start(now, self.cfg.day_start_min);
         self.day_start.set(ds);
         {
@@ -1378,6 +1518,85 @@ async fn late_exchange(market: MarketRef, connector: Rc<dyn Connector>, feed: Fe
     }
 }
 
+/// Steps the hedge track over what the desk did not see live (it started after the day start, or was down) on 1 min
+/// klines: each leg's position from today's hedge fills, the target from the engine's samples. Then it steps live.
+async fn hedge_seed(desk: DeskRef, src: Exchanges, tel: Arc<crate::telemetry::Telemetry>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let d = desk.borrow();
+        if d.view.is_some() && d.pnl.borrow().started() {
+            break;
+        }
+    }
+    let now = CLOCK.now();
+    let (mut tr, legs, fills, units) = {
+        let d = desk.borrow();
+        let ds = d.day_start();
+        let tr = d.hedge_track.borrow().0.clone();
+        let tr = if tr.day == ds { tr } else { Track::new(ds) };
+        let mut m = d.market.borrow_mut();
+        let legs = d.hedge_legs_now(&mut m);
+        let from = tr.last.unwrap_or(ds);
+        let fills: Vec<(i64, String, f64)> = d.fills.borrow().fills.iter().filter(|f| f.ts > from && d.is_hedge_fill(f))
+            .map(|f| (f.ts, f.key(), crate::fills::sign(f.side) * f.qty)).collect();
+        let mut units: HashMap<String, f64> = HashMap::new();
+        for k in legs.iter().map(|l| l.key.clone()).chain(fills.iter().map(|f| f.1.clone())) {
+            let u = m.get(&k).map(|i| i.id).and_then(|i| m.unit(i)).unwrap_or(1.0);
+            units.insert(k, u);
+        }
+        (tr, legs, fills, units)
+    };
+    let from = tr.last.unwrap_or(tr.day);
+    if now - from > 120_000 {
+        match hedge_gap(&src, &tel, &mut tr, from, now, &legs, &fills, &units).await {
+            Ok(n) => info!("hedge track: stepped {n} minutes from {from} on klines"),
+            Err(e) => warn!("hedge track: the gap from {from} is one step: {e:#}"),
+        }
+    }
+    let d = desk.borrow();
+    let mut ht = d.hedge_track.borrow_mut();
+    if ht.0.day == tr.day {
+        ht.0 = tr;
+    }
+    ht.1 = true;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn hedge_gap(src: &Exchanges, tel: &crate::telemetry::Telemetry, tr: &mut Track, from: i64, to: i64, legs: &[Leg],
+                   fills: &[(i64, String, f64)], units: &HashMap<String, f64>) -> Result<usize> {
+    use crate::backfill::Prices;
+    let mut bars: HashMap<String, crate::pnl::Bars> = HashMap::new();
+    for k in units.keys() {
+        let rows = crate::backfill::none_on_400(src.bars(k, "1m", from - from.rem_euclid(60_000), to).await)?;
+        bars.insert(k.clone(), crate::pnl::Bars::new(rows));
+    }
+    let key = format!("metrics.{}", HT::TARGET);
+    let (ts, cols) = tel.samples(from - HT::TARGET_MAX_AGE_MS, to, 15_000, std::slice::from_ref(&key))?;
+    let col = cols.get(&key).cloned().unwrap_or_default();
+    let target_at = |t: i64| -> Option<f64> {
+        let i = ts.partition_point(|x| *x <= t);
+        (i > 0 && t - ts[i - 1] <= HT::TARGET_MAX_AGE_MS).then(|| col.get(i - 1).copied().flatten()).flatten()
+    };
+    let now_q: HashMap<&str, f64> = legs.iter().map(|l| (l.key.as_str(), l.q)).collect();
+    let at = |t: i64| -> Vec<Leg> {
+        units.iter().map(|(k, u)| {
+            let q = now_q.get(k.as_str()).copied().unwrap_or(0.0) - fills.iter().filter(|f| f.0 > t && &f.1 == k).map(|f| f.2).sum::<f64>();
+            Leg { key: k.clone(), q, px: bars.get(k).and_then(|b| b.at(t)).map_or(0.0, |p| p * u) }
+        }).collect()
+    };
+    if tr.last.is_none() {
+        tr.step(from, &at(from), target_at(from));
+    }
+    let mut n = 0;
+    let mut t = from - from.rem_euclid(60_000) + 60_000;
+    while t < to - 1000 {
+        tr.step(t, &at(t), target_at(t));
+        t += 60_000;
+        n += 1;
+    }
+    Ok(n)
+}
+
 async fn ticker(desk: DeskRef) {
     let mut n = 0u64;
     loop {
@@ -1622,6 +1841,12 @@ pub async fn run(mut cfg: Config) -> Result<()> {
         .context("engine telemetry db")?;
     // agents' reads of all of it (`BNDESK_READ_TOKEN`, or the session)
     let agent = crate::agent::Agent::new(history.clone(), telemetry.clone(), handle.clone(), desk.borrow().cfg.mm_horizon_s);
+    desk.borrow_mut().telemetry = Some(telemetry.clone());
+    if simulate {
+        desk.borrow().hedge_track.borrow_mut().1 = true;
+    } else {
+        tasks.push(tokio::task::spawn_local(hedge_seed(desk.clone(), exchanges.clone(), telemetry.clone())));
+    }
     let extra = crate::telemetry::routes(telemetry).merge(crate::agent::routes(agent));
     let app = server::make_app_with(&handle, auth, server::web_dist(), history, extra);
     let srv = server::serve(&handle, app, &listen).await.with_context(|| format!("listen {listen}"))?;

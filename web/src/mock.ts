@@ -1413,6 +1413,28 @@ function exposure(acc: Account[]): Exposure {
         funding: l.funding,
         pnl: legPnl(l),
       })),
+      // the hedge against a target the mock engine would push: the target's move a little larger than the hedge's
+      track: {
+        since: dayStart,
+        target: -fut * 1.15,
+        band: Math.abs(fut) * 0.3,
+        beta: 0.3,
+        position: fut,
+        ideal: (hedge + fees - funding) * 1.3,
+        price: hedge + fees - funding,
+        funding,
+        fees,
+        actual: hedge,
+        tracking: hedge - (hedge + fees - funding) * 1.3,
+        lag: -(hedge + fees - funding) * 0.22,
+        fill_markout: -(hedge + fees - funding) * 0.08,
+        horizon_s: 60,
+        fills: legs.reduce((a, l) => a + l.fills, 0),
+        target_s: Math.floor((now - dayStart) / 1000),
+        sd_alone: 55,
+        sd_hedged: 26,
+        hours: Math.floor((now - dayStart) / H),
+      },
     },
   };
 }

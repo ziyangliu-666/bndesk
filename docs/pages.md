@@ -34,6 +34,8 @@ Each account's order rates against its exchange's limits where it has them, then
 
 Total value and today's P&L, the accounts with their equity, transfers, rebates, free cash and fees, and Day P&L or equity by account on one chart. Spot, Futures and Exposure & hedge have tabs of their own.
 
+Inventory and hedge, today, judges the hedge against the target the engine pushes (its `hedge_target` metric), all at mid: what a hedge held at that target would have made, then the gap to what the hedge made, in position lag (the position away from the target as the hedge moved), fill markout (the hedge's fills against the mid 60 s after each), funding and fees. Risk cut is how much of the inventory's hourly P&L swing the hedge took away: one minus the hourly standard deviation with the hedge over the same without it. Without an engine pushing a target, the panel shows the inventory, the hedge and the net.
+
 ![Assets](screenshots/assets.webp)
 
 ## System

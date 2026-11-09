@@ -555,6 +555,43 @@ pub struct HedgeDay {
     /// H + hedge_pnl
     pub net: Option<f64>,
     pub legs: Vec<HedgeLeg>,
+    /// the hedge against the engine's own target (`hedgetrack`); None without an engine pushing one
+    pub track: Option<HedgeTrack>,
+}
+
+/// Today's hedge against the target the engine pushes, everything at mid, in the desk's currency.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct HedgeTrack {
+    /// when the track starts (the day start, or later on the desk's first day)
+    pub since: i64,
+    /// the engine's target, band and beta now; the hedge's notional now
+    pub target: Option<f64>,
+    pub band: Option<f64>,
+    pub beta: Option<f64>,
+    pub position: f64,
+    /// what a hedge held at the target would have made: Σ T(t-1) r(t)
+    pub ideal: f64,
+    /// the hedge's price P&L at mid (as held, plus its fills against the mid at each fill)
+    pub price: f64,
+    pub funding: f64,
+    pub fees: f64,
+    /// price + funding - fees
+    pub actual: f64,
+    /// actual - ideal = lag + fill_markout + funding - fees
+    pub tracking: f64,
+    /// the position away from the target as the hedge moved
+    pub lag: f64,
+    /// the hedge fills against the mid `horizon_s` after each
+    pub fill_markout: f64,
+    pub horizon_s: i64,
+    pub fills: i64,
+    /// seconds stepped with a target
+    pub target_s: i64,
+    /// standard deviation of the inventory's hourly P&L (carry on its own mid), alone and with the hedge's price
+    /// P&L at mid; over `hours` hours of today (null under 3)
+    pub sd_alone: Option<f64>,
+    pub sd_hedged: Option<f64>,
+    pub hours: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]

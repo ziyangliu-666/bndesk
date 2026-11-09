@@ -217,6 +217,8 @@ pub struct MmSplit {
     pub own: crate::fills::OwnPnl,
     /// quoting at h by base
     pub own_by_base: HashMap<String, f64>,
+    /// the edge at the fill by UTC hour (start ms) of the fill
+    pub own_edge_by_hour: HashMap<i64, f64>,
 }
 
 pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, roles: &Roles, tracked: impl Fn(&str) -> bool) -> MmSplit {
@@ -237,6 +239,7 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, rol
         let own = f.own_pnl(qpx, fee, mid, now);
         out.own += own;
         *out.own_by_base.entry(base.clone()).or_insert(0.0) += own.quoting[h];
+        *out.own_edge_by_hour.entry(f.ts - f.ts.rem_euclid(3_600_000)).or_insert(0.0) += own.edge;
         let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
         // against the reference fair (`FillRec::fair_bps`), the own mid at t + h where the fill has no reference
         let gross = match f.mark_at(h, now) {
@@ -564,6 +567,7 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
         offset_total: ratio(ref_hedge),
         net: pnl.map(|p| ref_hedge + p),
         legs,
+        track: None,
     }
 }
 

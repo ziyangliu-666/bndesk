@@ -329,6 +329,18 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   reference fair stays as their breakdown. History (`/api/history`, `/api/agent/pnl`) sums edge, quoting and the
   fair mark per minute by fill time from the stored fills (a fill written again as its marks mature replaces its
   earlier part; the fee in the desk's currency as stored with the fill, `fee_usd`).
+- The hedge against the engine's own target (`hedgetrack.rs`). The engine pushes `hedge_target` (a signed notional),
+  `hedge_band` and `beta` among its metrics (FastMM's names). Each second the hedge legs (the perps that hedge, the
+  hedge symbols when named, and the spot assets that hedge) are read at mid in the desk's currency: r(t) = Σ q (P(t)
+  − P(t−1)) / Σ q P(t−1) (the legs' mean move when flat), ideal += T(t−1) r(t), carry += Σ q (P(t) − P(t−1)). A
+  target older than 60 s is none. The hedge's price P&L at mid = carry + its fills against the mid at each fill;
+  tracking = price + funding − fees − ideal = lag + fill_markout + funding − fees, fill_markout the hedge fills
+  against the mid `mm_horizon_s` after each, lag the rest (the position away from the target as the hedge moved).
+  The inventory and the hedge are both at mid. Risk: the hourly standard deviation of the inventory's carry on its
+  own mid (an hour's Π less its fills' edge) over today's whole hours, alone and with the hedge's price P&L added.
+  Kept in kv `hedgetrack:<day start>` every 30 s; a gap (a restart, a start after the day start) is stepped on
+  1 min klines, each leg's position from its fills and the target from the engine's samples. No ratio divides by
+  a residual: the old offset (hedge over trading − mm) is gone from the pages; offset_factor / offset_total stay.
 - Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
@@ -594,6 +606,19 @@ interface HedgeDay {
   offset_factor: number | null; offset_total: number | null;   // −hedge P&L / Hm, / H
   net: number | null;                                          // H + hedge P&L
   legs: HedgeLeg[];
+  track: HedgeTrack | null;                                    // against the engine's target, see below
+}
+
+interface HedgeTrack {
+  since: number;                                               // the track's first step (the day start)
+  target: number | null; band: number | null; beta: number | null;   // the engine's, now (fresh pushes only)
+  position: number;                                            // the hedge's notional now, at mid
+  ideal: number;                                               // Σ T(t−1) r(t): a hedge held at the target
+  price: number; funding: number; fees: number;                // the hedge's price P&L at mid, its funding and fees
+  actual: number; tracking: number;                            // price + funding − fees; actual − ideal
+  lag: number; fill_markout: number; horizon_s: number;        // tracking = lag + fill_markout + funding − fees
+  fills: number; target_s: number;                             // hedge fills; seconds stepped with a target
+  sd_alone: number | null; sd_hedged: number | null; hours: number;   // hourly SD of the inventory's carry, alone / + hedge
 }
 
 interface HedgeLeg {
