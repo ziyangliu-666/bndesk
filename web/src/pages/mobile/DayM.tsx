@@ -143,16 +143,16 @@ function useDayPath(start: number, live: boolean): DayPathLoad {
   const data = hist.key === key ? hist.data : null;
   const pts = useMemo<PathPt[]>(() => {
     const bars = (data?.bars ?? []).filter((b) => b.t < start + DAY);
-    const o = bars[0]?.o ?? 0;
+    // every figure runs from 0 at the day's start
     return bars.map((b) => ({
       time: b.t,
-      pnl: b.c - o,
+      pnl: b.c,
       trading: b.pi,
       mm: b.mm,
       inv: b.pi != null && b.mm != null ? b.pi - b.mm : null,
       hedge: b.hedge,
       reb: b.rebates,
-      other: b.pi != null && b.rebates != null ? b.c - o - b.pi - (b.hedge ?? 0) - b.rebates : null,
+      other: b.pi != null && b.rebates != null ? b.c - b.pi - (b.hedge ?? 0) - b.rebates : null,
     }));
   }, [data, start]);
   return { pts, loading: hist.loading && !data, err: hist.err };

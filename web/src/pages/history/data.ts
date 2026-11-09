@@ -320,7 +320,8 @@ function sameRow(a: Row, b: Row): boolean {
 export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: number, prev: Row[] | null): Row[] {
   const out: Row[] = [];
   const periodOf = period === "week" ? weekOf : (t: number) => dayOf(t, dayStart);
-  let prevC = bars[0]?.o ?? 0;
+  // the bars' figures run from 0 at the range's start
+  let prevC = 0;
   let base = prevC; // the running P&L at the current period's start
   let per = NaN;
   const last: Record<"pi" | "mm" | "hedge" | "reb" | "other", number | null> = { pi: null, mm: null, hedge: null, reb: null, other: null };
@@ -339,7 +340,7 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
       reb = b.rebates;
     let other: number | null = null;
     if (pi != null && hedge != null && reb != null) {
-      if (otherOff == null) otherOff = i > 0 ? bars[i - 1]!.c : b.o;
+      if (otherOff == null) otherOff = i > 0 ? bars[i - 1]!.c : 0;
       other = b.c - otherOff - (pi + hedge + reb);
     }
     const run: Split = { pi, mm, inv: pi != null && mm != null ? pi - mm : null, hedge, reb, other };
@@ -355,8 +356,8 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
     const row: Row = {
       t: b.t,
       pnl: b.c - prevC,
-      // the running total from the range's start (the first bar opens at it), the same sum as the days' list
-      cum: b.c - (bars[0]?.o ?? 0),
+      // the running total from the range's start, the same sum as the days' list
+      cum: b.c,
       o: b.o - base,
       h: b.h - base,
       l: b.l - base,

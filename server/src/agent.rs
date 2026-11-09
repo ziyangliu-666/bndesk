@@ -38,11 +38,13 @@ const DEFAULT_FILLS: i64 = 50_000;
 const STABLES: [&str; 4] = ["USDT", "USDC", "FDUSD", "USD"];
 
 /// Changes to what a series means, for an agent comparing across them. Newest last.
-const CHANGES: [(&str, &str, &str); 2] = [
+const CHANGES: [(&str, &str, &str); 3] = [
     ("2026-10-17", "desk.mm",
      "A fill whose price at t + 60 s was not taken live (the desk down then) is marked from klines; before this day such fills were valued at the mid at the time of reading."),
     ("2026-11-06", "desk.mm",
      "Market making marks each fill against the reference fair F(t+60s) = M(t-10s)*R(t+60s)/R(t-10s) (R the leader perp) instead of the instrument's own mid at t+60s, so the pull of the desk's own quotes on that mid is not charged to it. Days before keep the own-mid mark (40 to 90 USD a day lower on 2026-10-27..11-05). desk.inventory_pnl = trading - mm moves the other way."),
+    ("2026-11-09", "/api/agent/pnl",
+     "A range that starts at a P&L day's start counts that day from 0, and one that starts mid-day from the last row before `from`. Before, the range's first row was the zero, so its first bar left out the day's first seconds (on 2026-11-09 about 30 USD of trading)."),
 ];
 
 pub struct Agent {
@@ -564,9 +566,9 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
     let mut out = Vec::with_capacity(bars.len());
     let mut prev_c: Option<f64> = None;
     let mut last: [Option<f64>; 5] = [None; 5];
-    let start = bars.first().map_or(0.0, |b| b.o);
+    // every figure in the bars runs from 0 at the range's baseline
     for b in bars {
-        let pnl = b.c - prev_c.unwrap_or(b.o);
+        let pnl = b.c - prev_c.unwrap_or(0.0);
         prev_c = Some(b.c);
         let mut d = [None; 5];
         for (i, v) in [b.pi, b.mm, b.hedge, b.rebates, b.realized].into_iter().enumerate() {
@@ -586,7 +588,7 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
             ("t", json!(b.t)),
             ("time", json!(iso(b.t))),
             ("pnl", json!(pnl)),
-            ("cum_pnl", json!(b.c - start)),
+            ("cum_pnl", json!(b.c)),
             ("mm", json!(mm)),
             ("inventory_pnl", json!(inv)),
             ("hedge", json!(hedge)),
@@ -626,7 +628,7 @@ async fn pnl(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiEr
     }
     Ok(json_body(&json!({
         "from": from, "to": to, "step": step,
-        "note": "Each row is the bar's change (t its start, UTC): pnl = mm + inventory_pnl + hedge + rebates + other; trading = mm + inventory_pnl. A part is null before the desk kept it. cum_pnl runs from the range's start. equity, inventory_value and futures_notional are levels at the bar's end.",
+        "note": "Each row is the bar's change (t its start, UTC): pnl = mm + inventory_pnl + hedge + rebates + other; trading = mm + inventory_pnl. A part is null before the desk kept it. cum_pnl runs from the range's start (0 at a day start, else at the last row before from). equity, inventory_value and futures_notional are levels at the bar's end.",
         "rows": rows,
     })))
 }
@@ -933,7 +935,7 @@ mod tests {
         use crate::protocol::HistoryBar;
         let bar = |t, o, c, pi, mm, hedge, reb| HistoryBar { t, o, h: c, l: o, c, pi, mm, hedge, rebates: reb, ..Default::default() };
         let bars = [
-            bar(0, 0.0, 5.0, None, None, None, None),
+            bar(0, 1.0, 5.0, None, None, None, None),
             bar(1, 5.0, 12.0, Some(4.0), Some(1.0), Some(1.0), Some(0.5)),
             bar(2, 12.0, 10.0, Some(3.0), Some(2.0), Some(0.0), Some(1.0)),
         ];

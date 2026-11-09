@@ -144,8 +144,9 @@ impl Mem {
         Ok(())
     }
 
+    /// The rows in [from, to), and the last one before `from` (the range's baseline, see `bars`).
     fn rows(&self, from: i64, to: i64) -> Vec<DeskRow> {
-        let a = self.rows.partition_point(|r| r.t < from);
+        let a = self.rows.partition_point(|r| r.t < from).saturating_sub(1);
         let b = self.rows.partition_point(|r| r.t < to);
         self.rows[a..b].to_vec()
     }
@@ -207,7 +208,7 @@ impl Api {
         let sm = step_s * 1000;
         let dsm = self.day_start_min;
         let (rows, flows) = self.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
-        Ok(bars(&rows, &flows, sm, dsm, false))
+        Ok(bars(&rows, &flows, sm, dsm, false, from))
     }
 
     /// `f` on a read-only connection to the desk's db, off the async threads: for `/api/agent`.
@@ -412,26 +413,26 @@ fn fills(c: &Connection, symbol: Option<String>, venue: Option<&'static str>, fr
 
 // --- bars ---------------------------------------------------------------------------------------------
 
-/// One day-reset series summed across days: earlier days' final values plus today's, from 0 at its first
-/// value in the range (a range that starts mid-day leaves out what that day made before it).
+/// One day-reset series summed across days: earlier days' final values plus today's, less the value at the
+/// range's baseline.
 #[derive(Default)]
 struct Cum {
     off: f64,
     last: Option<f64>,
-    seen: bool,
 }
 
 impl Cum {
+    /// From `base`, the series' value at the range's start (0 where the day starts inside the range).
+    fn from(base: Option<f64>) -> Cum {
+        Cum { off: -base.unwrap_or(0.0), last: base }
+    }
+
     fn roll(&mut self) {
         self.off += self.last.take().unwrap_or(0.0);
     }
 
     fn at(&mut self, v: Option<f64>) -> Option<f64> {
         v.map(|x| {
-            if !self.seen {
-                self.seen = true;
-                self.off -= x;
-            }
             self.last = Some(x);
             self.off + x
         })
@@ -443,25 +444,37 @@ pub fn bar_of(t: i64, step_ms: i64, anchor: i64) -> i64 {
     t - (t - anchor).rem_euclid(step_ms)
 }
 
-/// Desk P&L since the first row (0 there), in bars: pnl_day, trading, realized, hedge and rebates restart each P&L day, so
+/// Desk P&L since `from` (0 there), in bars. The baseline is the last row before `from` when it is of the same P&L
+/// day; otherwise the day starts inside the range and every figure from 0, as a day figure is at its start. `rows`
+/// may hold that row; rows before `from` are not drawn. pnl_day, trading, realized, hedge and rebates restart each P&L day, so
 /// within a day a series is (the sum of the earlier days' final values) + its value now. OHLC of the
 /// cumulative day P&L; pi / realized / hedge / rebates: the bar's last non-null cumulative value; inventory and
 /// futures, equity: the bar's last row; volume and fills from `flows` (bar start -> (Σ notional, count)).
 /// `per_day`: each figure as stored instead, restarting at each day start (a bar never spans two days when the
 /// step divides a day). `rows` ordered by t; bars without rows are left out.
-pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, day_start_min: i64, per_day: bool) -> Vec<P::HistoryBar> {
+pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, day_start_min: i64, per_day: bool, from: i64)
+            -> Vec<P::HistoryBar> {
     let rows = clean(rows, day_start_min);
-    let rows = &rows[..];
+    let k = rows.partition_point(|r| r.t < from);
+    let ds0 = sessions::day_start(from, day_start_min);
+    let base = rows[..k].last().filter(|r| !per_day && sessions::day_start(r.t, day_start_min) == ds0);
+    let rows = &rows[k..];
     let anchor = day_start_min * 60_000;
     let mut out: Vec<P::HistoryBar> = vec![];
-    let (mut pnl, mut pi, mut re, mut he, mut mm, mut rb) =
-        (Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default(), Cum::default());
-    let mut day = None;
+    let (mut pnl, mut pi, mut re, mut he, mut mm, mut rb) = (
+        Cum::from(base.map(|b| b.pnl_day)),
+        Cum::from(base.and_then(|b| b.trading)),
+        Cum::from(base.and_then(|b| b.realized)),
+        Cum::from(base.and_then(|b| b.hedge)),
+        Cum::from(base.and_then(|b| b.mm)),
+        Cum::from(base.and_then(|b| b.rebates)),
+    );
+    let mut day = Some(ds0);
     for r in rows {
         let ds = sessions::day_start(r.t, day_start_min);
         if per_day {
             for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
-                *c = Cum { seen: true, ..Cum::default() };
+                *c = Cum::default();
             }
         } else if day != Some(ds) {
             for c in [&mut pnl, &mut pi, &mut re, &mut he, &mut mm, &mut rb] {
@@ -591,7 +604,7 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
     let from = from.max(to - MAX_BARS * sm);
     let dsm = api.day_start_min;
     let (rows, flows) = api.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
-    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm, per_day), days: days(from, to, dsm) };
+    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm, per_day, from), days: days(from, to, dsm) };
     Ok(json(&h))
 }
 
@@ -663,11 +676,35 @@ mod tests {
             row(d0 + 10_000, 6.6, Some(0.3)),     // half-valued just after a restart
             row(d0 + 15_000, 0.2, Some(0.3)),
         ];
-        let b = bars(&rows, &HashMap::new(), 60_000, 0, false);
+        // the range starts just after day 0's last row, its baseline
+        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 - 4_999);
         let today = b.last().unwrap();
         assert_eq!((today.h, today.c), (0.2, 0.2));
-        // Π: the range starts at day 0's last row (18 → 0), today adds 0.3; the roll row's stale 18 is not used
+        // Π: from day 0's last row (18 → 0), today adds 0.3; the roll row's stale 18 is not used
         assert_eq!(today.pi, Some(0.3));
+    }
+
+    #[test]
+    fn a_range_from_a_day_start_counts_the_day_from_0() {
+        let d0 = utc(2026, 11, 9, 0, 0);
+        let mut rows = vec![
+            row(d0 - 5_000, 17.0, Some(18.0)),
+            row(d0, 0.0, Some(18.0)),              // the roll row: Π still the ending day's
+            row(d0 + 5_000, -28.0, Some(-30.0)),   // the day's first seconds
+            row(d0 + 10_000, -29.0, Some(-31.0)),
+        ];
+        rows[2].hedge = Some(1.9);
+        rows[3].hedge = Some(2.0);
+        // from the day start: the first row of the day is not the zero
+        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].c, b[0].pi, b[0].hedge), (-29.0, Some(-31.0), Some(2.0)));
+        // the same day from a minute that has no row yet: 0 at the day start, still
+        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 + 1);
+        assert_eq!((b[0].c, b[0].pi), (-29.0, Some(-31.0)));
+        // from mid-day: the last row before `from` is the baseline
+        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 + 7_000);
+        assert_eq!((b[0].c, b[0].pi, b[0].hedge), (-1.0, Some(-1.0), Some(2.0 - 1.9)));
     }
 
     #[test]
@@ -686,23 +723,25 @@ mod tests {
             row(d0 + 2 * DAY + 10 * m, 1.0, Some(1.0)),
         ];
         let flows: HashMap<i64, (f64, i64)> = [(d0, (100.0, 2))].into_iter().collect();
-        let b = bars(&rows, &flows, 3_600_000, 8 * 60, false);
+        // the range starts at the first row, with no row before it that day: day 0 counts from 0
+        let from = d0 - 60 * m;
+        let b = bars(&rows, &flows, 3_600_000, 8 * 60, false, from);
         assert_eq!(b.len(), 3);
-        // 07:00 bar: day 0, from 0 at the first row (pnl 1, trading 0.5, realized 0.25)
-        assert_eq!((b[0].t, b[0].o, b[0].h, b[0].l, b[0].c), (d0 - 3_600_000, 0.0, 2.0, 0.0, 1.0));
-        assert_eq!((b[0].pi, b[0].realized, b[0].hedge), (Some(0.5), Some(0.25), None));
+        // 07:00 bar: day 0 (pnl 1, 3, 2; trading 0.5, 1)
+        assert_eq!((b[0].t, b[0].o, b[0].h, b[0].l, b[0].c), (d0 - 3_600_000, 1.0, 3.0, 1.0, 2.0));
+        assert_eq!((b[0].pi, b[0].realized, b[0].hedge), (Some(1.0), Some(0.5), None));
         assert_eq!((b[0].volume, b[0].fills), (0.0, 0));
         // 08:00 bar: day 1 on top of day 0's final 2 (and trading's final 1)
-        assert_eq!((b[1].t, b[1].o, b[1].h, b[1].l, b[1].c), (d0, 1.5, 5.0, 0.0, 5.0));
-        assert_eq!((b[1].pi, b[1].realized), (Some(3.5), Some(1.75)));
+        assert_eq!((b[1].t, b[1].o, b[1].h, b[1].l, b[1].c), (d0, 2.5, 6.0, 1.0, 6.0));
+        assert_eq!((b[1].pi, b[1].realized), (Some(4.0), Some(2.0)));
         assert_eq!((b[1].inventory, b[1].futures), (Some((d0 + 40 * m) as f64), Some(-1.0)));
         assert_eq!((b[1].volume, b[1].fills), (100.0, 2));
         // two days on: 2 + 4 + 1 (trading: 1 + 3 + 1)
-        assert_eq!((b[2].t, b[2].c, b[2].pi), (d0 + 2 * DAY, 6.0, Some(4.5)));
+        assert_eq!((b[2].t, b[2].c, b[2].pi), (d0 + 2 * DAY, 7.0, Some(5.0)));
         // daily bars start at the day start
-        let b = bars(&rows, &HashMap::new(), DAY, 8 * 60, false);
+        let b = bars(&rows, &HashMap::new(), DAY, 8 * 60, false, from);
         assert_eq!(b.iter().map(|x| x.t).collect::<Vec<_>>(), [d0 - DAY, d0, d0 + 2 * DAY]);
-        assert_eq!((b[1].o, b[1].c), (1.5, 5.0));
+        assert_eq!((b[1].o, b[1].c), (2.5, 6.0));
         let ds = days(d0 - 30 * m, d0 + DAY + 1, 8 * 60);
         assert_eq!(ds.iter().map(|d| (d.day.as_str(), d.start)).collect::<Vec<_>>(),
                    [("2026-10-04", d0 - DAY), ("2026-10-05", d0), ("2026-10-06", d0 + DAY)]);
@@ -714,7 +753,7 @@ mod tests {
         let m = 60_000;
         let mut rows = vec![row(d0 - 20 * m, 2.0, Some(1.0)), row(d0 - 10 * m, 3.0, Some(1.5)), row(d0 + 10 * m, 0.5, Some(0.25))];
         rows[2].equity = 99.0;
-        let b = bars(&rows, &HashMap::new(), 3_600_000, 0, true);
+        let b = bars(&rows, &HashMap::new(), 3_600_000, 0, true, d0 - 20 * m);
         assert_eq!(b.len(), 2);
         // as stored: day 0 ends at 3, day 1 starts again near 0 (not 3 + 0.5)
         assert_eq!((b[0].o, b[0].h, b[0].c, b[0].pi), (2.0, 3.0, 3.0, Some(1.5)));
@@ -816,12 +855,13 @@ mod tests {
         assert_eq!(v["step"], 60);
         let b = v["bars"].as_array().unwrap();
         assert_eq!(b.len(), 3);
-        assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 0.0, "h": 0.0, "l": 0.0, "c": 0.0, "pi": 0.0,
-            "realized": 0.0, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
-        assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&1.0.into(), &1.0.into(), &0.5.into()));
+        // the range starts at a day start: that day counts from 0, so its row's 3 is in
+        assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 3.0, "h": 3.0, "l": 3.0, "c": 3.0, "pi": 3.0,
+            "realized": 0.5, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
+        assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&4.0.into(), &4.0.into(), &1.0.into()));
         // the spot fill only: the perp's (hedge) is not the desk's volume
         assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&6.0.into(), &1.into()));
-        assert_eq!(b[2]["c"], 2.0);
+        assert_eq!(b[2]["c"], 5.0);
         // per=day: as stored, each day from its own start
         let w: serde_json::Value =
             get(format!("/api/history?from={}&to={}&step=60&per=day", d0 - DAY, d0 + DAY)).await.unwrap().json().await.unwrap();

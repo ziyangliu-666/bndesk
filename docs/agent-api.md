@@ -36,7 +36,9 @@ q '/pnl?from=-30d&step=86400'
   The default range is the last 24 h; `pnl` and `events` default to 7 d.
 - **Time stamps:** `t` is epoch ms in UTC. A grid's `t` is the start of its bucket.
 - **Money** is in USD(T).
-- **Day figures** in `desk.*` restart at each P&L day's start; the catalog says when that is.
+- **Day figures** in `desk.*` restart at each P&L day's start; the catalog says when that is. `/pnl` counts
+  from 0 at `from`: a range that starts at a day start takes the whole day, one that starts mid-day runs from
+  the last row before `from`.
 - **Format:** `format=csv` works on `series`, `pnl` and `fills`; everything else is JSON.
 
 ## Endpoints
