@@ -39,7 +39,7 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
       if (k === "symbol") return (sort.k === "symbol" && sort.desc ? -1 : 1) * byName(a, b);
       if (k === "value") return (sort.desc ? -1 : 1) * (Math.abs(a.inv_value) - Math.abs(b.inv_value));
       // a part of the P&L (with no split kept, the trading P&L): what hedges (none) after what the desk trades
-      const part = (r: SymbolRow) => (isHedge(r) ? null : !d.mm ? tradingPnl(r) : k === "mm" ? r.mm_pnl : r.inv_pnl);
+      const part = (r: SymbolRow) => (isHedge(r) ? null : !d.mm ? tradingPnl(r) : k === "mm" ? r.quoting_pnl : r.holding_pnl);
       const x = part(a),
         y = part(b);
       if (x == null || y == null) return x == null && y == null ? byName(a, b) : x == null ? 1 : -1;
@@ -101,8 +101,8 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
         {head("value", "Inv value", `Inventory × mid, ${cur()}; sorted by size`)}
         {d.mm ? (
           <>
-            {head("mm", "MM", `Market making today, ${cur()}: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees. What hedges: its leg's P&L across both columns, marked hedge`)}
-            {head("inv", "Inv PnL", `Inventory PnL today, ${cur()}: what the held inventory made after those 60 s`)}
+            {head("mm", "MM", `Market making today, ${cur()}: each fill against its own mid 60 s later, minus fees. What hedges: its leg's P&L across both columns, marked hedge`)}
+            {head("inv", "Inv PnL", `Inventory PnL today, ${cur()}: what the held inventory made after those 60 s, on the same mid`)}
           </>
         ) : (
           head("mm", "Trading", `Today, ${cur()}: what the fills and the held inventory made, fees included. What hedges: its leg's P&L, marked hedge`)
@@ -132,8 +132,8 @@ export function Instruments({ sel }: { sel: Instrument | null }) {
                 </span>
               ) : d.mm ? (
                 <>
-                  <span className={tone(r.mm_pnl)}>{maskNode(hide, pnl(r.mm_pnl))}</span>
-                  <span className={tone(r.inv_pnl)}>{maskNode(hide, pnl(r.inv_pnl))}</span>
+                  <span className={tone(r.quoting_pnl)}>{maskNode(hide, pnl(r.quoting_pnl))}</span>
+                  <span className={tone(r.holding_pnl)}>{maskNode(hide, pnl(r.holding_pnl))}</span>
                 </>
               ) : (
                 <span className={tone(r.trading_pnl)}>{maskNode(hide, pnl(r.trading_pnl))}</span>

@@ -183,7 +183,7 @@ export function dayBars(dayStart: number, from: number, equity0: number): DayBar
   const tot = (m: number) => desk.pi[m]! + desk.he[m]! + desk.rb[m]! + desk.ot[m]!;
   const rec = minuteOf(RECORDED_FROM);
   const c = (v: number) => Math.round(v * 100) / 100;
-  const b: DayBars = { t: [], equity: [], pnl_day: [], trading: [], mm: [], hedge: [], inventory: [], futures: [], volume: [] };
+  const b: DayBars = { t: [], equity: [], pnl_day: [], trading: [], mm: [], hedge: [], quoting: [], inventory: [], futures: [], volume: [] };
   for (let m = Math.max(d0, minuteOf(from)); m <= now; m++) {
     const pnl = tot(m) - (d0 > 0 ? tot(d0 - 1) : 0);
     b.t.push(ORIGIN + m * MIN);
@@ -191,6 +191,7 @@ export function dayBars(dayStart: number, from: number, equity0: number): DayBar
     b.equity.push(c(equity0 + pnl));
     b.trading.push(m >= rec ? c(at(desk.pi, m)) : null);
     b.mm.push(m >= rec ? c(at(desk.mm, m)) : null);
+    b.quoting.push(m >= rec ? c(at(desk.mm, m)) : null);
     b.hedge.push(m >= rec ? c(at(desk.he, m)) : null);
     b.inventory.push(c(desk.inv[m]!));
     b.futures.push(c(desk.fut[m]!));

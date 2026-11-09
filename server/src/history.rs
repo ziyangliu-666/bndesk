@@ -73,19 +73,39 @@ pub struct Api {
     roles: P::Roles,
     /// Desk rows in another currency than the desk's now stay in the db and are not read.
     money: Option<crate::store::Series>,
+    /// The markout horizon market making marks at (index into `fills::HK`).
+    mm_h: usize,
 }
 
 /// What `/api/history` reads, kept in memory: the desk rows (account "*") by time, thinned as the store
-/// thins them, and the fills' notional and count per minute. Every bar size is whole minutes on a
-/// minute-aligned anchor, so minute sums add up to any bar. A fill written again (same id) within
-/// `FILL_IDS_MS` replaces its earlier part.
+/// thins them, and per minute by fill time the fills' notional, count and P&L on their own mid (`Flow`). Every bar
+/// size is whole minutes on a minute-aligned anchor, so minute sums add up to any bar. A fill written again (same
+/// id, as its marks mature) within `FILL_IDS_MS` replaces its earlier part.
 #[derive(Default)]
 struct Mem {
     rows: Vec<DeskRow>,
-    minutes: HashMap<i64, (f64, i64)>,
-    ids: HashMap<String, (i64, f64)>,
+    minutes: HashMap<i64, Flow>,
+    ids: HashMap<String, (i64, Flow)>,
     fill_rowid: i64,
     trimmed: i64,
+}
+
+/// What a minute's (or a bar's) fills add: notional, count, and their P&L on the own mid (`FillRec::own_pnl`, the
+/// quote taken at 1 like the notional, the fee in the desk's currency as stored).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Flow {
+    pub volume: f64,
+    pub fills: i64,
+    pub own: crate::fills::OwnPnl,
+}
+
+impl Flow {
+    /// `o` added (`sign` 1) or taken back (-1).
+    fn add(&mut self, o: &Flow, sign: i64) {
+        self.volume += sign as f64 * o.volume;
+        self.fills += sign * o.fills;
+        if sign < 0 { self.own -= o.own } else { self.own += o.own }
+    }
 }
 
 /// Rows this recent are read again on each refresh: a row can be rewritten for the same time.
@@ -107,32 +127,28 @@ impl Mem {
         self.rows.extend(new);
         // the desk's volume is what it trades (the hedge's fills are not market making), as the ticker's; by the roles
         // set now, whichever they were when the fill was stored
-        let mut st = c.prepare_cached("SELECT rowid, id, ts, price * qty, symbol, venue FROM fills WHERE rowid > ? ORDER BY rowid")?;
+        let have: Vec<String> = c.prepare_cached("PRAGMA table_info(fills)")?.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
+        // a db the desk has not migrated yet reads its missing columns as NULL
+        let cols: Vec<&str> = crate::store::FILL_COLS.split(',').map(str::trim).map(|k| if have.iter().any(|h| h == k) { k } else { "NULL" }).collect();
+        let cols = cols.join(", ");
+        let mut st = c.prepare_cached(&format!("SELECT {cols}, rowid FROM fills WHERE rowid > ? ORDER BY rowid"))?;
         let mut q = st.query([self.fill_rowid])?;
         while let Some(r) = q.next()? {
-            self.fill_rowid = r.get(0)?;
-            let (id, ts, n): (String, Option<i64>, Option<f64>) = (r.get(1)?, r.get(2)?, r.get(3)?);
-            let Some(ts) = ts else { continue };
+            self.fill_rowid = r.get(23)?;
+            let f = crate::store::row_fill(r)?;
             // a conversion between stablecoins is not desk volume, nor a fill of what hedges
-            let symbol: Option<String> = r.get(4)?;
-            let symbol = symbol.as_deref().unwrap_or("");
-            if crate::market::is_conversion(symbol)
-                || r.get::<_, Option<String>>(5)?.is_some_and(|v| !v.parse::<P::Venue>().is_ok_and(|v| roles.traded(symbol, v)))
-            {
+            if f.conversion() || !roles.traded(&f.symbol, f.venue) {
                 continue;
             }
-            let n = n.unwrap_or(0.0);
-            if let Some((t0, n0)) = self.ids.get(&id).copied() {
-                let e = self.minutes.entry(t0 - t0.rem_euclid(MIN)).or_default();
-                e.0 -= n0;
-                e.1 -= 1;
+            let fee = f.fee_usd.unwrap_or(if crate::market::is_stable(&f.fee_asset) { f.fee } else { 0.0 });
+            let x = Flow { volume: f.notional(), fills: 1, own: f.own_pnl(1.0, fee, None, now) };
+            if let Some((t0, x0)) = self.ids.get(&f.id).copied() {
+                self.minutes.entry(t0 - t0.rem_euclid(MIN)).or_default().add(&x0, -1);
             }
-            if ts >= now - FILL_IDS_MS {
-                self.ids.insert(id, (ts, n));
+            if f.ts >= now - FILL_IDS_MS {
+                self.ids.insert(f.id.clone(), (f.ts, x));
             }
-            let e = self.minutes.entry(ts - ts.rem_euclid(MIN)).or_default();
-            e.0 += n;
-            e.1 += 1;
+            self.minutes.entry(f.ts - f.ts.rem_euclid(MIN)).or_default().add(&x, 1);
         }
         if now - self.trimmed > 3_600_000 {
             self.trimmed = now;
@@ -151,16 +167,11 @@ impl Mem {
         self.rows[a..b].to_vec()
     }
 
-    /// Bar start -> (Σ notional, fills) over the fills in [from, to) (to the minute).
-    fn flows(&self, from: i64, to: i64, step_ms: i64, anchor: i64) -> HashMap<i64, (f64, i64)> {
-        let mut out: HashMap<i64, (f64, i64)> = HashMap::new();
-        for (&t, &(n, k)) in &self.minutes {
-            if t >= from - from.rem_euclid(MIN) && t < to && k > 0 {
-                let e = out.entry(bar_of(t, step_ms, anchor)).or_default();
-                e.0 += n;
-                e.1 += k;
-            }
-        }
+    /// Minute -> what its fills add, over the fills in [from, to) (to the minute), in time order.
+    fn flows(&self, from: i64, to: i64) -> Vec<(i64, Flow)> {
+        let mut out: Vec<(i64, Flow)> =
+            self.minutes.iter().filter(|(t, x)| **t >= from - from.rem_euclid(MIN) && **t < to && x.fills > 0).map(|(t, x)| (*t, *x)).collect();
+        out.sort_by_key(|x| x.0);
         out
     }
 }
@@ -178,12 +189,20 @@ impl Api {
             keep_ms: 365 * DAY,
             roles: P::Roles::default(),
             money: None,
+            mm_h: 2,
         })
     }
 
     pub fn roles(mut self: Arc<Self>, roles: P::Roles) -> Arc<Self> {
         if let Some(a) = Arc::get_mut(&mut self) {
             a.roles = roles;
+        }
+        self
+    }
+
+    pub fn mm_horizon(mut self: Arc<Self>, horizon_s: i64) -> Arc<Self> {
+        if let Some(a) = Arc::get_mut(&mut self) {
+            a.mm_h = crate::fills::HK.iter().position(|k| *k == horizon_s.to_string()).unwrap_or(2);
         }
         self
     }
@@ -207,8 +226,8 @@ impl Api {
     pub(crate) async fn bars_in(&self, from: i64, to: i64, step_s: i64) -> Result<Vec<P::HistoryBar>, ApiError> {
         let sm = step_s * 1000;
         let dsm = self.day_start_min;
-        let (rows, flows) = self.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
-        Ok(bars(&rows, &flows, sm, dsm, false, from))
+        let (rows, flows) = self.with_mem(move |m| (m.rows(from, to), m.flows(from, to))).await?;
+        Ok(bars(&rows, &flows, sm, dsm, false, from, self.mm_h))
     }
 
     /// `f` on a read-only connection to the desk's db, off the async threads: for `/api/agent`.
@@ -449,10 +468,12 @@ pub fn bar_of(t: i64, step_ms: i64, anchor: i64) -> i64 {
 /// may hold that row; rows before `from` are not drawn. pnl_day, trading, realized, hedge and rebates restart each P&L day, so
 /// within a day a series is (the sum of the earlier days' final values) + its value now. OHLC of the
 /// cumulative day P&L; pi / realized / hedge / rebates: the bar's last non-null cumulative value; inventory and
-/// futures, equity: the bar's last row; volume and fills from `flows` (bar start -> (Σ notional, count)).
+/// futures, equity: the bar's last row; volume and fills from `flows` (minute -> what its fills add, in time order),
+/// and edge, quoting and fair_mm (at horizon index `hj`) summed from them by fill time since `from` (per day:
+/// since the bar's day start).
 /// `per_day`: each figure as stored instead, restarting at each day start (a bar never spans two days when the
 /// step divides a day). `rows` ordered by t; bars without rows are left out.
-pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, day_start_min: i64, per_day: bool, from: i64)
+pub fn bars(rows: &[DeskRow], flows: &[(i64, Flow)], step_ms: i64, day_start_min: i64, per_day: bool, from: i64, hj: usize)
             -> Vec<P::HistoryBar> {
     let rows = clean(rows, day_start_min);
     let k = rows.partition_point(|r| r.t < from);
@@ -515,14 +536,38 @@ pub fn bars(rows: &[DeskRow], flows: &HashMap<i64, (f64, i64)>, step_ms: i64, da
                 equity: Some(r.equity),
                 volume: 0.0,
                 fills: 0,
+                ..Default::default()
             }),
         }
     }
+    // flows: each bar its own minutes' volume and fills, and the running sum of what they made through its end
+    let mut per_bar: HashMap<i64, Flow> = HashMap::new();
+    for (t, x) in flows {
+        per_bar.entry(bar_of(*t, step_ms, anchor)).or_default().add(x, 1);
+    }
+    let (mut run, mut i, mut run_day) = (Flow::default(), 0, None);
     for x in &mut out {
-        if let Some((v, n)) = flows.get(&x.t) {
-            x.volume = *v;
-            x.fills = *n;
+        if let Some(f) = per_bar.get(&x.t) {
+            x.volume = f.volume;
+            x.fills = f.fills;
         }
+        let end = x.t + step_ms;
+        while i < flows.len() && flows[i].0 < end {
+            if per_day && run_day != Some(sessions::day_start(flows[i].0, day_start_min)) {
+                run = Flow::default();
+                run_day = Some(sessions::day_start(flows[i].0, day_start_min));
+            }
+            run.add(&flows[i].1, 1);
+            i += 1;
+        }
+        if per_day && run_day != Some(sessions::day_start(x.t, day_start_min)) {
+            run = Flow::default();
+            run_day = Some(sessions::day_start(x.t, day_start_min));
+        }
+        x.edge = run.own.edge;
+        x.quoting = run.own.quoting[hj];
+        x.fair_mm = run.own.fair[hj];
+        x.curve = run.own.quoting;
     }
     out
 }
@@ -603,8 +648,8 @@ async fn history(State(api): State<Arc<Api>>, Query(q): Params) -> Result<Respon
     let (from, to) = range(&q, DAY)?;
     let from = from.max(to - MAX_BARS * sm);
     let dsm = api.day_start_min;
-    let (rows, flows) = api.with_mem(move |m| (m.rows(from, to), m.flows(from, to, sm, dsm * 60_000))).await?;
-    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm, per_day, from), days: days(from, to, dsm) };
+    let (rows, flows) = api.with_mem(move |m| (m.rows(from, to), m.flows(from, to))).await?;
+    let h = P::History { step, bars: bars(&rows, &flows, sm, dsm, per_day, from, api.mm_h), days: days(from, to, dsm) };
     Ok(json(&h))
 }
 
@@ -677,7 +722,7 @@ mod tests {
             row(d0 + 15_000, 0.2, Some(0.3)),
         ];
         // the range starts just after day 0's last row, its baseline
-        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 - 4_999);
+        let b = bars(&rows, &[], 60_000, 0, false, d0 - 4_999, 2);
         let today = b.last().unwrap();
         assert_eq!((today.h, today.c), (0.2, 0.2));
         // Π: from day 0's last row (18 → 0), today adds 0.3; the roll row's stale 18 is not used
@@ -696,14 +741,14 @@ mod tests {
         rows[2].hedge = Some(1.9);
         rows[3].hedge = Some(2.0);
         // from the day start: the first row of the day is not the zero
-        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0);
+        let b = bars(&rows, &[], 60_000, 0, false, d0, 2);
         assert_eq!(b.len(), 1);
         assert_eq!((b[0].c, b[0].pi, b[0].hedge), (-29.0, Some(-31.0), Some(2.0)));
         // the same day from a minute that has no row yet: 0 at the day start, still
-        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 + 1);
+        let b = bars(&rows, &[], 60_000, 0, false, d0 + 1, 2);
         assert_eq!((b[0].c, b[0].pi), (-29.0, Some(-31.0)));
         // from mid-day: the last row before `from` is the baseline
-        let b = bars(&rows, &HashMap::new(), 60_000, 0, false, d0 + 7_000);
+        let b = bars(&rows, &[], 60_000, 0, false, d0 + 7_000, 2);
         assert_eq!((b[0].c, b[0].pi, b[0].hedge), (-1.0, Some(-1.0), Some(2.0 - 1.9)));
     }
 
@@ -722,24 +767,29 @@ mod tests {
             // day 2 has no rows; day 3:
             row(d0 + 2 * DAY + 10 * m, 1.0, Some(1.0)),
         ];
-        let flows: HashMap<i64, (f64, i64)> = [(d0, (100.0, 2))].into_iter().collect();
+        let mut x = Flow { volume: 60.0, fills: 1, ..Default::default() };
+        x.own.edge = 1.0;
+        x.own.quoting[2] = 2.0;
+        let flows = vec![(d0 - 30 * m, x), (d0, Flow { volume: 40.0, ..x }), (d0 + 10 * m, Flow { volume: 60.0, ..x })];
         // the range starts at the first row, with no row before it that day: day 0 counts from 0
         let from = d0 - 60 * m;
-        let b = bars(&rows, &flows, 3_600_000, 8 * 60, false, from);
+        let b = bars(&rows, &flows, 3_600_000, 8 * 60, false, from, 2);
         assert_eq!(b.len(), 3);
         // 07:00 bar: day 0 (pnl 1, 3, 2; trading 0.5, 1)
         assert_eq!((b[0].t, b[0].o, b[0].h, b[0].l, b[0].c), (d0 - 3_600_000, 1.0, 3.0, 1.0, 2.0));
         assert_eq!((b[0].pi, b[0].realized, b[0].hedge), (Some(1.0), Some(0.5), None));
-        assert_eq!((b[0].volume, b[0].fills), (0.0, 0));
+        assert_eq!((b[0].volume, b[0].fills, b[0].edge, b[0].quoting), (60.0, 1, 1.0, 2.0));
         // 08:00 bar: day 1 on top of day 0's final 2 (and trading's final 1)
         assert_eq!((b[1].t, b[1].o, b[1].h, b[1].l, b[1].c), (d0, 2.5, 6.0, 1.0, 6.0));
         assert_eq!((b[1].pi, b[1].realized), (Some(4.0), Some(2.0)));
         assert_eq!((b[1].inventory, b[1].futures), (Some((d0 + 40 * m) as f64), Some(-1.0)));
         assert_eq!((b[1].volume, b[1].fills), (100.0, 2));
+        // by fill time, summed since `from`
+        assert_eq!((b[1].edge, b[1].quoting, b[2].quoting), (3.0, 6.0, 6.0));
         // two days on: 2 + 4 + 1 (trading: 1 + 3 + 1)
         assert_eq!((b[2].t, b[2].c, b[2].pi), (d0 + 2 * DAY, 7.0, Some(5.0)));
         // daily bars start at the day start
-        let b = bars(&rows, &HashMap::new(), DAY, 8 * 60, false, from);
+        let b = bars(&rows, &[], DAY, 8 * 60, false, from, 2);
         assert_eq!(b.iter().map(|x| x.t).collect::<Vec<_>>(), [d0 - DAY, d0, d0 + 2 * DAY]);
         assert_eq!((b[1].o, b[1].c), (2.5, 6.0));
         let ds = days(d0 - 30 * m, d0 + DAY + 1, 8 * 60);
@@ -753,7 +803,7 @@ mod tests {
         let m = 60_000;
         let mut rows = vec![row(d0 - 20 * m, 2.0, Some(1.0)), row(d0 - 10 * m, 3.0, Some(1.5)), row(d0 + 10 * m, 0.5, Some(0.25))];
         rows[2].equity = 99.0;
-        let b = bars(&rows, &HashMap::new(), 3_600_000, 0, true, d0 - 20 * m);
+        let b = bars(&rows, &[], 3_600_000, 0, true, d0 - 20 * m, 2);
         assert_eq!(b.len(), 2);
         // as stored: day 0 ends at 3, day 1 starts again near 0 (not 3 + 0.5)
         assert_eq!((b[0].o, b[0].h, b[0].c, b[0].pi), (2.0, 3.0, 3.0, Some(1.5)));
@@ -796,9 +846,9 @@ mod tests {
         fill("f2", now - 10_000, 1.0);
         m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None).unwrap();
         assert_eq!(m.rows.iter().map(|r| r.pnl_day).collect::<Vec<_>>(), [1.0, 3.0, 4.0]);
-        let f = m.flows(now - DAY, now + 1, 3_600_000, 0);
-        assert_eq!(f.values().map(|v| v.1).sum::<i64>(), 2);
-        assert_eq!(f.values().map(|v| v.0).sum::<f64>(), 8.0);
+        let f = m.flows(now - DAY, now + 1);
+        assert_eq!(f.iter().map(|v| v.1.fills).sum::<i64>(), 2);
+        assert_eq!(f.iter().map(|v| v.1.volume).sum::<f64>(), 8.0);
     }
 
     async fn fake_binance(hits: Arc<AtomicUsize>) -> String {
@@ -857,7 +907,8 @@ mod tests {
         assert_eq!(b.len(), 3);
         // the range starts at a day start: that day counts from 0, so its row's 3 is in
         assert_eq!(b[0], serde_json::json!({"t": d0 - 60_000, "o": 3.0, "h": 3.0, "l": 3.0, "c": 3.0, "pi": 3.0,
-            "realized": 0.5, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0}));
+            "realized": 0.5, "mm": null, "hedge": null, "rebates": null, "inventory": 10.0, "futures": 0.0, "equity": 0.0, "volume": 0.0, "fills": 0,
+            "edge": 0.0, "quoting": 0.0, "fair_mm": 0.0}));
         assert_eq!((&b[1]["c"], &b[1]["pi"], &b[1]["realized"]), (&4.0.into(), &4.0.into(), &1.0.into()));
         // the spot fill only: the perp's (hedge) is not the desk's volume
         assert_eq!((&b[1]["volume"], &b[1]["fills"]), (&6.0.into(), &1.into()));

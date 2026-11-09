@@ -189,7 +189,8 @@ pub struct Desk {
     pub money: crate::store::Series,
     pub series: Vec<P::SeriesPoint>,
     /// market making and the hedge legs' P&L at each series point (the day chart's bars draw them)
-    series_x: Vec<(Option<f64>, Option<f64>)>,
+    /// per series point: mm, hedge, quoting
+    series_x: Vec<(Option<f64>, Option<f64>, Option<f64>)>,
     /// the minute bars from this minute on go out with the next tick (a minute has closed)
     new_bars: Option<i64>,
     agg: Option<(i64, Rc<FillAgg>)>,
@@ -633,7 +634,7 @@ impl Desk {
         for r in &data.equity {
             if r.account == "*" {
                 if r.t.rem_euclid(5000) == 0 {
-                    self.series_x.push((r.mm, r.hedge));
+                    self.series_x.push((r.mm, r.hedge, r.quoting));
                     self.series.push(P::SeriesPoint {
                         t: r.t,
                         equity: r.equity,
@@ -708,6 +709,12 @@ impl Desk {
         ps.mm_unmarked_fills = mm.unmarked;
         ps.mm_unmarked_notional = mm.unmarked_notional;
         ps.inventory = ps.trading - mm.total;
+        let hj = crate::fills::HK.iter().position(|k| *k == self.cfg.mm_horizon_s.to_string()).unwrap_or(2);
+        ps.edge = mm.own.edge;
+        ps.carry = ps.trading - mm.own.edge;
+        ps.quoting = mm.own.quoting[hj];
+        ps.holding = ps.trading - ps.quoting;
+        ps.quoting_curve = mm.own.quoting.to_vec();
         let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
         expo.hedge_day = Some(hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs));
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
@@ -928,7 +935,10 @@ impl Desk {
             fb.take_dirty()
         };
         let mut out = Vec::with_capacity(dirty.len());
-        for f in dirty {
+        for mut f in dirty {
+            if f.fee_usd.is_none() {
+                f.fee_usd = Some(if f.fee != 0.0 && !f.fee_asset.is_empty() { f.fee * self.market.borrow_mut().asset_price(&f.fee_asset).unwrap_or(0.0) } else { 0.0 });
+            }
             let p = f.proto();
             self.fill_protos.insert(f.id.clone(), p.clone());
             out.push(p);
@@ -1042,6 +1052,8 @@ impl Desk {
             hedge,
             mm: some(s.pnl.mm),
             rebates: some(s.rebates),
+            edge: some(s.pnl.edge),
+            quoting: some(s.pnl.quoting),
         }));
         let mut rows = vec![];
         {
@@ -1053,7 +1065,7 @@ impl Desk {
             }
         }
         self.series.push(p.clone());
-        self.series_x.push((some(s.pnl.mm), hedge));
+        self.series_x.push((some(s.pnl.mm), hedge, some(s.pnl.quoting)));
         self.new_series.push(p);
         let pts: Vec<(f64, Option<f64>)> =
             rows.iter().map(|r| (r.2, self.acct_series.get(&r.0).and_then(|s| s.2.last().copied()))).collect();
@@ -1602,6 +1614,7 @@ pub async fn run(mut cfg: Config) -> Result<()> {
             .retention(d.cfg.keep_fine_days, d.cfg.keep_days)
             .roles(d.cfg.roles.clone())
             .money(d.money.clone())
+            .mm_horizon(d.cfg.mm_horizon_s)
     };
     history.warm();
     // the engine's own figures, pushed from its box (its token in BNDESK_INGEST_TOKEN)
@@ -1755,16 +1768,17 @@ fn opening_equity(mark: Option<(i64, f64)>, ds: i64, now: Option<f64>) -> Option
 
 /// Minute bars from `from`'s minute on: each minute's last point of `series` (with its `x`: market making,
 /// hedge), money in cents, and the notional of `fills` in the minute (conversions between stablecoins left out).
-fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: &[FillRec], from: i64) -> P::DayBars {
+fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>, Option<f64>)], fills: &[FillRec], from: i64) -> P::DayBars {
     let cents = |v: f64| (v * 100.0).round() / 100.0;
     let mut b = P::DayBars::default();
     let start = series.partition_point(|p| p.t < from.saturating_sub(from.rem_euclid(MINUTE)));
-    for (p, (mm, hedge)) in series[start..].iter().zip(&x[start..]) {
+    for (p, (mm, hedge, quoting)) in series[start..].iter().zip(&x[start..]) {
         let m = p.t - p.t.rem_euclid(MINUTE);
         if b.t.last() != Some(&m) {
             b.t.push(m);
             b.trading.push(None);
             b.mm.push(None);
+            b.quoting.push(None);
             b.hedge.push(None);
             b.equity.push(0.0);
             b.pnl_day.push(0.0);
@@ -1776,6 +1790,7 @@ fn day_bars(series: &[P::SeriesPoint], x: &[(Option<f64>, Option<f64>)], fills: 
         b.pnl_day[i] = cents(p.pnl_day);
         b.trading[i] = p.trading.map(cents).or(b.trading[i]);
         b.mm[i] = mm.map(cents).or(b.mm[i]);
+        b.quoting[i] = quoting.map(cents).or(b.quoting[i]);
         b.hedge[i] = hedge.map(cents).or(b.hedge[i]);
         b.inventory[i] = cents(p.inventory);
         b.futures[i] = cents(p.futures_notional);
@@ -1834,7 +1849,7 @@ mod tests {
     fn day_bars_take_each_minutes_last_point() {
         let pt = |t: i64, pnl: f64, trading: Option<f64>| P::SeriesPoint { t, pnl_day: pnl, equity: 100.0 + pnl, trading, ..Default::default() };
         let series = [pt(60_000, 1.004, Some(0.5)), pt(65_000, 2.0, None), pt(125_000, 3.333, Some(1.0)), pt(185_000, 4.0, Some(2.0))];
-        let x = [(Some(0.1), None), (None, Some(-1.0)), (Some(0.2), Some(-2.0)), (None, None)];
+        let x = [(Some(0.1), None, None), (None, Some(-1.0), None), (Some(0.2), Some(-2.0), Some(0.3)), (None, None, None)];
         let fill = |ts: i64| FillRec::new("f", ts, "a", "S", Venue::SPOT, Side::Buy, 2.0, 1.5);
         let fills = [fill(61_000), fill(70_000), fill(130_000), fill(10_000)];
         let b = day_bars(&series, &x, &fills, i64::MIN);

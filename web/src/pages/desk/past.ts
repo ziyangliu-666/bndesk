@@ -11,7 +11,7 @@
 // 35 040 at 15m, 105 120 at 5m and 525 600 at 1m, so the budget holds the year at 15m and above, seven months at 5m
 // and six weeks at 1m; the phone, with more series on less memory, a year at 1h and five days at 1m.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getJSON, type HistBar, type History } from "../../api";
+import { getJSON, ownMid, type HistBar, type History } from "../../api";
 import { MIN, type Row } from "./model";
 
 const DAY = 86_400_000;
@@ -55,7 +55,7 @@ const dayBars = new Map<number, Promise<HistBar[]>>();
 function daysBefore(dayStart: number): Promise<HistBar[]> {
   let q = dayBars.get(dayStart);
   if (!q) {
-    q = getJSON<History>("/api/history", { from: dayStart - MAX_BACK, to: dayStart, step: 86_400, per: "day" }).then((h) =>
+    q = getJSON<History>("/api/history", { from: dayStart - MAX_BACK, to: dayStart, step: 86_400, per: "day" }).then(ownMid).then((h) =>
       h.bars.filter((x) => x.t < dayStart).sort((x, y) => x.t - y.t),
     );
     q.catch(() => dayBars.delete(dayStart));
@@ -65,7 +65,7 @@ function daysBefore(dayStart: number): Promise<HistBar[]> {
 }
 
 async function fetchBars(stepS: number, from: number, to: number, dayStart: number): Promise<HistBar[]> {
-  const h = await getJSON<History>("/api/history", { from, to, step: stepS, per: "day" });
+  const h = ownMid(await getJSON<History>("/api/history", { from, to, step: stepS, per: "day" }));
   return h.bars.filter((b) => b.t >= from && b.t < to && b.t < dayStart);
 }
 

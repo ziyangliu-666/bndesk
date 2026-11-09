@@ -33,22 +33,23 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 14] = [
+pub const MIGRATIONS: [(&str, &str, &str); 17] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"), ("fills", "path", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
     ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"), ("fills", "bf", "INTEGER"),
+    ("fills", "fee_usd", "REAL"), ("equity", "edge", "REAL"), ("equity", "quoting", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
-    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf";
+    ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf, fee_usd";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
-    realized, floating, hedge, mm, rebates";
+    realized, floating, hedge, mm, rebates, edge, quoting";
 pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
 
 pub(crate) const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
-    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf, fee_usd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
-    futures_notional, trading, hedged, realized, floating, hedge, mm, rebates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    futures_notional, trading, hedged, realized, floating, hedge, mm, rebates, edge, quoting) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
     volume, covered_s, backfilled_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
 // a record is written when first seen and again once valued: the value is set once, the rest never changes
@@ -185,6 +186,9 @@ pub struct EquityRow {
     pub hedge: Option<f64>,
     pub mm: Option<f64>,
     pub rebates: Option<f64>,
+    /// Π's own-mid split (`PnlSummary`): edge at the fills, quoting at the desk's horizon
+    pub edge: Option<f64>,
+    pub quoting: Option<f64>,
 }
 
 /// pnl_hours row; `backfilled_s` is NULL in rows written before that column existed.
@@ -321,7 +325,7 @@ fn parse_path(s: &str, f: &mut FillRec) {
     }
 }
 
-pub(crate) fn fill_params(f: &FillRec) -> [Value; 22] {
+pub(crate) fn fill_params(f: &FillRec) -> [Value; 23] {
     let opt = |v: Option<f64>| v.map_or(Value::Null, Value::Real);
     [
         Value::Text(f.id.clone()), Value::Integer(f.ts), Value::Text(f.account.clone()),
@@ -330,7 +334,7 @@ pub(crate) fn fill_params(f: &FillRec) -> [Value; 22] {
         Value::Integer(f.maker as i64), opt(f.fair), opt(f.edge_bps), opt(f.ref0), Value::Integer(f.has_ref as i64),
         Value::Text(marks_json(&f.mk)), Value::Text(marks_json(&f.mk_raw)), Value::Text(marks_json(&f.mk_fast)),
         Value::Text(keyed_json(&TK, &f.tox, false)), Value::Text(keyed_json(&ref_keys(), &f.refs, true)), path_json(f),
-        Value::Integer(f.bf as i64),
+        Value::Integer(f.bf as i64), opt(f.fee_usd),
     ]
 }
 
@@ -436,6 +440,7 @@ pub fn row_fill(r: &SqlRow) -> rusqlite::Result<FillRec> {
         parse_path(&s, &mut f);
     }
     f.bf = i64_opt(r, 21)?.unwrap_or(0) as u8;
+    f.fee_usd = f64_opt(r, 22)?;
     Ok(f)
 }
 
@@ -537,6 +542,8 @@ impl Store {
                     hedge: f64_opt(r, 11)?,
                     mm: f64_opt(r, 12)?,
                     rebates: f64_opt(r, 13)?,
+                    edge: f64_opt(r, 14)?,
+                    quoting: f64_opt(r, 15)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -670,7 +677,8 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::Equity(e)) => {
                 c.prepare_cached(SQL_EQUITY)?.execute(params![e.t, e.account, e.equity, e.pnl_day, e.markout_pnl,
                                                               e.inventory, e.futures_notional, e.trading, e.hedged,
-                                                              e.realized, e.floating, e.hedge, e.mm, e.rebates])?;
+                                                              e.realized, e.floating, e.hedge, e.mm, e.rebates, e.edge,
+                                                              e.quoting])?;
             }
             Item::Row(Row::PnlHour(h)) => {
                 c.prepare_cached(SQL_HOUR)?.execute(params![h.t, h.trading, h.hedged, h.factor, h.ref_hedge,

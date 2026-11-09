@@ -40,7 +40,7 @@ export function todayRows(bars: DayBars | undefined, series: readonly SeriesPoin
       const t = b.t[i]!;
       if (t < dayStart) continue;
       const c = b.pnl_day[i]!;
-      rows.set(t, { t, o: c, h: c, l: c, c, equity: b.equity[i]!, trading: b.trading[i] ?? null, mm: b.mm[i] ?? null, hedge: b.hedge[i] ?? null, inv: b.inventory[i]!, fut: b.futures[i]!, vol: b.volume[i]!, fills: null });
+      rows.set(t, { t, o: c, h: c, l: c, c, equity: b.equity[i]!, trading: b.trading[i] ?? null, mm: b.quoting?.[i] ?? null, hedge: b.hedge[i] ?? null, inv: b.inventory[i]!, fut: b.futures[i]!, vol: b.volume[i]!, fills: null });
     }
   const lastBar = b?.t.length ? b.t[b.t.length - 1]! : dayStart - MIN;
   // the 5 s series: at one minute it moves the minute's close, high and low; on the 5 s grid each point is a row

@@ -212,6 +212,11 @@ pub struct MmSplit {
     pub by_hour: HashMap<i64, f64>,
     pub unmarked: i64,
     pub unmarked_notional: f64,
+    /// The same fills on their own mid at the fill and at each horizon, fee in (`FillRec::own_pnl`): a fill younger
+    /// than a horizon at the mid now, one past it with no price at its latest mark.
+    pub own: crate::fills::OwnPnl,
+    /// quoting at h by base
+    pub own_by_base: HashMap<String, f64>,
 }
 
 pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, roles: &Roles, tracked: impl Fn(&str) -> bool) -> MmSplit {
@@ -229,6 +234,9 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, rol
         let qpx = m.asset_price(&quote).filter(|x| *x > 0.0).unwrap_or(1.0);
         let fee = if f.fee != 0.0 && !f.fee_asset.is_empty() { f.fee * m.asset_price(&f.fee_asset).unwrap_or(0.0) } else { 0.0 };
         let notional = f.notional() * qpx;
+        let own = f.own_pnl(qpx, fee, mid, now);
+        out.own += own;
+        *out.own_by_base.entry(base.clone()).or_insert(0.0) += own.quoting[h];
         let s = if f.side == Side::Buy { 1.0 } else { -1.0 };
         // against the reference fair (`FillRec::fair_bps`), the own mid at t + h where the fill has no reference
         let gross = match f.mark_at(h, now) {
@@ -317,6 +325,7 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
         let booked: Option<&str> = if venue.is_spot() { own.then_some(base.as_str()) } else { Some(key.as_str()) };
         let (tp, hp, rp, fp) = booked.and_then(|b| by_base.get(b).copied()).unwrap_or((0.0, 0.0, 0.0, 0.0));
         let mm_pnl = booked.and_then(|b| mm.by_base.get(b).copied()).unwrap_or(0.0);
+        let quoting_pnl = booked.and_then(|b| mm.own_by_base.get(b).copied()).unwrap_or(0.0);
         let px = truthy(m.px(id));
         let fair_t = truthy(fair);
         rows.push(P::SymbolRow {
@@ -348,6 +357,8 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
             float_pnl: fp,
             mm_pnl,
             inv_pnl: tp - mm_pnl,
+            quoting_pnl,
+            holding_pnl: tp - quoting_pnl,
             open_bids: q.bids,
             open_asks: q.asks,
             bid_dist_bps: match (truthy(q.bid), fair_t) {

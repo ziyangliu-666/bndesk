@@ -1542,6 +1542,7 @@ impl PnlBook {
             mm_unmarked_notional: 0.0,
             inventory: pi,
             funding_day: self.funding(m),
+            ..Default::default()   // edge, carry, quoting: set by the desk from the fills (metrics::mm_split)
         }
     }
 

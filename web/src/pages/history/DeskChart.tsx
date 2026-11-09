@@ -14,8 +14,8 @@ import { notionalCur, useDesk } from "../../desk";
 
 export const PART_META: Record<Part, { label: string; long: string; color: string; title?: string; style: Stroke }> = {
   pi: { label: "Trading", long: "Trading", color: PNL_COLORS.trading, style: PNL_STROKES.trading, title: "Trading PnL: market making plus inventory PnL, fees included; not hedged" },
-  mm: { label: "Market making", long: "Market making", color: PNL_COLORS.mm, style: PNL_STROKES.mm, title: "Market making: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees" },
-  inv: { label: "Inventory PnL", long: "Inventory PnL", color: PNL_COLORS.inv, style: PNL_STROKES.inv, title: "Inventory PnL: what the held inventory made after those 60 s" },
+  mm: { label: "Market making", long: "Market making", color: PNL_COLORS.mm, style: PNL_STROKES.mm, title: "Market making: each fill against its own mid 60 s later, minus fees" },
+  inv: { label: "Inventory PnL", long: "Inventory PnL", color: PNL_COLORS.inv, style: PNL_STROKES.inv, title: "Inventory PnL: what the held inventory made after those 60 s, on the same mid" },
   hedge: { label: "Hedge", long: "Hedge", color: PNL_COLORS.hedge, style: PNL_STROKES.hedge, title: "The hedge's legs: price, fees, funding" },
   reb: { label: "Rebates", long: "Rebates", color: PNL_COLORS.reb, style: PNL_STROKES.reb, title: "Market-maker rebates" },
   other: { label: "Other", long: "Other", color: PNL_COLORS.other, style: PNL_STROKES.other, title: "What the split does not explain: Day PnL − trading − hedge − rebates" },

@@ -593,8 +593,8 @@ function ReconcileEv() {
     <Section title={`Day PnL split, ${cur()}`} link={{ label: "Desk", to: { page: "desk" } }}>
       <SplitRows
         rows={[
-          { key: "mm", label: "Market making", v: sm.pnl.mm },
-          { key: "inv", label: "Inventory PnL", v: sm.pnl.inventory },
+          { key: "mm", label: "Market making", v: sm.pnl.quoting },
+          { key: "inv", label: "Inventory PnL", v: sm.pnl.holding },
           { key: "hedge", label: "Hedge", v: hedge },
           { key: "reb", label: "Rebates", v: sm.rebates },
           {

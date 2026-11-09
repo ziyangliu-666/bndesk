@@ -132,6 +132,6 @@ export function unpriced(p: { mm_unmarked_fills: number; mm_unmarked_notional: n
 
 /** Where a list has one column for an instrument's P&L: its market making (the inventory's part is on its page),
  *  or with no split kept, the trading P&L. What hedges has neither (its leg is shown in its place). */
-export const oneCol = (r: SymbolRow, mm: boolean): number => (mm ? r.mm_pnl : r.trading_pnl);
+export const oneCol = (r: SymbolRow, mm: boolean): number => (mm ? r.quoting_pnl : r.trading_pnl);
 /** That column's heading. */
 export const oneColWord = (mm: boolean) => (mm ? "MM" : "Trading");

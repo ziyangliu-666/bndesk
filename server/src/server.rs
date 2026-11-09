@@ -916,7 +916,7 @@ mod tests {
         assert!(m[1].starts_with("{\"type\":\"fills\",\"data\":[{\"id\":\"f\""));
         let bars = P::DayBars { t: vec![60_000], volume: vec![2.5], ..Default::default() };
         hub.tick(&Patch::of(&s), &[], &[], &[], &bars, || unreachable!());
-        assert_eq!(drain(&mut rx), [r#"{"type":"bars","data":{"t":[60000],"equity":[],"pnl_day":[],"trading":[],"mm":[],"hedge":[],"inventory":[],"futures":[],"volume":[2.5]}}"#]);
+        assert_eq!(drain(&mut rx), [r#"{"type":"bars","data":{"t":[60000],"equity":[],"pnl_day":[],"trading":[],"mm":[],"hedge":[],"quoting":[],"inventory":[],"futures":[],"volume":[2.5]}}"#]);
         hub.reset();
         hub.tick(&Patch::of(&s), &[f], &[], &[], &nb, || (b"{\"x\":1}".to_vec(), b"{\"y\":2}".to_vec()));
         assert_eq!(drain(&mut rx), ["{\"type\":\"snapshot\",\"data\":{\"x\":1}}", "{\"type\":\"older\",\"data\":{\"y\":2}}"]);

@@ -184,7 +184,7 @@ function withBars(series: SeriesPoint[], bars: DayBars | undefined): SeriesPoint
   return head.length ? head.concat(series) : series;
 }
 
-const BAR_KEYS = ["t", "equity", "pnl_day", "trading", "mm", "hedge", "inventory", "futures", "volume"] as const;
+const BAR_KEYS = ["t", "equity", "pnl_day", "trading", "mm", "hedge", "quoting", "inventory", "futures", "volume"] as const;
 
 /** The bars with `add`'s minutes (ascending, one run) in place of the store's over the same span. */
 function mergeBars(cur: DayBars, add: DayBars): DayBars {

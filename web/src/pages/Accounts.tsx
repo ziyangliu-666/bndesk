@@ -305,8 +305,8 @@ function useSpotRows() {
           value: s.inv_value,
           upnl: s.upnl,
           today: s.trading_pnl,
-          mm: s.mm_pnl,
-          inv: s.inv_pnl,
+          mm: s.quoting_pnl,
+          inv: s.holding_pnl,
           dust: s.dust,
         };
       })
@@ -381,8 +381,8 @@ function Spot() {
       // today's P&L in its two parts (with no split kept: their sum, the trading P&L)
       ...(dm
         ? [
-            n({ field: "mm", headerName: "Market making", headerTooltip: `Today, ${cur()}: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
-            n({ field: "inv", headerName: "Inventory PnL", headerTooltip: `Today, ${cur()}: what the held inventory made after those 60 s`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+            n({ field: "mm", headerName: "Market making", headerTooltip: `Today, ${cur()}: each fill against its own mid 60 s later, minus fees`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
+            n({ field: "inv", headerName: "Inventory PnL", headerTooltip: `Today, ${cur()}: what the held inventory made after those 60 s, on the same mid`, width: 100, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) }),
           ]
         : [n({ field: "today", headerName: "Trading", headerTooltip: `Today, ${cur()}: what the fills and the held inventory made (realized + float), fees included`, width: 90, valueFormatter: (p) => (p.data?.asset === quoteAsset() ? "" : fSigned(p)), cellClass: sCls(hide) })]),
     ]);
@@ -590,7 +590,7 @@ const openLeg = (e: RowClickedEvent<HedgeLeg>) => e.data && selectInstrument({ s
 
 export function HedgePanel() {
   const h = useStore((s) => s.snap?.exposure.hedge_day);
-  const inv = useStore((s) => s.snap?.summary.pnl.inventory);
+  const inv = useStore((s) => s.snap?.summary.pnl.holding);
   const hide = useHide();
   const cols = useMemo<ColDef<HedgeLeg>[]>(() => {
     const n = (c: ColDef<HedgeLeg>): ColDef<HedgeLeg> => ({ type: "rightAligned", cellClass: "num", ...c });

@@ -38,13 +38,15 @@ const DEFAULT_FILLS: i64 = 50_000;
 const STABLES: [&str; 4] = ["USDT", "USDC", "FDUSD", "USD"];
 
 /// Changes to what a series means, for an agent comparing across them. Newest last.
-const CHANGES: [(&str, &str, &str); 3] = [
+const CHANGES: [(&str, &str, &str); 4] = [
     ("2026-10-17", "desk.mm",
      "A fill whose price at t + 60 s was not taken live (the desk down then) is marked from klines; before this day such fills were valued at the mid at the time of reading."),
     ("2026-11-06", "desk.mm",
      "Market making marks each fill against the reference fair F(t+60s) = M(t-10s)*R(t+60s)/R(t-10s) (R the leader perp) instead of the instrument's own mid at t+60s, so the pull of the desk's own quotes on that mid is not charged to it. Days before keep the own-mid mark (40 to 90 USD a day lower on 2026-10-27..11-05). desk.inventory_pnl = trading - mm moves the other way."),
     ("2026-11-09", "/api/agent/pnl",
      "A range that starts at a P&L day's start counts that day from 0, and one that starts mid-day from the last row before `from`. Before, the range's first row was the zero, so its first bar left out the day's first seconds (on 2026-11-09 about 30 USD of trading)."),
+    ("2026-11-09", "/api/agent/pnl",
+     "New fields, on the instrument's own mid and by fill time over any range: edge (against the mid at the fill), carry = trading - edge, quoting (at the desk's horizon) and quoting_1/10/60/300, holding = trading - quoting, fair_mm. The desk's pages show quoting and holding as market making and inventory; mm and inventory_pnl keep their meaning."),
 ];
 
 pub struct Agent {
@@ -254,12 +256,16 @@ fn pick_step(q: &HashMap<String, String>, from: i64, to: i64) -> Result<i64, Api
 // ================================ series ================================
 
 /// The desk's own columns: (key, column or derivation, unit, meaning).
-const DESK: [(&str, &str, &str); 12] = [
+const DESK: [(&str, &str, &str); 16] = [
     ("equity", "USD", "Equity of every valued account"),
     ("pnl_day", "USD", "Day PnL: equity change since the P&L day's start, transfers and distributions out; restarts each day"),
     ("trading", "USD", "Trading PnL of the spot inventory (fills and holdings, fees in), today so far"),
-    ("mm", "USD", "Market making today: each fill against the fair 60 s later, minus fees (see changes)"),
-    ("inventory_pnl", "USD", "trading - mm: what the held inventory made"),
+    ("mm", "USD", "Market making today against the reference fair 60 s after each fill, minus fees (see changes); a breakdown: /pnl's quoting is the own-mid figure"),
+    ("edge", "USD", "Trading on the instrument's own mid, the part at the fill: each fill against the mid at the fill, minus fees, today"),
+    ("carry", "USD", "trading - edge: what the held positions made as their own mids moved (funding in), today"),
+    ("quoting", "USD", "Market making on the own mid: each fill against its own mid 60 s later (the desk's horizon), minus fees, today. The pages' Market making"),
+    ("holding", "USD", "trading - quoting: the carry after the horizon. The pages' Inventory"),
+    ("inventory_pnl", "USD", "trading - mm: what is left of trading after the fair mark; it moves with the mark chosen. /pnl's holding is the own-mid carry after the horizon"),
     ("hedge", "USD", "The hedge's legs today: price, fees, funding"),
     ("rebates", "USD", "Market-maker rebates credited today"),
     ("other", "USD", "pnl_day - trading - hedge - rebates: what the split does not explain"),
@@ -293,15 +299,19 @@ enum Src {
 struct EqRow {
     t: i64,
     account: String,
-    v: [Option<f64>; 11],
+    v: [Option<f64>; 13],
 }
-const EQ_COLS: &str = "t, account, equity, pnl_day, trading, mm, hedge, rebates, realized, floating, inventory, futures_notional, NULL";
+const EQ_COLS: &str = "t, account, equity, pnl_day, trading, mm, hedge, rebates, realized, floating, inventory, futures_notional, edge, quoting, NULL";
 
 impl EqRow {
     /// The desk key's value (account "*"), derived ones included.
     fn desk(&self, k: &str) -> Option<f64> {
-        let [equity, pnl_day, trading, mm, hedge, rebates, realized, floating, inv, fut, _] = self.v;
+        let [equity, pnl_day, trading, mm, hedge, rebates, realized, floating, inv, fut, edge, quoting, _] = self.v;
         match k {
+            "edge" => edge,
+            "carry" => Some(trading? - edge?),
+            "quoting" => quoting,
+            "holding" => Some(trading? - quoting?),
             "equity" => equity,
             "pnl_day" => pnl_day,
             "trading" => trading,
@@ -319,7 +329,7 @@ impl EqRow {
     }
 
     fn acct(&self, k: &str) -> Option<f64> {
-        let [equity, pnl_day, .., inv, fut, _] = self.v;
+        let [equity, pnl_day, .., inv, fut, _, _, _] = self.v;
         match k {
             "equity" => equity,
             "pnl_day" => pnl_day,
@@ -343,7 +353,7 @@ fn eq_rows(c: &Connection, from: i64, to: i64, accounts: &[String]) -> rusqlite:
     args.extend(accounts.iter().map(|a| a.clone().into()));
     let mut st = c.prepare(&sql)?;
     st.query_map(params_from_iter(args), |r| {
-        let mut v = [None; 11];
+        let mut v = [None; 13];
         for (i, x) in v.iter_mut().enumerate() {
             *x = r.get::<_, Option<f64>>(i + 2)?;
         }
@@ -566,6 +576,8 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
     let mut out = Vec::with_capacity(bars.len());
     let mut prev_c: Option<f64> = None;
     let mut last: [Option<f64>; 5] = [None; 5];
+    // by fill time, from 0 at `from`: edge, quoting, the fair mark, the quoting curve
+    let mut own = (0.0, 0.0, 0.0, [0.0; 4]);
     // every figure in the bars runs from 0 at the range's baseline
     for b in bars {
         let pnl = b.c - prev_c.unwrap_or(0.0);
@@ -579,6 +591,9 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
         }
         let [trading, mm, hedge, rebates, realized] = d;
         let inv = trading.zip(mm).map(|(a, b)| a - b);
+        let (edge, quoting, fair_mm) = (b.edge - own.0, b.quoting - own.1, b.fair_mm - own.2);
+        let curve: Vec<f64> = (0..4).map(|j| b.curve[j] - own.3[j]).collect();
+        own = (b.edge, b.quoting, b.fair_mm, b.curve);
         let other = match (trading, hedge, rebates) {
             (Some(t), Some(h), Some(r)) => Some(pnl - t - h - r),
             _ => None,
@@ -595,6 +610,15 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
             ("rebates", json!(rebates)),
             ("other", json!(other)),
             ("trading", json!(trading)),
+            ("edge", json!(edge)),
+            ("carry", json!(trading.map(|t| t - edge))),
+            ("quoting", json!(quoting)),
+            ("holding", json!(trading.map(|t| t - quoting))),
+            ("quoting_1", json!(curve[0])),
+            ("quoting_10", json!(curve[1])),
+            ("quoting_60", json!(curve[2])),
+            ("quoting_300", json!(curve[3])),
+            ("fair_mm", json!(fair_mm)),
             ("realized", json!(realized)),
             ("fills", json!(b.fills)),
             ("volume", json!(b.volume)),
@@ -609,7 +633,8 @@ pub fn pnl_rows(bars: &[crate::protocol::HistoryBar]) -> Vec<Map<String, Value>>
     out
 }
 
-const PNL_COLS: [&str; 16] = ["t", "time", "pnl", "cum_pnl", "mm", "inventory_pnl", "hedge", "rebates", "other", "trading", "realized",
+const PNL_COLS: [&str; 25] = ["t", "time", "pnl", "cum_pnl", "mm", "inventory_pnl", "hedge", "rebates", "other", "trading", "edge", "carry",
+                              "quoting", "holding", "quoting_1", "quoting_10", "quoting_60", "quoting_300", "fair_mm", "realized",
                               "fills", "volume", "equity", "inventory_value", "futures_notional"];
 
 async fn pnl(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiError> {
@@ -628,7 +653,7 @@ async fn pnl(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiEr
     }
     Ok(json_body(&json!({
         "from": from, "to": to, "step": step,
-        "note": "Each row is the bar's change (t its start, UTC): pnl = mm + inventory_pnl + hedge + rebates + other; trading = mm + inventory_pnl. A part is null before the desk kept it. cum_pnl runs from the range's start (0 at a day start, else at the last row before from). equity, inventory_value and futures_notional are levels at the bar's end.",
+        "note": "Each row is the bar's change (t its start, UTC): pnl = mm + inventory_pnl + hedge + rebates + other; trading = mm + inventory_pnl. On the instrument's own mid, by fill time: trading = edge + carry = quoting + holding; quoting_<h> is quoting at h s (quoting at the desk's horizon), fair_mm the same against the reference fair. A part is null before the desk kept it. cum_pnl runs from the range's start (0 at a day start, else at the last row before from). equity, inventory_value and futures_notional are levels at the bar's end.",
         "rows": rows,
     })))
 }
@@ -850,7 +875,7 @@ async fn catalog(State(a): State<Arc<Agent>>) -> Result<Response, ApiError> {
             { "path": "/api/agent", "means": "This catalog, with the accounts and the engine's keys as of now" },
             { "path": "/api/agent/state", "means": "Now: the dashboard's whole snapshot (accounts, instruments, exposure, quotes, alerts, feeds, today's P&L split, days, hours) and the engine's last push" },
             { "path": "/api/agent/series", "params": "keys (comma-separated, * expands a name), from, to, step (s, one of 15 60 300 900 1800 3600 14400 86400 604800; default about 1500 buckets), agg (last|first|mean|min|max; default last), format", "means": "Any series side by side on one UTC grid. e.g. keys=capital.*.util&step=3600&agg=mean; keys=desk.mm,desk.inventory_pnl,engine.metrics.*" },
-            { "path": "/api/agent/pnl", "params": "from, to (default 7 d), step (s: 60 300 900 3600 14400 86400; default 3600), format", "means": "The desk's P&L per bar as changes: pnl = mm + inventory_pnl + hedge + rebates + other, with fills, volume and the levels at the bar's end" },
+            { "path": "/api/agent/pnl", "params": "from, to (default 7 d), step (s: 60 300 900 3600 14400 86400; default 3600), format", "means": "The desk's P&L per bar as changes: pnl = mm + inventory_pnl + hedge + rebates + other, with fills, volume and the levels at the bar's end. On the own mid, by fill time: trading = edge + carry = quoting + holding, quoting_1/10/60/300 the markout curve, fair_mm the reference-fair mark" },
             { "path": "/api/agent/fills", "params": "from, to, symbol, venue (spot|usdm|...), account, side (buy|sell), limit (default 50000, max 200000), format", "means": "Every fill with its fee, edge, the mark market making counts, raw / net / fast markouts at 1 10 60 300 s, toxicity, and the price path (JSON)" },
             { "path": "/api/agent/events", "params": "from, to (default 7 d)", "means": "Alerts raised, transfers, distributions (airdrops, rebates), and changes to what a series means" },
             { "path": "/api/agent/markouts", "params": "account, venue, side, ref (net|fast|raw), weight (notional|fill), h (s); from, to, bucket (s) for a past range", "means": "The Analysis page's report: the price path around the fills (all, buys, sells, the reference's move), the distribution at h, markout through the range per bucket, and per instrument (fills, notional, edge, markout at each horizon, SE, adverse share, markout PnL). Today's without from / to; any range with them (100k fills at most, about a week)" },

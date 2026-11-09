@@ -4,7 +4,7 @@
 // a switch of range, interval or instrument clears the chart at once and never shows the old bars under the
 // new label.
 import { useEffect, useMemo, useState } from "react";
-import { getJSON, type HistBar, type HistDay, type History as Hist } from "../../api";
+import { getJSON, ownMid, type HistBar, type HistDay, type History as Hist } from "../../api";
 import { serverNow, useStore } from "../../store";
 import type { DayPnl } from "../../protocol";
 import { barStart } from "../../components/ex";
@@ -153,12 +153,12 @@ async function pull(f: Feed) {
   try {
     const c = f.v;
     if (!c || c.bars.length < 2) {
-      const h = await getJSON<Hist>("/api/history", { from: f.from, to: serverNow(), step: f.step });
+      const h = ownMid(await getJSON<Hist>("/api/history", { from: f.from, to: serverNow(), step: f.step }));
       const v = { bars: h.bars, days: h.days };
       put(f.key, v);
       f.v = v;
     } else {
-      const t = await getJSON<Hist>("/api/history", { from: c.bars[c.bars.length - 2]!.t, to: serverNow(), step: f.step });
+      const t = ownMid(await getJSON<Hist>("/api/history", { from: c.bars[c.bars.length - 2]!.t, to: serverNow(), step: f.step }));
       if (f.v !== c) return; // replaced meanwhile
       const bars = joinTail(c.bars, t.bars);
       if (bars !== c.bars) {

@@ -319,6 +319,16 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   Days before 2026-10-17 valued such fills at the mid now; `desk recompute-mm --from D --to D [--dry-run]`
   backfills their marks as above and corrects the stored `mm` of the desk equity rows and `kv dayreal:<day>`
   (mm, inventory = trading − mm) by each fill's mark less the mid the row had (1 min klines); past days only.
+- Π on the instrument's own mid, the headline split: edge = Σ s q (M(t) − p) − fee over today's fills of the traded
+  instruments, M(t) the mid at the fill from the fill's stored path (the edge against the fair at the fill without
+  one); carry = Π − edge, what the positions made as their own mids moved (Σ Q dM, funding in). Quoting at h =
+  Σ s q (M(t + h) − p) − fee, the markout curve at 1, 10, 60 and 300 s (`quoting_curve`; quoting at
+  `mm_horizon_s`), the mid now for a fill younger than h, the latest mark before h for one with no price at t + h;
+  holding = Π − quoting, the carry after h. Both legs of each split are on the same mark, so neither part takes in
+  the gap between two marks. The pages show quoting as market making and holding as inventory; mm against the
+  reference fair stays as their breakdown. History (`/api/history`, `/api/agent/pnl`) sums edge, quoting and the
+  fair mark per minute by fill time from the stored fills (a fill written again as its marks mature replaces its
+  earlier part; the fee in the desk's currency as stored with the fill, `fee_usd`).
 - Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
@@ -433,7 +443,7 @@ interface Desk {
 // fill). Money rounded to cents. The day chart draws these; the page takes the series before its own from them.
 interface DayBars {
   t: number[]; equity: number[]; pnl_day: number[]; trading: (number | null)[];
-  mm: (number | null)[]; hedge: (number | null)[];
+  mm: (number | null)[]; hedge: (number | null)[]; quoting: (number | null)[];
   inventory: number[]; futures: number[]; volume: number[];
 }
 
@@ -453,7 +463,9 @@ interface Summary {
          liquidation: number; covered_s: number; backfilled_s: number;                           // haircut now; seconds booked live / from klines
          realized: number; realized_old: number; floating: number;                               // Π split FIFO, see below
          mm: number; mm_spread: number; inventory: number; funding_day: number;                                    // Π = mm + inventory, see below
-         mm_unmarked_fills: number; mm_unmarked_notional: number };                              // fills past h without a price at t + h: out of mm
+         mm_unmarked_fills: number; mm_unmarked_notional: number;                                // fills past h without a price at t + h: out of mm
+         edge: number; carry: number;                                                            // Π = edge + carry on the own mid, see below
+         quoting: number; holding: number; quoting_curve: number[] };                            // Π = quoting + holding; quoting at 1, 10, 60, 300 s
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
   fills_24h: number; volume_24h: number;   // the 24 h to now, from the P&L hour blocks (tracked spot markets), the oldest prorated
@@ -492,6 +504,7 @@ interface SymbolRow {
   trading_pnl: number; hedged_pnl: number;                                      // today: Π_k, S_k
   realized_pnl: number; float_pnl: number;                                      // today: Π_k = realized + float, FIFO
   mm_pnl: number; inv_pnl: number;                                              // today: Π_k = mm + inventory
+  quoting_pnl: number; holding_pnl: number;                                     // today on the own mid: Π_k = quoting + holding
   open_bids: number; open_asks: number;
   bid_dist_bps: number | null; ask_dist_bps: number | null;                     // best own order vs fair
   last_fill: number | null; dust: boolean;
@@ -524,6 +537,8 @@ interface HistoryBar {
   inventory: number | null; futures: number | null;   // last in the bar: inventory value, futures notional
   equity: number | null;                    // last in the bar: equity of all accounts
   volume: number; fills: number;            // every fill in the bar
+  edge: number; quoting: number; fair_mm: number;   // by fill time, summed since `from` (per day since the day start)
+                                            // the own-mid edge, own-mid quoting and reference-fair mark at mm_horizon_s
 }
 
 interface HistoryFill { t: number; side: "buy" | "sell"; price: number; qty: number; account: string; venue: string; maker: boolean }

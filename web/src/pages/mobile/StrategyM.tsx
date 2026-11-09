@@ -109,7 +109,7 @@ function HedgeM({ latest }: { latest: Latest }) {
 /** Today's inventory P&L against what the hedge made (the desk's own day), then the legs that made it. */
 function HedgeDayM() {
   const hd = useStore((s) => s.snap?.exposure.hedge_day);
-  const inv = useStore((s) => s.snap?.summary.pnl.inventory);
+  const inv = useStore((s) => s.snap?.summary.pnl.holding);
   const hide = useHide();
   const q = useQty();
   if (!hd) return null;

@@ -48,7 +48,7 @@ q '/pnl?from=-30d&step=86400'
 | `/api/agent` | Catalog | none |
 | `/api/agent/state` | Now: the dashboard's whole snapshot, plus the engine's last push | none |
 | `/api/agent/series` | Any series side by side on one grid | `keys`, `from`, `to`, `step`, `agg`, `format` |
-| `/api/agent/pnl` | P&L per bar, as changes. `pnl = mm + inventory_pnl + hedge + rebates + other`, with fills, volume and levels | `from`, `to`, `step` (60–86400 s), `format` |
+| `/api/agent/pnl` | P&L per bar, as changes. `pnl = mm + inventory_pnl + hedge + rebates + other`, with fills, volume and levels. On the own mid, by fill time: `trading = edge + carry = quoting + holding`, the markout curve `quoting_1`, `quoting_10`, `quoting_60`, `quoting_300`, and `fair_mm` against the reference fair | `from`, `to`, `step` (60–86400 s), `format` |
 | `/api/agent/fills` | Every fill: fee, edge, the mark market making counts, raw/net/fast markouts at 1/10/60/300 s, toxicity, price path | `from`, `to`, `symbol`, `venue`, `account`, `side`, `limit` (≤ 200k), `format` |
 | `/api/agent/events` | Alerts, transfers (amounts only), distributions, definition changes | `from`, `to` |
 | `/api/agent/markouts` | The Analysis page's report: price path around the fills (all / buys / sells / reference), distribution at `h`, markout per time bucket, per instrument (edge, markouts, SE, adverse share, PnL). Today's by default; any range with `from` / `to` (100k fills at most) | `account`, `venue`, `side`, `ref`, `weight`, `h`; `from`, `to`, `bucket` (s) |
@@ -61,6 +61,10 @@ Keys are comma-separated, and a `*` at the end of a name expands it.
 - **`desk.<key>`:**
   - `equity`, `pnl_day`
   - the P&L split: `trading`, `mm`, `inventory_pnl`, `hedge`, `rebates`, `other`
+  - the trading P&L on the instrument's own mid: `edge` (each fill against the mid at the fill, fees in),
+    `carry` (`trading − edge`), `quoting` (against the mid 60 s later, the desk's horizon), `holding`
+    (`trading − quoting`). These are what the pages show as market making and inventory; `mm` and
+    `inventory_pnl` are against the reference fair and stay as a breakdown (stored from 2026-11-09)
   - `realized`, `floating`
   - `inventory_value`, `futures_notional`
 - **`acct.<account>.<key>`:** `equity`, `pnl_day`, `inventory_value`, `futures_notional`.

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useStore, serverNow } from "../../store";
-import { getJSON, type History as Hist } from "../../api";
+import { getJSON, ownMid, type History as Hist } from "../../api";
 import { int, num, signClass } from "../../format";
 import { C, PNL_COLORS as P, PNL_STROKES as S, type Stroke } from "../../theme";
 import { ExChart, SeriesKey, type ExBoxRow, type ExSeries } from "../../components/ex";
@@ -137,7 +137,7 @@ function useDayPath(start: number, live: boolean): DayPathLoad {
   const key = start ? `day|${start}` : null;
   const hist = useLoad<Hist>(
     key,
-    (signal) => getJSON<Hist>("/api/history", { from: start, to: Math.min(start + DAY, serverNow()), step: 300 }, signal),
+    (signal) => getJSON<Hist>("/api/history", { from: start, to: Math.min(start + DAY, serverNow()), step: 300 }, signal).then(ownMid),
     live ? 60_000 : 0,
   );
   const data = hist.key === key ? hist.data : null;

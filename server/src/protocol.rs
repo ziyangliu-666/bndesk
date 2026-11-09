@@ -312,6 +312,15 @@ pub struct PnlSummary {
     /// fills past h with no price at t + h (live or from klines), left out of mm and mm_spread: count, USD notional
     pub mm_unmarked_fills: i64,
     pub mm_unmarked_notional: f64,
+    /// Π on the instrument's own mid. edge: Σ s q (M(t) − p) − fee, against the mid at each fill; carry: Π − edge,
+    /// what the positions made as that mid moved (Σ Q dM, funding in)
+    pub edge: f64,
+    pub carry: f64,
+    /// quoting: Σ s q (M(t + h) − p) − fee, h = mm_horizon_s, the mid now until h has passed (a fill past h with no
+    /// price at its latest mark); holding: Π − quoting, the carry after h. quoting_curve: quoting at 1, 10, 60, 300 s
+    pub quoting: f64,
+    pub holding: f64,
+    pub quoting_curve: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -427,6 +436,9 @@ pub struct SymbolRow {
     pub float_pnl: f64,
     pub mm_pnl: f64,
     pub inv_pnl: f64,
+    /// on the own mid (`PnlSummary::quoting`): quoting today, and Π_k − quoting
+    pub quoting_pnl: f64,
+    pub holding_pnl: f64,
     pub open_bids: i64,
     pub open_asks: i64,
     pub bid_dist_bps: Option<f64>,
@@ -713,6 +725,7 @@ pub struct DayBars {
     pub trading: Vec<Option<f64>>,
     pub mm: Vec<Option<f64>>,
     pub hedge: Vec<Option<f64>>,
+    pub quoting: Vec<Option<f64>>,
     pub inventory: Vec<f64>,
     pub futures: Vec<f64>,
     pub volume: Vec<f64>,
@@ -815,6 +828,14 @@ pub struct HistoryBar {
     pub equity: Option<f64>,
     pub volume: f64,
     pub fills: i64,
+    /// by fill time, summed since `from` like `pi`: the fills' edge against the own mid at the fill, quoting at the
+    /// desk's horizon on the own mid, and the same against the reference fair (`FillRec::own_pnl`)
+    pub edge: f64,
+    pub quoting: f64,
+    pub fair_mm: f64,
+    /// quoting at each of 1, 10, 60, 300 s, the same way (for `/api/agent/pnl`)
+    #[serde(skip)]
+    pub curve: [f64; 4],
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]

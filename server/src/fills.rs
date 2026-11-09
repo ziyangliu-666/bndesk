@@ -82,6 +82,39 @@ pub struct FillRec {
     pub pr: [Option<f64>; PATH_N],
     /// Marks backfilled from klines (bit j) and horizons klines could not price (bit BF_NONE + j).
     pub bf: u8,
+    /// The fee in the desk's currency when the fill was stored (None in rows from before it was kept).
+    pub fee_usd: Option<f64>,
+}
+
+/// A fill's P&L on its instrument's own mid, fee in, in the desk's currency (`FillRec::own_pnl`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct OwnPnl {
+    /// against the mid at the fill
+    pub edge: f64,
+    /// against the mid at t + h, by HORIZONS
+    pub quoting: [f64; 4],
+    /// against the reference fair at t + h (`FillRec::fair_bps`), by HORIZONS
+    pub fair: [f64; 4],
+}
+
+impl std::ops::AddAssign for OwnPnl {
+    fn add_assign(&mut self, o: OwnPnl) {
+        self.edge += o.edge;
+        for j in 0..4 {
+            self.quoting[j] += o.quoting[j];
+            self.fair[j] += o.fair[j];
+        }
+    }
+}
+
+impl std::ops::SubAssign for OwnPnl {
+    fn sub_assign(&mut self, o: OwnPnl) {
+        self.edge -= o.edge;
+        for j in 0..4 {
+            self.quoting[j] -= o.quoting[j];
+            self.fair[j] -= o.fair[j];
+        }
+    }
 }
 
 /// A fill's price at a horizon, as market making values it.
@@ -123,6 +156,7 @@ impl FillRec {
             pm: [None; PATH_N],
             pr: [None; PATH_N],
             bf: 0,
+            fee_usd: None,
         }
     }
 
@@ -177,6 +211,39 @@ impl FillRec {
         let (m0, r0) = (self.pm[0].filter(|x| *x > 0.0)?, self.pr[0].filter(|x| *x > 0.0)?);
         let rh = self.pr[PATH_OF_H[j]].filter(|x| *x > 0.0)?;
         Some(sign(self.side) * (m0 * rh / r0 / self.price - 1.0) * 1e4)
+    }
+
+    /// The mark against the mid at the fill, bps: the path's mid at 0 s, else the edge against the fair at the fill.
+    pub fn edge_own_bps(&self) -> Option<f64> {
+        match self.pm[5].filter(|x| *x > 0.0) {
+            Some(m) => Some(sign(self.side) * (m / self.price - 1.0) * 1e4),
+            None => self.edge_bps,
+        }
+    }
+
+    /// The fill's P&L on its own mid at the fill and at each horizon, and against the reference fair at each, in the
+    /// desk's currency: `qpx` the quote's price, `fee` the fee. A horizon not reached yet is valued at `mid_now` when
+    /// given; one with no price (not reached, or never priced) takes the latest mark before it.
+    pub fn own_pnl(&self, qpx: f64, fee: f64, mid_now: Option<f64>, now: i64) -> OwnPnl {
+        let n = self.notional() * qpx / 1e4;
+        let edge = self.edge_own_bps().unwrap_or(0.0);
+        let now_bps = mid_now.filter(|x| *x > 0.0).map(|m| sign(self.side) * (m / self.price - 1.0) * 1e4);
+        let mut out = OwnPnl { edge: n * edge - fee, ..Default::default() };
+        let mut last = edge;
+        for j in 0..HORIZONS.len() {
+            let (q, fair) = match self.mark_at(j, now) {
+                MarkAt::Bps(b) => (b, self.fair_bps(j).unwrap_or(b)),
+                MarkAt::Young => {
+                    let b = now_bps.unwrap_or(last);
+                    (b, b)
+                }
+                MarkAt::Unmarked => (last, last),
+            };
+            last = q;
+            out.quoting[j] = n * q - fee;
+            out.fair[j] = n * fair - fee;
+        }
+        out
     }
 
     /// Klines were asked for horizon j's price and had none.
@@ -548,6 +615,26 @@ mod tests {
         f.mk_raw.0[2] = Some(-3.0);
         assert_eq!(f.mark_at(2, 30_000), MarkAt::Bps(-3.0));
         assert_eq!(f.mark_at(2, 10 * due), MarkAt::Bps(-3.0));
+    }
+
+    #[test]
+    fn own_pnl_is_on_the_own_mid_at_the_fill_and_after() {
+        // a buy of 2 at 100: the mid 100.1 at the fill, 99.9 at 1 s and 10 s, 60 s not reached yet
+        let mut f = FillRec::new("a", 0, "acct", "XUSDT", Venue::SPOT, Side::Buy, 100.0, 2.0);
+        f.pm[5] = Some(100.1);
+        f.mk_raw.0[0] = Some(-10.0);
+        f.mk_raw.0[1] = Some(-10.0);
+        let o = f.own_pnl(1.0, 0.05, Some(100.2), 30_000);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(o.edge, 0.2 - 0.05));
+        assert!(close(o.quoting[0], -0.2 - 0.05) && close(o.quoting[1], -0.25));
+        // young at 60 s and 300 s: the mid now
+        assert!(close(o.quoting[2], 0.4 - 0.05) && close(o.quoting[3], 0.35));
+        // without the mid now (history), the latest mark before
+        let o = f.own_pnl(1.0, 0.05, None, 30_000);
+        assert!(close(o.quoting[2], -0.25) && close(o.quoting[3], -0.25));
+        // no reference: the fair mark is the own mid's
+        assert_eq!(o.fair, o.quoting);
     }
 
     #[test]

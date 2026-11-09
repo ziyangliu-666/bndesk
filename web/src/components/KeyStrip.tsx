@@ -88,10 +88,10 @@ export function DeskTicker({ name }: { name: ReactNode }) {
     ...(d.mm ? [] : [{ label: "Trading", value: m(pnl(p?.trading)), title: "Trading PnL: what the fills and the held inventory made, fees included." }]),
     {
       label: "Market making",
-      value: m(pnl(p?.mm)),
-      title: `Each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees.${hide ? "" : ` Against the fair at the fill instead: ${pnl(p?.mm_spread)} ${cur()}.`}${unpriced(p, hide)}`,
+      value: m(pnl(p?.quoting)),
+      title: `Each fill against its own mid 60 s later, minus fees.${hide ? "" : ` Against the mid at the fill: ${pnl(p?.edge)}; at 1 s ${pnl(p?.quoting_curve?.[0])}, 10 s ${pnl(p?.quoting_curve?.[1])}, 300 s ${pnl(p?.quoting_curve?.[3])}. Against the reference fair 60 s later (the mid before the fill moved as the leader perp moved): ${pnl(p?.mm)} ${cur()}.`}${unpriced(p, hide)}`,
     },
-    { label: "Inventory", value: m(pnl(p?.inventory)), title: `Inventory PnL: PnL minus market making, what the inventory made after the first 60 s of each fill.${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
+    { label: "Inventory", value: m(pnl(p?.holding)), title: `Inventory PnL: what the held inventory made after the first 60 s of each fill, on the same mid; Trading PnL minus market making.${hide ? "" : ` With the reference fair's market making: ${pnl(p?.inventory)} ${cur()}.`}${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
     { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.` },
     { label: "Rebates", value: m(pnl(sm?.rebates)), title: `Market-maker rebates ${exchangeWord()} credited since the day start, per account.` },
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
@@ -161,9 +161,9 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
     hedged
       ? { label: "Hedge", value: m(pnl(tp)), tone: tone(tp), title: `Today: this instrument's hedge leg, price P&L at mark − fees + funding, ${cur()}` }
       : dm
-        ? { label: "Market making", value: m(pnl(row?.mm_pnl)), tone: tone(row?.mm_pnl), title: `Today: each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees, ${cur()}` }
+        ? { label: "Market making", value: m(pnl(row?.quoting_pnl)), tone: tone(row?.quoting_pnl), title: `Today: each fill against its own mid 60 s later, minus fees, ${cur()}` }
         : { label: "Trading", value: m(pnl(tp)), tone: tone(tp), title: `Today: what the fills and the held inventory made, fees included, ${cur()}` },
-    ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.inv_pnl)), tone: tone(row?.inv_pnl), title: `Today: what the held inventory made after those 60 s, ${cur()}` }]),
+    ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.holding_pnl)), tone: tone(row?.holding_pnl), title: `Today: what the held inventory made after those 60 s, on the same mid, ${cur()}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
     { label: "Value", value: m(usd(row?.inv_value)), title: `Inventory × mid, ${cur()}` },
     { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills" },

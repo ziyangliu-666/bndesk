@@ -8,7 +8,10 @@ export interface HistBar {
   l: number;
   c: number;
   pi: number | null;
-  mm: number | null; // market making, cumulative like pi
+  mm: number | null; // market making against the reference fair, cumulative like pi
+  edge?: number; // by fill time, summed since `from`: on the own mid at the fill
+  quoting?: number; // ... on the own mid at the desk's horizon
+  fair_mm?: number; // ... against the reference fair
   realized: number | null;
   hedge: number | null;
   rebates: number | null; // market-maker rebates, cumulative like pi
@@ -17,6 +20,12 @@ export interface HistBar {
   equity?: number | null; // equity of all accounts, last in the bar
   volume: number;
   fills: number;
+}
+/** The bars with market making on the own mid (`quoting`, by fill time) where the desk kept the trading split; the
+ *  reference fair's mark stays in `fair_mm`. */
+export function ownMid(h: History): History {
+  for (const b of h.bars) if (b.pi != null && b.quoting != null) b.mm = b.quoting;
+  return h;
 }
 export interface HistDay {
   day: string;

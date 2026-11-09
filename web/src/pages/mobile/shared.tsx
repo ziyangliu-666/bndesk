@@ -83,10 +83,10 @@ export type PartKey = (typeof PARTS)[number]["key"];
 
 export const PART_INFO: Record<PartKey, string> = {
   get mm() {
-    return `Each fill against the fair 60 s later (its mid before the fill moved as the leader perp moved), minus fees. ${cur()}.`;
+    return `Each fill against its own mid 60 s later, minus fees. ${cur()}.`;
   },
   get inventory() {
-    return `PnL minus market making: what the held inventory made after the first 60 s of each fill. ${cur()}.`;
+    return `PnL minus market making: what the held inventory made after the first 60 s of each fill, on the same mid. ${cur()}.`;
   },
   get hedge() {
     return `The ${hedgeWord()} legs: price at mark, minus fees, plus funding. ${cur()}.`;

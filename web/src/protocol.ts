@@ -70,6 +70,7 @@ export interface DayBars {
   pnl_day: number[];
   trading: (number | null)[];
   mm: (number | null)[];
+  quoting: (number | null)[];
   hedge: (number | null)[];
   inventory: number[];
   futures: number[];
@@ -145,6 +146,11 @@ export interface PnlSummary {
   funding_day: number; // of inventory: the funding of the perps traded
   mm_unmarked_fills: number; // fills past 60 s with no price 60 s after them (not even from klines): left out of mm
   mm_unmarked_notional: number; // their notional, USD
+  edge: number; // Π on the own mid: Σ s q (M(t) − p) − fee, against the mid at each fill
+  carry: number; // Π − edge: what the positions made as their own mids moved
+  quoting: number; // Σ s q (M(t + h) − p) − fee on the own mid, h the desk's horizon
+  holding: number; // Π − quoting: the carry after h
+  quoting_curve: number[]; // quoting at 1, 10, 60, 300 s
 }
 
 export interface OpenOrder {
@@ -260,8 +266,10 @@ export interface SymbolRow {
   hedged_pnl: number; // S_k today
   realized_pnl: number; // today: Π_k = realized + float, FIFO
   float_pnl: number;
-  mm_pnl: number;
+  mm_pnl: number; // against the reference fair
   inv_pnl: number;
+  quoting_pnl: number; // on the own mid: each fill against its mid h later, minus fees
+  holding_pnl: number; // Π − quoting_pnl
   open_bids: number;
   open_asks: number;
   bid_dist_bps: number | null; // best own order vs fair
