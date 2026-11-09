@@ -1147,7 +1147,7 @@ function summary(): Summary {
       holding: p.trading - p.mm,
       factor_part: 0.8 * p.fd,
       single_name: 0.2 * p.fd,
-      basis: p.trading - (mmSpread0 + mmLiveSpread) - p.fd,
+      basis: p.trading - p.mm - p.fd,
       quoting_curve: [0.6, 0.85, 1, 1.05].map((k) => k * p.mm),
     },
     markout_net_bps_1h: mkNet1h,

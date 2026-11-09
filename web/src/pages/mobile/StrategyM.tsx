@@ -123,7 +123,7 @@ function HedgeDayM() {
           <Empty>Amounts hidden</Empty>
         ) : (
           <>
-            {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="The inventory's carry today in its parts" />}
+            {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="Inventory PnL today in its parts" />}
             <HedgeBridge rows={t ? trackRows(t) : plainRows(hd, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
           </>
         )}

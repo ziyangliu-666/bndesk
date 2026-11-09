@@ -321,7 +321,8 @@ pub struct PnlSummary {
     pub quoting: f64,
     pub holding: f64,
     pub quoting_curve: Vec<f64>,
-    /// carry in its parts, today: factor_part = Hm (factor_hedge), single_name = H − Hm, basis = carry − H
+    /// holding (the Inventory the pages show) in its parts, today: factor_part = Hm (factor_hedge), single_name = H − Hm,
+    /// basis = holding − H
     pub factor_part: f64,
     pub single_name: f64,
     pub basis: f64,

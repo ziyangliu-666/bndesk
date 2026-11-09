@@ -625,7 +625,7 @@ export function HedgePanel() {
             <div className="ops-empty">Amounts hidden</div>
           ) : (
             <div className="ops-bridge">
-              {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="The inventory's carry today in its parts" />}
+              {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="Inventory PnL today in its parts" />}
               <HedgeBridge rows={t ? trackRows(t) : plainRows(h, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
             </div>
           )}

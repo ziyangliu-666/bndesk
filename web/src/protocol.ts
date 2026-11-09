@@ -155,9 +155,9 @@ export interface PnlSummary {
   quoting: number; // Σ s q (M(t + h) − p) − fee on the own mid, h the desk's horizon
   holding: number; // Π − quoting: the carry after h
   quoting_curve: number[]; // quoting at 1, 10, 60, 300 s
-  factor_part: number; // carry in its parts: Hm, the beta instrument's move
+  factor_part: number; // holding (Inventory) in its parts: Hm, the beta instrument's move
   single_name: number; // H − Hm: each name's reference beyond the factor
-  basis: number; // carry − H: the own mid against its reference
+  basis: number; // holding − H: the own mid against its reference
 }
 
 export interface OpenOrder {

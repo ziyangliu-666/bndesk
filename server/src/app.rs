@@ -730,7 +730,8 @@ impl Desk {
         ps.quoting_curve = mm.own.quoting.to_vec();
         ps.factor_part = ps.factor_hedge;
         ps.single_name = ps.ref_hedge - ps.factor_hedge;
-        ps.basis = ps.carry - ps.ref_hedge;
+        // the Inventory the pages show (holding, the carry after the horizon) in its parts
+        ps.basis = ps.holding - ps.ref_hedge;
         let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
         let mut hd = hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs);
         hd.inventory_carry = ps.carry;
@@ -1226,7 +1227,8 @@ impl Desk {
             if h < since || h + HOUR > now || b.booked_s() < 3000 {
                 continue;
             }
-            let inv = b.trading - mm.own_edge_by_hour.get(&h).copied().unwrap_or(0.0);
+            // the grid's carry; an hour stored before it was kept, trading less its fills' edge
+            let inv = b.carry.unwrap_or_else(|| b.trading - mm.own_edge_by_hour.get(&h).copied().unwrap_or(0.0));
             let hedge = tr.carry_h.get(&h).copied().unwrap_or(0.0) + exec_h.get(&h).copied().unwrap_or(0.0);
             alone.push(inv);
             hedged.push(inv + hedge);

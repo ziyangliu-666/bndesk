@@ -39,7 +39,7 @@ export function trackRows(t: HedgeTrack): BridgeRow[] {
   return rows;
 }
 
-/** The inventory's carry on its own mid today, in its parts: the beta factor, each name beyond it, and each name's
+/** The Inventory PnL (holding, on its own mid) today, in its parts: the beta factor, each name beyond it, and each name's
  *  own mid against its reference. */
 export function inventoryRows(p: PnlSummary): BridgeRow[] {
   const parts: [string, number, string][] = [
@@ -53,7 +53,7 @@ export function inventoryRows(p: PnlSummary): BridgeRow[] {
     rows.push({ label, from: at, v, total: v, title });
     at += v;
   }
-  rows.push({ label: "Inventory", from: 0, v: p.carry, total: p.carry, title: "What the held inventory made as its own mids moved (Trading PnL less the fills' edge at the fill)" });
+  rows.push({ label: "Inventory", from: 0, v: p.holding, total: p.holding, title: "Inventory PnL: what the held inventory made after the first 60 s of each fill, on its own mid" });
   return rows;
 }
 

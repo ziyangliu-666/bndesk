@@ -351,7 +351,10 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   (the position term of Π), factor_part = Hm_k (beta_k Q M r_b, the desk's betas), single_name = H_k − Hm_k (the
   name's reference beyond the factor), basis = carry_k − H_k (its own mid against its reference). They add up to
   carry exactly. Hours keep carry in pnl_hours (`carry`, NULL in hours stored before it was); names keep (Hm_k,
-  carry_k) in the day's state (`kx`). The desk's totals take carry = Π − edge (the fills' edge on the own mid).
+  carry_k) in the day's state (`kx`). The desk's totals split holding, the Inventory the pages show: basis =
+  holding − H. Not carry = Π − edge: the edge at the fill instant is before the book has moved through the
+  quote, and the second after a fill takes most of it back (on 2026-11-09, +263 edge against −11 quoting at
+  1 s), so carry would carry that adverse second as basis.
   H is not the inventory's move but what hedging each name on its own reference would have made against it; the
   hedge day calls it own_perp_equivalent (inventory_drift is its old name, kept).
 - Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote
@@ -492,7 +495,7 @@ interface Summary {
          mm_unmarked_fills: number; mm_unmarked_notional: number;                                // fills past h without a price at t + h: out of mm
          edge: number; carry: number;                                                            // Π = edge + carry on the own mid, see below
          quoting: number; holding: number; quoting_curve: number[];                              // Π = quoting + holding; quoting at 1, 10, 60, 300 s
-         factor_part: number; single_name: number; basis: number };                              // carry = factor_part + single_name + basis
+         factor_part: number; single_name: number; basis: number };                              // holding = factor_part + single_name + basis
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
   fills_24h: number; volume_24h: number;   // the 24 h to now, from the P&L hour blocks (tracked spot markets), the oldest prorated
