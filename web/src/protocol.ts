@@ -123,6 +123,10 @@ export interface HourPnl {
   volume: number;
   mm: number;
   inventory: number;
+  carry: number | null; // Σ Q dM on the own mid, in its parts (null before it was kept)
+  factor_part: number;
+  single_name: number;
+  basis: number | null;
 }
 
 export interface PnlSummary {
@@ -151,6 +155,9 @@ export interface PnlSummary {
   quoting: number; // Σ s q (M(t + h) − p) − fee on the own mid, h the desk's horizon
   holding: number; // Π − quoting: the carry after h
   quoting_curve: number[]; // quoting at 1, 10, 60, 300 s
+  factor_part: number; // carry in its parts: Hm, the beta instrument's move
+  single_name: number; // H − Hm: each name's reference beyond the factor
+  basis: number; // carry − H: the own mid against its reference
 }
 
 export interface OpenOrder {
@@ -270,6 +277,10 @@ export interface SymbolRow {
   inv_pnl: number;
   quoting_pnl: number; // on the own mid: each fill against its mid h later, minus fees
   holding_pnl: number; // Π − quoting_pnl
+  carry_pnl: number; // today's Σ Q dM on its mid = factor_part + single_name + basis
+  factor_part: number;
+  single_name: number;
+  basis: number;
   open_bids: number;
   open_asks: number;
   bid_dist_bps: number | null; // best own order vs fair
@@ -400,7 +411,9 @@ export interface MarkoutStats {
 
 /** Today's inventory drift against the futures legs (see DESIGN.md). */
 export interface HedgeDay {
-  inventory_drift: number; // H
+  own_perp_equivalent: number; // H: what hedging each name on its own perp would have made
+  inventory_carry: number; // Σ Q dM on the own mid, today
+  inventory_drift: number; // = own_perp_equivalent (old name)
   factor_drift: number; // Hm
   residual_drift: number; // H − Hm
   hedge_pnl: number | null;

@@ -260,8 +260,9 @@ pub fn mm_split(m: &mut Market, fills: &[FillRec], horizon_s: i64, now: i64, rol
     out
 }
 
+/// `split`: by what the P&L book keeps a position under, today's (carry, factor part, single name, basis) (`PnlBook::carry_by_base`).
 pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64, f64, f64, f64)>, agg: &FillAgg,
-                   mm: &MmSplit) -> Vec<P::SymbolRow> {
+                   mm: &MmSplit, split: &OMap<(f64, f64, f64, f64)>) -> Vec<P::SymbolRow> {
     let mut holdings: HashMap<String, f64> = HashMap::new();
     let mut dust_assets: HashSet<String> = HashSet::new();
     let mut positions: HashMap<String, f64> = HashMap::new();
@@ -329,6 +330,7 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
         let (tp, hp, rp, fp) = booked.and_then(|b| by_base.get(b).copied()).unwrap_or((0.0, 0.0, 0.0, 0.0));
         let mm_pnl = booked.and_then(|b| mm.by_base.get(b).copied()).unwrap_or(0.0);
         let quoting_pnl = booked.and_then(|b| mm.own_by_base.get(b).copied()).unwrap_or(0.0);
+        let (carry_pnl, factor_part, single_name, basis) = booked.and_then(|b| split.get(b).copied()).unwrap_or_default();
         let px = truthy(m.px(id));
         let fair_t = truthy(fair);
         rows.push(P::SymbolRow {
@@ -362,6 +364,10 @@ pub fn symbol_rows(m: &mut Market, accounts: &[AccountRef], by_base: &OMap<(f64,
             inv_pnl: tp - mm_pnl,
             quoting_pnl,
             holding_pnl: tp - quoting_pnl,
+            carry_pnl,
+            factor_part,
+            single_name,
+            basis,
             open_bids: q.bids,
             open_asks: q.asks,
             bid_dist_bps: match (truthy(q.bid), fair_t) {
@@ -556,6 +562,8 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
     let pnl = price.map(|p| p - fees + funding);
     let ratio = |d: f64| pnl.filter(|_| d.abs() > 1e-9).map(|p| -p / d);
     P::HedgeDay {
+        own_perp_equivalent: ref_hedge,
+        inventory_carry: 0.0,   // set by the desk
         inventory_drift: ref_hedge,
         factor_drift: factor_hedge,
         residual_drift: ref_hedge - factor_hedge,
@@ -847,7 +855,7 @@ mod tests {
         assert_eq!(g.all, only.all);
         assert_eq!(g.n_30m, only.n_30m);
         assert!(!g.by_inst.contains_key("spot:USDCUSDT"));
-        let rows = symbol_rows(&mut m, &[], &OMap::new(), &g, &s);
+        let rows = symbol_rows(&mut m, &[], &OMap::new(), &g, &s, &OMap::new());
         assert!(rows.iter().any(|r| r.symbol == "AAAUSDT"));
         assert!(rows.iter().all(|r| r.symbol != "USDCUSDT"));
     }

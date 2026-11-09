@@ -1145,6 +1145,9 @@ function summary(): Summary {
       carry: p.trading - (mmSpread0 + mmLiveSpread),
       quoting: p.mm,
       holding: p.trading - p.mm,
+      factor_part: 0.8 * p.fd,
+      single_name: 0.2 * p.fd,
+      basis: p.trading - (mmSpread0 + mmLiveSpread) - p.fd,
       quoting_curve: [0.6, 0.85, 1, 1.05].map((k) => k * p.mm),
     },
     markout_net_bps_1h: mkNet1h,
@@ -1200,6 +1203,10 @@ function symbolRow(i: Inst): SymbolRow {
     mm_pnl: i.mm,
     inv_pnl: tr - i.mm,
     quoting_pnl: i.mm,
+    carry_pnl: tr - i.mm,
+    factor_part: 0.6 * (tr - i.mm),
+    single_name: 0.3 * (tr - i.mm),
+    basis: 0.1 * (tr - i.mm),
     holding_pnl: tr - i.mm,
     open_bids: i.orders.filter((o) => o.side === "buy").length,
     open_asks: i.orders.filter((o) => o.side === "sell").length,
@@ -1253,6 +1260,10 @@ function legRow(l: Leg): SymbolRow {
     mm_pnl: 0,
     inv_pnl: 0,
     quoting_pnl: 0,
+    carry_pnl: 0,
+    factor_part: 0,
+    single_name: 0,
+    basis: 0,
     holding_pnl: 0,
     open_bids: hedgeOrder?.leg === l && hedgeOrder.qty > 0 ? 1 : 0,
     open_asks: hedgeOrder?.leg === l && hedgeOrder.qty < 0 ? 1 : 0,
@@ -1390,6 +1401,8 @@ function exposure(acc: Account[]): Exposure {
     paused_until: null,
     beta_source: "estimate",
     hedge_day: {
+      own_perp_equivalent: drift,
+      inventory_carry: p.trading - (mmSpread0 + mmLiveSpread),
       inventory_drift: drift,
       factor_drift: p.fd,
       residual_drift: drift - p.fd,
@@ -1609,7 +1622,7 @@ function hours(): HourPnl[] {
     }
     const tr = d("pi");
     const mm = d("mm");
-    out.push({ t: dayStart + h * H, trading: tr, hedged: tr - d("fd"), factor: tr - 0.8 * d("fd"), mm, inventory: tr - mm, fills: fl, volume: vol });
+    out.push({ t: dayStart + h * H, trading: tr, hedged: tr - d("fd"), factor: tr - 0.8 * d("fd"), mm, inventory: tr - mm, fills: fl, volume: vol, carry: tr - mm, factor_part: 0.8 * d("fd"), single_name: 0.2 * d("fd"), basis: tr - mm - d("fd") });
   }
   return out;
 }

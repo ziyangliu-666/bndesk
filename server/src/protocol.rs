@@ -321,6 +321,10 @@ pub struct PnlSummary {
     pub quoting: f64,
     pub holding: f64,
     pub quoting_curve: Vec<f64>,
+    /// carry in its parts, today: factor_part = Hm (factor_hedge), single_name = H − Hm, basis = carry − H
+    pub factor_part: f64,
+    pub single_name: f64,
+    pub basis: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -439,6 +443,11 @@ pub struct SymbolRow {
     /// on the own mid (`PnlSummary::quoting`): quoting today, and Π_k − quoting
     pub quoting_pnl: f64,
     pub holding_pnl: f64,
+    /// today's carry of this name (Σ Q dM on its mid) and its parts: carry = factor_part + single_name + basis
+    pub carry_pnl: f64,
+    pub factor_part: f64,
+    pub single_name: f64,
+    pub basis: f64,
     pub open_bids: i64,
     pub open_asks: i64,
     pub bid_dist_bps: Option<f64>,
@@ -537,7 +546,12 @@ pub struct HedgeLeg {
 /// Today's inventory drift against the futures legs.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct HedgeDay {
-    /// H: the spot inventory's move on each name's reference
+    /// H: what hedging each name on its own reference (its perp) would have made against the inventory: the
+    /// reference's move, not the inventory's own (that is `carry`)
+    pub own_perp_equivalent: f64,
+    /// Σ Q dM on the own mid, today (the summary's carry)
+    pub inventory_carry: f64,
+    /// = own_perp_equivalent, by its old name (kept for readers of /api/agent/state)
     pub inventory_drift: f64,
     /// Hm: the part the beta instrument explains
     pub factor_drift: f64,
@@ -742,6 +756,13 @@ pub struct HourPnl {
     /// market making of the hour's fills; inventory = trading − mm
     pub mm: f64,
     pub inventory: f64,
+    /// the hour's carry (Σ Q dM on the own mid) in its parts: carry = factor_part + single_name + basis. factor_part =
+    /// Hm (beta × the beta instrument's move), single_name = H − Hm (each name's reference beyond that), basis = carry − H
+    /// (the own mid against its reference); null in an hour stored before the carry was kept
+    pub carry: Option<f64>,
+    pub factor_part: f64,
+    pub single_name: f64,
+    pub basis: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]

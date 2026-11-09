@@ -38,7 +38,7 @@ const DEFAULT_FILLS: i64 = 50_000;
 const STABLES: [&str; 4] = ["USDT", "USDC", "FDUSD", "USD"];
 
 /// Changes to what a series means, for an agent comparing across them. Newest last.
-const CHANGES: [(&str, &str, &str); 4] = [
+const CHANGES: [(&str, &str, &str); 5] = [
     ("2026-10-17", "desk.mm",
      "A fill whose price at t + 60 s was not taken live (the desk down then) is marked from klines; before this day such fills were valued at the mid at the time of reading."),
     ("2026-11-06", "desk.mm",
@@ -47,6 +47,8 @@ const CHANGES: [(&str, &str, &str); 4] = [
      "A range that starts at a P&L day's start counts that day from 0, and one that starts mid-day from the last row before `from`. Before, the range's first row was the zero, so its first bar left out the day's first seconds (on 2026-11-09 about 30 USD of trading)."),
     ("2026-11-09", "/api/agent/pnl",
      "New fields, on the instrument's own mid and by fill time over any range: edge (against the mid at the fill), carry = trading - edge, quoting (at the desk's horizon) and quoting_1/10/60/300, holding = trading - quoting, fair_mm. The desk's pages show quoting and holding as market making and inventory; mm and inventory_pnl keep their meaning."),
+    ("2026-11-09", "state.exposure.hedge_day.inventory_drift",
+     "Renamed own_perp_equivalent (what hedging each name on its own perp would have made: the reference's move, not the inventory's own); the old key stays with the same number. The inventory's own move is hedge_day.inventory_carry, split per hour by /api/agent/inventory and per symbol in state.symbols."),
 ];
 
 pub struct Agent {
@@ -73,6 +75,7 @@ pub fn routes(a: Arc<Agent>) -> Router {
         .route("/api/agent/fills", get(fills))
         .route("/api/agent/events", get(events))
         .route("/api/agent/markouts", get(markouts))
+        .route("/api/agent/inventory", get(inventory))
         .with_state(a)
 }
 
@@ -756,6 +759,53 @@ async fn fills(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, Api
     })))
 }
 
+// ================================ inventory ================================
+
+const INV_COLS: [&str; 10] = ["t", "time", "trading", "carry", "factor_part", "single_name", "basis", "own_perp_equivalent", "fills", "volume"];
+
+/// The inventory's carry per UTC hour in its parts, from the P&L grid's hour blocks.
+async fn inventory(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiError> {
+    let (from, to) = range(&q, 7 * DAY)?;
+    let rows: Vec<Map<String, Value>> = a
+        .history
+        .read(move |c| {
+            let have: Vec<String> = c.prepare("PRAGMA table_info(pnl_hours)")?.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
+            let carry = if have.iter().any(|h| h == "carry") { "carry" } else { "NULL" };
+            let mut st = c.prepare(&format!(
+                "SELECT t, trading, ref_hedge, factor_hedge, {carry}, fills, volume FROM pnl_hours WHERE t >= ? AND t < ? ORDER BY t"))?;
+            st.query_map([from, to], |r| {
+                let (t, trading, h, hm): (i64, Option<f64>, Option<f64>, Option<f64>) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+                let carry: Option<f64> = r.get(4)?;
+                let mut m = Map::new();
+                for (k, v) in [
+                    ("t", json!(t)),
+                    ("time", json!(iso(t))),
+                    ("trading", json!(trading)),
+                    ("carry", json!(carry)),
+                    ("factor_part", json!(hm)),
+                    ("single_name", json!(h.zip(hm).map(|(h, hm)| h - hm))),
+                    ("basis", json!(carry.zip(h).map(|(c, h)| c - h))),
+                    ("own_perp_equivalent", json!(h)),
+                    ("fills", json!(r.get::<_, Option<i64>>(5)?)),
+                    ("volume", json!(r.get::<_, Option<f64>>(6)?)),
+                ] {
+                    m.insert(k.into(), v);
+                }
+                Ok(m)
+            })?
+            .collect()
+        })
+        .await?;
+    if wants_csv(&q)? {
+        return Ok(csv(&INV_COLS, &rows));
+    }
+    Ok(json_body(&json!({
+        "from": from, "to": to,
+        "note": "One row per UTC hour of the P&L grid. carry: the inventory's P&L as its own mids moved (the position term of trading, which also has the fills' edge) = factor_part + single_name + basis. factor_part: each name's beta times the beta instrument's move; single_name: each name's reference (its perp) beyond that; basis: its own mid against its reference. own_perp_equivalent: what hedging each name on its own reference would have made against it (the hedge day's inventory_drift). carry and basis are null in hours stored before 2026-11-09.",
+        "rows": rows,
+    })))
+}
+
 // ================================ events ================================
 
 async fn events(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, ApiError> {
@@ -879,6 +929,7 @@ async fn catalog(State(a): State<Arc<Agent>>) -> Result<Response, ApiError> {
             { "path": "/api/agent/fills", "params": "from, to, symbol, venue (spot|usdm|...), account, side (buy|sell), limit (default 50000, max 200000), format", "means": "Every fill with its fee, edge, the mark market making counts, raw / net / fast markouts at 1 10 60 300 s, toxicity, and the price path (JSON)" },
             { "path": "/api/agent/events", "params": "from, to (default 7 d)", "means": "Alerts raised, transfers, distributions (airdrops, rebates), and changes to what a series means" },
             { "path": "/api/agent/markouts", "params": "account, venue, side, ref (net|fast|raw), weight (notional|fill), h (s); from, to, bucket (s) for a past range", "means": "The Analysis page's report: the price path around the fills (all, buys, sells, the reference's move), the distribution at h, markout through the range per bucket, and per instrument (fills, notional, edge, markout at each horizon, SE, adverse share, markout PnL). Today's without from / to; any range with them (100k fills at most, about a week)" },
+            { "path": "/api/agent/inventory", "params": "from, to (default 7 d), format", "means": "The inventory's carry per UTC hour in its parts: carry = factor_part + single_name + basis, with trading and own_perp_equivalent (H)" },
             { "path": "/api/agent/klines", "params": "symbol, venue, interval (1m 5m 15m 1h 4h 1d ...), from, to (epoch ms)", "means": "An instrument's candles from the exchange (cached)" },
         ],
         "series": {

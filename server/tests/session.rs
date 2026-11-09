@@ -202,7 +202,7 @@ impl Session {
         let agg = me::aggregate(&fb.fills, now, &self.cfg.roles);
         let mm = me::mm_split(&mut m, &fb.fills, 60, now, &self.cfg.roles, |b| pnl.pos.contains_key(b));
         let by_base = pnl.by_base(&mut m);
-        let symbols = me::symbol_rows(&mut m, &self.accounts, &by_base, &agg, &mm);
+        let symbols = me::symbol_rows(&mut m, &self.accounts, &by_base, &agg, &mm, &desk::pnl::OMap::new());
         let summary = pnl.summary(&mut m);
         let bv = me::beta_weighted_spot(&self.cfg, &mut m, &self.accounts, None);
         let expo = me::exposure(&self.cfg, &m, &rows, bv, false, now);

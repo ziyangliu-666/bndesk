@@ -12,7 +12,7 @@ import { gridTheme } from "../gridTheme";
 import { AccountsGrid } from "../components/AccountsGrid";
 import { fPrice, fQtyS, flexCols, maskVF, signCls, DEFAULT_COL } from "../grid";
 import type { Account, HedgeLeg, Position, SymbolRow } from "../protocol";
-import { HedgeBridge, plainRows, riskCut, riskTitle, trackRows } from "../components/HedgeBridge";
+import { HedgeBridge, inventoryRows, plainRows, riskCut, riskTitle, trackRows } from "../components/HedgeBridge";
 import { useNow } from "../hooks";
 import { ExChart, FigureHead, Tabs, useExPref, type ExSeries } from "../components/ex";
 import { Money, amount, hideNow, pctOfMoney, qtyText, useAmount, useHide } from "../mask";
@@ -591,6 +591,7 @@ const openLeg = (e: RowClickedEvent<HedgeLeg>) => e.data && selectInstrument({ s
 export function HedgePanel() {
   const h = useStore((s) => s.snap?.exposure.hedge_day);
   const inv = useStore((s) => s.snap?.summary.pnl.holding);
+  const pnlSum = useStore((s) => s.snap?.summary.pnl);
   const hide = useHide();
   const cols = useMemo<ColDef<HedgeLeg>[]>(() => {
     const n = (c: ColDef<HedgeLeg>): ColDef<HedgeLeg> => ({ type: "rightAligned", cellClass: "num", ...c });
@@ -624,6 +625,7 @@ export function HedgePanel() {
             <div className="ops-empty">Amounts hidden</div>
           ) : (
             <div className="ops-bridge">
+              {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="The inventory's carry today in its parts" />}
               <HedgeBridge rows={t ? trackRows(t) : plainRows(h, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
             </div>
           )}

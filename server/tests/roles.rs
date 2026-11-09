@@ -174,7 +174,7 @@ impl Desk {
         let mm = me::mm_split(&mut m, &fb.fills, 60, now, roles, |b| pnl.pos.contains_key(b));
         let by_base = pnl.by_base(&mut m);
         let accounts = std::slice::from_ref(&self.a);
-        let symbols = me::symbol_rows(&mut m, accounts, &by_base, &agg, &mm);
+        let symbols = me::symbol_rows(&mut m, accounts, &by_base, &agg, &mm, &desk::pnl::OMap::new());
         let summary = pnl.summary(&mut m);
         let row = me::account_row(&mut m, &mut self.a.borrow_mut(), now);
         let bv = me::beta_weighted_spot(&self.cfg, &mut m, accounts, None);

@@ -1,7 +1,7 @@
 import { useElementSize } from "@mantine/hooks";
 import { pnl } from "../format";
 import { C } from "../theme";
-import type { HedgeDay, HedgeTrack } from "../protocol";
+import type { HedgeDay, HedgeTrack, PnlSummary } from "../protocol";
 import { cur } from "../desk";
 
 const ROW_H = 26;
@@ -36,6 +36,24 @@ export function trackRows(t: HedgeTrack): BridgeRow[] {
     at += v;
   }
   rows.push({ label: "Hedge", from: 0, v: t.actual, total: t.actual, title: "What the hedge made: price at mid, plus funding, minus fees" });
+  return rows;
+}
+
+/** The inventory's carry on its own mid today, in its parts: the beta factor, each name beyond it, and each name's
+ *  own mid against its reference. */
+export function inventoryRows(p: PnlSummary): BridgeRow[] {
+  const parts: [string, number, string][] = [
+    ["Factor", p.factor_part, "Each name's beta times the beta instrument's move"],
+    ["Single-name", p.single_name, "Each name's reference (its perp) beyond the factor"],
+    ["Basis", p.basis, "Each name's own mid against its reference"],
+  ];
+  const rows: BridgeRow[] = [];
+  let at = 0;
+  for (const [label, v, title] of parts) {
+    rows.push({ label, from: at, v, total: v, title });
+    at += v;
+  }
+  rows.push({ label: "Inventory", from: 0, v: p.carry, total: p.carry, title: "What the held inventory made as its own mids moved (Trading PnL less the fills' edge at the fill)" });
   return rows;
 }
 

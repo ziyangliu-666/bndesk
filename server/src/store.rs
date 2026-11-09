@@ -33,25 +33,26 @@ CREATE TABLE IF NOT EXISTS pnl_hours (t INTEGER PRIMARY KEY, trading REAL, hedge
 ";
 
 /// Columns added after the first release: (table, column, type).
-pub const MIGRATIONS: [(&str, &str, &str); 17] = [
+pub const MIGRATIONS: [(&str, &str, &str); 18] = [
     ("fills", "mk_fast", "TEXT"), ("fills", "tox", "TEXT"), ("fills", "refs", "TEXT"), ("fills", "path", "TEXT"),
     ("equity", "trading", "REAL"), ("equity", "hedged", "REAL"), ("pnl_hours", "backfilled_s", "INTEGER"),
     ("equity", "realized", "REAL"), ("equity", "floating", "REAL"), ("equity", "hedge", "REAL"),
     ("equity", "mm", "REAL"), ("transfers", "usd", "REAL"), ("equity", "rebates", "REAL"), ("fills", "bf", "INTEGER"),
     ("fills", "fee_usd", "REAL"), ("equity", "edge", "REAL"), ("equity", "quoting", "REAL"),
+    ("pnl_hours", "carry", "REAL"),
 ];
 pub const FILL_COLS: &str = "id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, maker, fair, edge_bps, \
     ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf, fee_usd";
 pub const EQUITY_COLS: &str = "t, account, equity, pnl_day, markout_pnl, inventory, futures_notional, trading, hedged, \
     realized, floating, hedge, mm, rebates, edge, quoting";
-pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s";
+pub const HOUR_COLS: &str = "t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s, carry";
 
 pub(crate) const SQL_FILL: &str = "INSERT OR REPLACE INTO fills (id, ts, account, symbol, venue, side, price, qty, fee, fee_asset, \
     maker, fair, edge_bps, ref0, has_ref, mk, mk_raw, mk_fast, tox, refs, path, bf, fee_usd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_EQUITY: &str = "INSERT OR REPLACE INTO equity (t, account, equity, pnl_day, markout_pnl, inventory, \
     futures_notional, trading, hedged, realized, floating, hedge, mm, rebates, edge, quoting) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 const SQL_HOUR: &str = "INSERT OR REPLACE INTO pnl_hours (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, \
-    volume, covered_s, backfilled_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
+    volume, covered_s, backfilled_s, carry) VALUES (?,?,?,?,?,?,?,?,?,?,?)";
 // a record is written when first seen and again once valued: the value is set once, the rest never changes
 const SQL_TRANSFER: &str = "INSERT INTO transfers (id, ts, from_email, to_email, asset, amount, usd) VALUES (?,?,?,?,?,?,?) \
     ON CONFLICT(id) DO UPDATE SET usd = COALESCE(transfers.usd, excluded.usd)";
@@ -204,6 +205,8 @@ pub struct HourRow {
     pub volume: f64,
     pub covered_s: i64,
     pub backfilled_s: Option<i64>,
+    /// the position term of trading (NULL in hours stored before it was kept)
+    pub carry: Option<f64>,
 }
 
 /// transfers row; `usd` (its value, fixed when first valued) is NULL until then and in rows older than the column.
@@ -561,6 +564,7 @@ impl Store {
                     volume: f64_at(r, 7)?,
                     covered_s: i64_at(r, 8)?,
                     backfilled_s: i64_opt(r, 9)?,
+                    carry: f64_opt(r, 10)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -683,7 +687,7 @@ fn write(c: &Connection, batch: &[Item]) -> rusqlite::Result<()> {
             Item::Row(Row::PnlHour(h)) => {
                 c.prepare_cached(SQL_HOUR)?.execute(params![h.t, h.trading, h.hedged, h.factor, h.ref_hedge,
                                                             h.factor_hedge, h.fills, h.volume, h.covered_s,
-                                                            h.backfilled_s])?;
+                                                            h.backfilled_s, h.carry])?;
             }
             Item::Row(Row::Transfer(t)) => {
                 c.prepare_cached(SQL_TRANSFER)?.execute(params![t.id, t.ts, t.from_email, t.to_email, t.asset,
@@ -914,7 +918,7 @@ mod tests {
         s.put(Row::Fill(Box::new(f.clone())));
         s.put(Row::PnlHour(HourRow { t: 3_600_000, trading: 1.0, hedged: 0.5, factor: 0.25, ref_hedge: 0.1,
                                      factor_hedge: 0.2, fills: 3, volume: 300.0, covered_s: 3600,
-                                     backfilled_s: Some(60) }));
+                                     backfilled_s: Some(60), carry: Some(0.7) }));
         s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, from_email: "a@x".into(), to_email: "b@x".into(),
                                           asset: "USDT".into(), amount: 10.0, usd: None }));
         s.put(Row::Transfer(TransferRow { id: "t1".into(), ts: 5, amount: 99.0, usd: Some(10.0), ..Default::default() }));

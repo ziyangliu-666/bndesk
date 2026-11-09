@@ -18,6 +18,8 @@
 //!   dPi(t) = sum_fills(t) [s q (M_k(t) - p) - fee] + sum_k Q_k(t-1) (M_k(t) - M_k(t-1))     ... per grid step
 //!   dH(t)  = sum_k Q_k(t-1) M_k(t-1) r_k(t)                                                own-reference hedge
 //!   dHm(t) = (sum_k beta_k Q_k(t-1) M_k(t-1)) r_b(t)                                       factor hedge
+//!   dC(t)  = sum_k Q_k(t-1) (M_k(t) - M_k(t-1))                                            carry, the position term of dPi
+//!   C = Hm + (H - Hm) + (C - H)                                                            factor, single-name, basis
 //!   S = Pi - H (hedged), A = Pi - Hm (factor-hedged)
 //! ```
 //!
@@ -210,9 +212,11 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for OMap<V> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub trading: f64,
+    /// the position term of trading (Σ Q dM); None in an hour stored before it was kept
+    pub carry: Option<f64>,
     pub ref_hedge: f64,
     pub factor_hedge: f64,
     pub fills: i64,
@@ -224,7 +228,7 @@ pub struct Block {
 impl Block {
     pub fn new(trading: f64, ref_hedge: f64, factor_hedge: f64, fills: i64, volume: f64, covered_s: i64,
                backfilled_s: i64) -> Self {
-        Block { trading, ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s }
+        Block { trading, carry: Some(0.0), ref_hedge, factor_hedge, fills, volume, covered_s, backfilled_s }
     }
 
     pub fn hedged(&self) -> f64 {
@@ -238,6 +242,18 @@ impl Block {
     pub fn booked_s(&self) -> i64 {
         self.covered_s + self.backfilled_s
     }
+
+    fn add_carry(&mut self, d: f64) {
+        if let Some(c) = self.carry.as_mut() {
+            *c += d;
+        }
+    }
+}
+
+impl Default for Block {
+    fn default() -> Self {
+        Block::new(0.0, 0.0, 0.0, 0, 0.0, 0, 0)
+    }
 }
 
 /// A row of the store's pnl_hour table: (t, trading, hedged, factor, ref_hedge, factor_hedge, fills, volume,
@@ -246,6 +262,7 @@ impl Block {
 pub struct HourRow {
     pub t: i64,
     pub trading: f64,
+    pub carry: Option<f64>,
     pub hedged: f64,
     pub factor: f64,
     pub ref_hedge: f64,
@@ -266,6 +283,8 @@ pub struct Pos {
     pub m: Option<f64>,         // M_k(t-1)
     pub r: Option<f64>,         // R_k(t-1)
     pub h: f64,                 // today's H_k
+    pub hm: f64,                // today's Hm_k: beta_k Q M r_b, the factor part
+    pub carry: f64,             // today's Σ Q dM_k: the position term of Π_k
     pub m_start: Option<f64>,   // M when booking began: stands in for M_k(D) until that is known
     pub t0: i64,                // ms the opening quantity was taken from the balance at
     pub hedge: bool,            // a spot asset that hedges: a leg, not part of Π
@@ -274,7 +293,7 @@ pub struct Pos {
 
 impl Pos {
     pub fn new(base: &str, inst: InstId, key: &str, q: f64, q0: f64) -> Self {
-        Pos { base: base.into(), inst, key: key.into(), q, q0, m: None, r: None, h: 0.0, m_start: None, t0: 0, hedge: false, perp: false }
+        Pos { base: base.into(), inst, key: key.into(), q, q0, m: None, r: None, h: 0.0, hm: 0.0, carry: 0.0, m_start: None, t0: 0, hedge: false, perp: false }
     }
 }
 
@@ -408,6 +427,9 @@ pub struct PnlState {
     pub m0: OMap<f64>,
     #[serde(default)]
     pub k: OMap<(f64, Option<f64>, Option<f64>)>,
+    /// per base: today's (Hm_k, carry_k), kept from 2026-11-09
+    #[serde(default, skip_serializing_if = "OMap::is_empty")]
+    pub kx: OMap<(f64, f64)>,
 }
 
 pub type BalanceFn = Box<dyn Fn(&str) -> f64>;
@@ -444,6 +466,7 @@ pub struct PnlBook {
     pub sums: HashMap<String, FillSum>,    // today's fills by base, for the closed form
     pub day_fills: HashMap<String, Vec<(i64, f64, Rc<PFill>)>>,   // base -> (grid second, s q, fill)
     pub saved: HashMap<String, f64>,       // today's H_k from before a restart
+    pub saved_x: HashMap<String, (f64, f64)>,   // ... and (Hm_k, carry_k)
     pub m0: OMap<f64>,                     // M_k(D)
     pub spans: Vec<[i64; 3]>,              // today's booked intervals: [a, b, 0 live | 1 backfilled]
     pub live: Option<usize>,               // the live span being extended (index into spans)
@@ -477,6 +500,7 @@ impl PnlBook {
             sums: HashMap::new(),
             day_fills: HashMap::new(),
             saved: HashMap::new(),
+            saved_x: HashMap::new(),
             m0: OMap::new(),
             spans: vec![],
             live: None,
@@ -690,8 +714,9 @@ impl PnlBook {
 
     pub fn load_hours<'a>(&mut self, rows: impl IntoIterator<Item = &'a HourRow>) {
         for r in rows {
-            self.hours.insert(r.t, Block::new(r.trading, r.ref_hedge, r.factor_hedge, r.fills, r.volume, r.covered_s,
-                                              r.backfilled_s));
+            let mut b = Block::new(r.trading, r.ref_hedge, r.factor_hedge, r.fills, r.volume, r.covered_s, r.backfilled_s);
+            b.carry = r.carry;
+            self.hours.insert(r.t, b);
         }
     }
 
@@ -702,6 +727,7 @@ impl PnlBook {
             self.spans = state.spans;
             self.m0 = state.m0;
             self.saved = state.k.iter().map(|(b, v)| (b.to_string(), v.0)).collect();
+            self.saved_x = state.kx.iter().map(|(b, v)| (b.to_string(), *v)).collect();
             if let Some(t) = state.t {
                 self.prev = Some(Prev { t, rb: state.rb, k: state.k.iter().map(|(b, v)| (b.to_string(), (v.1, v.2))).collect() });
             }
@@ -828,6 +854,7 @@ impl PnlBook {
         let q0 = (self.balance)(base) - self.seen_sq.get(base).copied().unwrap_or(0.0);
         let mut p = Pos::new(base, inst, &m.insts[inst].key, q0 + self.applied_sq.get(base).copied().unwrap_or(0.0), q0);
         p.h = self.saved.get(base).copied().unwrap_or(0.0);
+        (p.hm, p.carry) = self.saved_x.get(base).copied().unwrap_or((0.0, 0.0));
         p.t0 = t * 1000;
         p.perp = !m.insts[inst].venue.is_spot();
         p.hedge = self.roles.of(&m.insts[inst].symbol, m.insts[inst].venue) == InstRole::Hedge;
@@ -965,6 +992,9 @@ impl PnlBook {
             self.roll(m, tm - (tm - self.day_start).rem_euclid(DAY), Some(t - 1));
         }
         let hour = self.block(tm);
+        // the beta instrument's return this second, for each name's factor part
+        let rb_now = self.beta_vs.as_ref().and_then(|bv| m.get(bv)).and_then(|b| nz(b.ring.at(tm)));
+        let r_b = rb_now.zip(nz(self.rb)).map_or(0.0, |(rb, prb)| rb / prb - 1.0);
         let (mut d_pi, mut d_h, mut expo) = (0.0, 0.0, 0.0);
         for p in self.pos.values_mut() {
             let mid = nz(m.value_at(p.inst, tm)).or(p.m);
@@ -975,8 +1005,11 @@ impl PnlBook {
                     (Some(rf), Some(pr)) => p.q * pm * (rf / pr - 1.0),
                     _ => 0.0,
                 };
-                expo += (self.beta)(&p.key) * p.q * pm;
+                let e = (self.beta)(&p.key) * p.q * pm;
+                expo += e;
                 p.h += dh;
+                p.hm += e * r_b;
+                p.carry += dp;
                 d_pi += dp;
                 d_h += dh;
             }
@@ -997,6 +1030,7 @@ impl PnlBook {
                 self.rb = rb;
             }
         }
+        let d_carry = d_pi;
         if !self.pending.is_empty() {
             let mut keep = vec![];
             for (idx, f) in std::mem::take(&mut self.pending) {
@@ -1033,6 +1067,7 @@ impl PnlBook {
         }
         let blk = self.blk(hour);
         blk.trading += d_pi;
+        blk.add_carry(d_carry);
         blk.ref_hedge += d_h;
         blk.factor_hedge += d_hm;
         blk.covered_s += 1;
@@ -1050,11 +1085,14 @@ impl PnlBook {
             self.seen(m, &base, inst, idx, &f);
         }
         self.saved.clear();
+        self.saved_x.clear();
         self.flows.clear();   // the desk's flows of the new day are all new
         self.flow_keys.clear();
         self.m0 = OMap::new();
         for p in self.pos.values_mut() {
             p.h = 0.0;
+            p.hm = 0.0;
+            p.carry = 0.0;
             p.q0 = p.q;
             p.m_start = p.m;
             if let Some(pm) = p.m {
@@ -1180,7 +1218,9 @@ impl PnlBook {
         for j in 1..pts.len() {
             let (t, last) = (pts[j], j == pts.len() - 1);
             let hour = self.block(t * 1000 - 1);
-            let (mut d_pi, mut d_h, mut expo) = (0.0, 0.0, 0.0);
+            let rb = nz(if last { g.rb1 } else { None }).or(nz(px(bv.as_deref(), t))).or(rb_prev);
+            let r_b = nz(rb).zip(nz(rb_prev)).map_or(0.0, |(rb, rp)| rb / rp - 1.0);
+            let (mut d_pi, mut d_h, mut expo, mut d_carry) = (0.0, 0.0, 0.0, 0.0);
             for s in st.iter_mut() {
                 let e = if last { *g.end.as_ref().and_then(|e| e.get(&s.base)).unwrap_or(&none) } else { none };
                 let (m_prev, r_prev) = (s.m, s.r);
@@ -1188,15 +1228,22 @@ impl PnlBook {
                 let r = nz(e.1).or(nz(px(s.rkey.as_deref(), t))).or(r_prev);
                 if let (Some(mp), Some(mv), false) = (m_prev, mm, s.hedge) {
                     d_pi += s.q * (mv - mp);
+                    d_carry += s.q * (mv - mp);
                     let dh = match (nz(r), nz(r_prev)) {
                         (Some(r), Some(rp)) => s.q * mp * (r / rp - 1.0),
                         _ => 0.0,
                     };
                     d_h += dh;
+                    let e = (self.beta)(&s.key) * s.q * mp;
                     if today {
-                        self.pos.get_mut(&s.base).expect("pos").h += dh;
+                        let p = self.pos.get_mut(&s.base).expect("pos");
+                        p.h += dh;
+                        p.hm += e * r_b;
+                        if full {
+                            p.carry += s.q * (mv - mp);
+                        }
                     }
-                    expo += (self.beta)(&s.key) * s.q * mp;
+                    expo += e;
                 }
                 while s.i < s.fl.len() && s.fl[s.i].0 <= t {
                     let (_, sq, f) = s.fl[s.i].clone();
@@ -1216,7 +1263,6 @@ impl PnlBook {
                 s.m = mm;
                 s.r = r;
             }
-            let rb = nz(if last { g.rb1 } else { None }).or(nz(px(bv.as_deref(), t))).or(rb_prev);
             let d_hm = match (nz(rb), nz(rb_prev)) {
                 (Some(rb), Some(rp)) => expo * (rb / rp - 1.0),
                 _ => 0.0,
@@ -1227,6 +1273,7 @@ impl PnlBook {
             blk.factor_hedge += d_hm;
             if full {
                 blk.trading += d_pi;
+                blk.add_carry(d_carry);
                 blk.backfilled_s += t - pts[j - 1];
             }
         }
@@ -1614,7 +1661,9 @@ impl PnlBook {
         self.today()
             .into_iter()
             .map(|(t, b)| P::HourPnl { t, trading: b.trading, hedged: b.hedged(), factor: b.factor(), fills: b.fills,
-                                       volume: b.volume, mm: 0.0, inventory: b.trading })
+                                       volume: b.volume, mm: 0.0, inventory: b.trading, carry: b.carry,
+                                       factor_part: b.factor_hedge, single_name: b.ref_hedge - b.factor_hedge,
+                                       basis: b.carry.map(|c| c - b.ref_hedge) })
             .collect()
     }
 
@@ -1643,6 +1692,11 @@ impl PnlBook {
         out
     }
 
+    /// Today by base: (carry, factor part Hm_k, single name H_k − Hm_k, basis carry_k − H_k).
+    pub fn carry_by_base(&self) -> OMap<(f64, f64, f64, f64)> {
+        self.pos.iter().filter(|(_, p)| !p.hedge).map(|(b, p)| (b.to_string(), (p.carry, p.hm, p.h - p.hm, p.carry - p.h))).collect()
+    }
+
     /// Hour rows changed since the last flush, and today's state, for the store.
     pub fn flush(&mut self) -> (Vec<HourRow>, PnlState) {
         let mut ts: Vec<i64> = self.dirty.drain().collect();
@@ -1653,6 +1707,7 @@ impl PnlBook {
                 self.hours.get(&t).map(|b| HourRow {
                     t,
                     trading: b.trading,
+                    carry: b.carry,
                     hedged: b.hedged(),
                     factor: b.factor(),
                     ref_hedge: b.ref_hedge,
@@ -1670,6 +1725,7 @@ impl PnlBook {
             spans: self.spans.clone(),
             m0: self.m0.clone(),
             k: self.pos.iter().map(|(b, p)| (b.to_string(), (p.h, p.m, p.r))).collect(),
+            kx: self.pos.iter().map(|(b, p)| (b.to_string(), (p.hm, p.carry))).collect(),
         };
         (rows, state)
     }
@@ -1880,6 +1936,10 @@ mod tests {
         approx!(s.ref_hedge, -2.0);
         approx!(s.factor_hedge, 1.0 + hm4);
         assert_eq!((s.covered_s, s.backfilled_s), (3, 0));
+        // carry: the position term alone; by name it adds up as the blocks do, and the factor part is Hm
+        approx!(pb.pos["X"].carry, blocks_sum(&pb, |b| b.carry.unwrap()));
+        approx!(pb.pos["X"].hm, s.factor_hedge);
+        approx!(pb.pos["X"].h, s.ref_hedge);
         approx!(pb.pos["X"].q, 3.0);
         let pi = 2.5 * (100.0 - 100.0) - 0.5 * (100.0 - 98.0) + 1.0 * (100.0 - 99.0) - 0.01;
         approx!(s.trading, pi);
@@ -2124,7 +2184,7 @@ mod tests {
         let rows: Vec<HourRow> = pb.hours.iter().map(|(&t, b)| HourRow {
             t, trading: b.trading, hedged: b.hedged(), factor: b.factor(), ref_hedge: b.ref_hedge,
             factor_hedge: b.factor_hedge, fills: b.fills, volume: b.volume, covered_s: b.covered_s,
-            backfilled_s: b.backfilled_s,
+            backfilled_s: b.backfilled_s, carry: b.carry,
         }).collect();
         pb2.load_hours(&rows);
         pb2.load_state(Some(state_rt(&state)), None);

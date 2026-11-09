@@ -343,6 +343,13 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   Kept in kv `hedgetrack2:<day start>` every 30 s; a gap (a restart, a start after the day start) is stepped on
   1 min klines, each leg's position from its fills and the target from the engine's samples. No ratio divides by
   a residual: the old offset (hedge over trading − mm) is gone from the pages; offset_factor / offset_total stay.
+- The inventory's carry in its parts, per name and per hour, on the P&L grid: carry_k = Σ Q_k (M_k(t) − M_k(t−1))
+  (the position term of Π), factor_part = Hm_k (beta_k Q M r_b, the desk's betas), single_name = H_k − Hm_k (the
+  name's reference beyond the factor), basis = carry_k − H_k (its own mid against its reference). They add up to
+  carry exactly. Hours keep carry in pnl_hours (`carry`, NULL in hours stored before it was); names keep (Hm_k,
+  carry_k) in the day's state (`kx`). The desk's totals take carry = Π − edge (the fills' edge on the own mid).
+  H is not the inventory's move but what hedging each name on its own reference would have made against it; the
+  hedge day calls it own_perp_equivalent (inventory_drift is its old name, kept).
 - Real-money split of Π, per base and summed, over today's spot fills in time order (in the desk's currency at the quote
   asset's price): sells take today's buys first, oldest first, and the inventory held at the day start (at
   M_k(D)) only when no buy of today is left. realized: sells against today's buys, minus today's spot fees;
@@ -430,7 +437,8 @@ interface Snapshot {
           hedge: number | null; rebates: number | null; other: number | null; mm: number | null; inventory: number | null }[];  // the day's real-money split at its end (kv dayreal:<day>);
                                                            // where kept, a past day's trading is its closed-form Π
   hours: { t: number; trading: number; hedged: number; factor: number; fills: number; volume: number;
-           mm: number; inventory: number }[];   // today's UTC hours
+           mm: number; inventory: number;
+           carry: number | null; factor_part: number; single_name: number; basis: number | null }[];   // today's UTC hours
   account_series: AccountSeries[];   // today's, 45 s grid (the last 65 minutes on the WebSocket)
   bars: DayBars;            // today's minute bars
 }
@@ -479,7 +487,8 @@ interface Summary {
          mm: number; mm_spread: number; inventory: number; funding_day: number;                                    // Π = mm + inventory, see below
          mm_unmarked_fills: number; mm_unmarked_notional: number;                                // fills past h without a price at t + h: out of mm
          edge: number; carry: number;                                                            // Π = edge + carry on the own mid, see below
-         quoting: number; holding: number; quoting_curve: number[] };                            // Π = quoting + holding; quoting at 1, 10, 60, 300 s
+         quoting: number; holding: number; quoting_curve: number[];                              // Π = quoting + holding; quoting at 1, 10, 60, 300 s
+         factor_part: number; single_name: number; basis: number };                              // carry = factor_part + single_name + basis
   markout_net_bps_1h: number | null;  // volume-weighted 10 s markout, net τ = 1 s, last hour
   fills_1h: number; fills_day: number; volume_day: number;
   fills_24h: number; volume_24h: number;   // the 24 h to now, from the P&L hour blocks (tracked spot markets), the oldest prorated
@@ -519,6 +528,7 @@ interface SymbolRow {
   realized_pnl: number; float_pnl: number;                                      // today: Π_k = realized + float, FIFO
   mm_pnl: number; inv_pnl: number;                                              // today: Π_k = mm + inventory
   quoting_pnl: number; holding_pnl: number;                                     // today on the own mid: Π_k = quoting + holding
+  carry_pnl: number; factor_part: number; single_name: number; basis: number;   // today's Σ Q dM_k = factor_part + single_name + basis
   open_bids: number; open_asks: number;
   bid_dist_bps: number | null; ask_dist_bps: number | null;                     // best own order vs fair
   last_fill: number | null; dust: boolean;
@@ -603,7 +613,8 @@ interface Exposure {
 // reference; Hm: the beta instrument's part. A leg's price P&L is Q0 (M_T − M_D) + Σ s q (M_T − p) at mark,
 // from REST fills since the day start; hedge P&L = price P&L − fees + funding.
 interface HedgeDay {
-  inventory_drift: number; factor_drift: number; residual_drift: number;
+  own_perp_equivalent: number; inventory_carry: number;        // H (what own-perp hedges would make); Σ Q dM own mid
+  inventory_drift: number; factor_drift: number; residual_drift: number;   // inventory_drift = H, its old name
   hedge_pnl: number | null; price_pnl: number | null; fees: number; funding: number;
   offset_factor: number | null; offset_total: number | null;   // −hedge P&L / Hm, / H
   net: number | null;                                          // H + hedge P&L

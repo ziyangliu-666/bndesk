@@ -39,19 +39,20 @@ q '/pnl?from=-30d&step=86400'
 - **Day figures** in `desk.*` restart at each P&L day's start; the catalog says when that is. `/pnl` counts
   from 0 at `from`: a range that starts at a day start takes the whole day, one that starts mid-day runs from
   the last row before `from`.
-- **Format:** `format=csv` works on `series`, `pnl` and `fills`; everything else is JSON.
+- **Format:** `format=csv` works on `series`, `pnl`, `fills` and `inventory`; everything else is JSON.
 
 ## Endpoints
 
 | Path | What | Parameters |
 |---|---|---|
 | `/api/agent` | Catalog | none |
-| `/api/agent/state` | Now: the dashboard's whole snapshot, plus the engine's last push. `desk.exposure.hedge_day.track` is the hedge against the engine's own target: `ideal` (a hedge held at the target), `actual`, `tracking = lag + fill_markout + funding − fees`, and the inventory's hourly SD alone and hedged (`sd_alone`, `sd_hedged`) | none |
+| `/api/agent/state` | Now: the dashboard's whole snapshot, plus the engine's last push. Each symbol row has today's `carry_pnl` and its `factor_part`, `single_name`, `basis`; `hours` the same per hour. `hedge_day.own_perp_equivalent` is H under its new name (`inventory_drift` stays, the same number). `desk.exposure.hedge_day.track` is the hedge against the engine's own target: `ideal` (a hedge held at the target), `actual`, `tracking = lag + fill_markout + funding − fees`, and the inventory's hourly SD alone and hedged (`sd_alone`, `sd_hedged`) | none |
 | `/api/agent/series` | Any series side by side on one grid | `keys`, `from`, `to`, `step`, `agg`, `format` |
 | `/api/agent/pnl` | P&L per bar, as changes. `pnl = mm + inventory_pnl + hedge + rebates + other`, with fills, volume and levels. On the own mid, by fill time: `trading = edge + carry = quoting + holding`, the markout curve `quoting_1`, `quoting_10`, `quoting_60`, `quoting_300`, and `fair_mm` against the reference fair | `from`, `to`, `step` (60–86400 s), `format` |
 | `/api/agent/fills` | Every fill: fee, edge, the mark market making counts, raw/net/fast markouts at 1/10/60/300 s, toxicity, price path | `from`, `to`, `symbol`, `venue`, `account`, `side`, `limit` (≤ 200k), `format` |
 | `/api/agent/events` | Alerts, transfers (amounts only), distributions, definition changes | `from`, `to` |
 | `/api/agent/markouts` | The Analysis page's report: price path around the fills (all / buys / sells / reference), distribution at `h`, markout per time bucket, per instrument (edge, markouts, SE, adverse share, PnL). Today's by default; any range with `from` / `to` (100k fills at most) | `account`, `venue`, `side`, `ref`, `weight`, `h`; `from`, `to`, `bucket` (s) |
+| `/api/agent/inventory` | The inventory's carry per UTC hour in its parts: `carry = factor_part + single_name + basis` (the beta factor, each name's reference beyond it, each name's own mid against its reference), with `trading` and `own_perp_equivalent` (H). `carry` and `basis` start on 2026-11-09 | `from`, `to`, `format` |
 | `/api/agent/klines` | Candles from the exchange | as `/api/klines` |
 
 ### Series keys

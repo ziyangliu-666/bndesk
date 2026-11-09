@@ -252,6 +252,7 @@ fn pnl_flush(pnl: &RefCell<PnlBook>, store: &Store, money: &crate::store::Series
             volume: r.volume,
             covered_s: r.covered_s,
             backfilled_s: Some(r.backfilled_s),
+            carry: r.carry,
         }));
     }
     store.put(Row::Kv(money.key(&format!("pnlstate:{ds}")), serde_json::to_string(&state).expect("state serializes")));
@@ -583,6 +584,7 @@ impl Desk {
                     volume: r.volume,
                     covered_s: r.covered_s,
                     backfilled_s: r.backfilled_s.unwrap_or(0),
+                    carry: r.carry,
                 })
                 .collect();
             pnl.load_hours(hours.iter());
@@ -708,7 +710,7 @@ impl Desk {
         }
         let pnl = self.pnl.borrow();
         let by_base = pnl.by_base(&mut m);
-        let symbols = symbol_rows(&mut m, &self.accounts, &by_base, &agg, &mm);
+        let symbols = symbol_rows(&mut m, &self.accounts, &by_base, &agg, &mm, &pnl.carry_by_base());
         let bv = {
             let b = self.betas.as_ref().map(|b| b.borrow());
             beta_weighted_spot(&self.cfg, &mut m, &self.accounts, b.as_deref())
@@ -726,8 +728,12 @@ impl Desk {
         ps.quoting = mm.own.quoting[hj];
         ps.holding = ps.trading - ps.quoting;
         ps.quoting_curve = mm.own.quoting.to_vec();
+        ps.factor_part = ps.factor_hedge;
+        ps.single_name = ps.ref_hedge - ps.factor_hedge;
+        ps.basis = ps.carry - ps.ref_hedge;
         let spot_legs = pnl.hedge_legs(&mut m, i64::MAX);
         let mut hd = hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs);
+        hd.inventory_carry = ps.carry;
         hd.track = self.hedge_view(&mut m, &hd, &mm, now);
         expo.hedge_day = Some(hd);
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();

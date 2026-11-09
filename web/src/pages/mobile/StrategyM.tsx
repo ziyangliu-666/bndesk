@@ -12,7 +12,7 @@ import { DeskChart, GapBar } from "./rest/assets";
 import type { Exposure } from "../../protocol";
 import { hedgeWord, inventoryWord, roled } from "../../desk";
 import { STALE_MS, engineTrouble, hedgeState, capital, mv, rebalances, useEngineLatest, useEngineSeries, useMetrics, type Latest } from "../strategy/engine";
-import { HedgeBridge, plainRows, riskCut, trackRows } from "../../components/HedgeBridge";
+import { HedgeBridge, inventoryRows, plainRows, riskCut, trackRows } from "../../components/HedgeBridge";
 import { useQty } from "../../mask";
 import { Amt, Empty, PageTabs, Row, Sec, Stats, useAmt } from "./rest/ui";
 import "./strategy.css";
@@ -110,6 +110,7 @@ function HedgeM({ latest }: { latest: Latest }) {
 function HedgeDayM() {
   const hd = useStore((s) => s.snap?.exposure.hedge_day);
   const inv = useStore((s) => s.snap?.summary.pnl.holding);
+  const pnlSum = useStore((s) => s.snap?.summary.pnl);
   const hide = useHide();
   const q = useQty();
   if (!hd) return null;
@@ -121,7 +122,10 @@ function HedgeDayM() {
         {hide ? (
           <Empty>Amounts hidden</Empty>
         ) : (
-          <HedgeBridge rows={t ? trackRows(t) : plainRows(hd, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
+          <>
+            {t && pnlSum && <HedgeBridge rows={inventoryRows(pnlSum)} label="The inventory's carry today in its parts" />}
+            <HedgeBridge rows={t ? trackRows(t) : plainRows(hd, inv ?? 0)} label={t ? "The hedge at the engine's target and as held, today" : "Inventory PnL, hedge and net today"} />
+          </>
         )}
       </Sec>
       {hd.legs.length > 0 && (

@@ -163,7 +163,7 @@ export function InstrumentTicker({ inst, name }: { inst: Instrument; name: React
       : dm
         ? { label: "Market making", value: m(pnl(row?.quoting_pnl)), tone: tone(row?.quoting_pnl), title: `Today: each fill against its own mid 60 s later, minus fees, ${cur()}` }
         : { label: "Trading", value: m(pnl(tp)), tone: tone(tp), title: `Today: what the fills and the held inventory made, fees included, ${cur()}` },
-    ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.holding_pnl)), tone: tone(row?.holding_pnl), title: `Today: what the held inventory made after those 60 s, on the same mid, ${cur()}` }]),
+    ...(hedged || !dm ? [] : [{ label: "Inventory PnL", value: m(pnl(row?.holding_pnl)), tone: tone(row?.holding_pnl), title: `Today: what the held inventory made after those 60 s, on the same mid, ${cur()}.${hide || !row ? "" : ` As held all day, ${pnl(row.carry_pnl)}: factor ${pnl(row.factor_part)}, single-name ${pnl(row.single_name)}, basis ${pnl(row.basis)}.`}` }]),
     { label: "Inventory", value: row ? m(`${qty(row.inv_qty, true)} ${base}`) : "--", title: "Held across accounts, free + locked" },
     { label: "Value", value: m(usd(row?.inv_value)), title: `Inventory × mid, ${cur()}` },
     { label: "Avg cost", value: price(row?.avg_cost), title: "Average cost from today's fills" },
