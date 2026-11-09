@@ -571,6 +571,9 @@ pub struct HedgeDay {
     pub legs: Vec<HedgeLeg>,
     /// the hedge against the engine's own target (`hedgetrack`); None without an engine pushing one
     pub track: Option<HedgeTrack>,
+    /// hedge_pnl with the legs at mid, as the inventory is (the track's, when it covers the day); hedge_pnl stays at the
+    /// exchange's mark, as the accounts' equity values the perps, so Day PnL's split adds up
+    pub hedge_pnl_mid: Option<f64>,
 }
 
 /// Today's hedge against the target the engine pushes, everything at mid, in the desk's currency.

@@ -576,6 +576,7 @@ pub fn hedge_day(cfg: &Config, m: &Market, accounts: &[AccountRef], ref_hedge: f
         net: pnl.map(|p| ref_hedge + p),
         legs,
         track: None,
+        hedge_pnl_mid: None,
     }
 }
 

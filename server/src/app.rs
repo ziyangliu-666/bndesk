@@ -735,6 +735,7 @@ impl Desk {
         let mut hd = hedge_day(&self.cfg, &m, &self.accounts, ps.ref_hedge, ps.factor_hedge, spot_legs);
         hd.inventory_carry = ps.carry;
         hd.track = self.hedge_view(&mut m, &hd, &mm, now);
+        hd.hedge_pnl_mid = hd.track.as_ref().filter(|t| t.since <= self.day_start()).map(|t| t.actual);
         expo.hedge_day = Some(hd);
         let pnl_day: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.pnl_day).sum();
         let rebates: f64 = accounts.iter().zip(&valued).filter(|(_, v)| **v).map(|(r, _)| r.rebates).sum();

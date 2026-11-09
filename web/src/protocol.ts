@@ -425,6 +425,7 @@ export interface HedgeDay {
   net: number | null; // H + hedge P&L
   legs: HedgeLeg[];
   track: HedgeTrack | null; // against the engine's own target; null without an engine pushing one
+  hedge_pnl_mid: number | null; // hedge_pnl with the legs at mid (hedge_pnl is at the exchange's mark)
 }
 
 /** Today's hedge against the target the engine pushes, at mid (DESIGN.md). */

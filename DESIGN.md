@@ -343,6 +343,10 @@ Rule id, level `info | warn | crit`, thresholds in `[alerts]`:
   Kept in kv `hedgetrack2:<day start>` every 30 s; a gap (a restart, a start after the day start) is stepped on
   1 min klines, each leg's position from its fills and the target from the engine's samples. No ratio divides by
   a residual: the old offset (hedge over trading − mm) is gone from the pages; offset_factor / offset_total stay.
+  Marks: every attribution (the track, the inventory's carry and its parts) is at mid on both legs. hedge_pnl, the
+  Day PnL split's Hedge, stays at the exchange's mark, as the accounts' equity values the perps (the settlement
+  mark), so Day PnL = trading + hedge + rebates + other still adds up; hedge_pnl_mid is the same at mid, and the
+  Hedge tooltip gives both.
 - The inventory's carry in its parts, per name and per hour, on the P&L grid: carry_k = Σ Q_k (M_k(t) − M_k(t−1))
   (the position term of Π), factor_part = Hm_k (beta_k Q M r_b, the desk's betas), single_name = H_k − Hm_k (the
   name's reference beyond the factor), basis = carry_k − H_k (its own mid against its reference). They add up to
@@ -620,6 +624,7 @@ interface HedgeDay {
   net: number | null;                                          // H + hedge P&L
   legs: HedgeLeg[];
   track: HedgeTrack | null;                                    // against the engine's target, see below
+  hedge_pnl_mid: number | null;                                // hedge P&L with the legs at mid (the track's actual)
 }
 
 interface HedgeTrack {

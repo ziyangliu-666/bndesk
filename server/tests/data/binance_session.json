@@ -183,6 +183,7 @@
         "fees": 0.0,
         "funding": 0.0,
         "hedge_pnl": null,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": -0.0,
         "legs": [
@@ -1238,6 +1239,7 @@
         "fees": 0.0,
         "funding": 0.0,
         "hedge_pnl": null,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 2.4,
         "legs": [
@@ -2374,6 +2376,7 @@
         "fees": 0.045001,
         "funding": 0.5,
         "hedge_pnl": null,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 14.4,
         "legs": [
@@ -3505,6 +3508,7 @@
         "fees": 0.045001,
         "funding": 0.5,
         "hedge_pnl": null,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 14.4,
         "legs": [
@@ -4635,6 +4639,7 @@
         "fees": 0.045001,
         "funding": 0.5,
         "hedge_pnl": null,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 14.4,
         "legs": [
@@ -5878,6 +5883,7 @@
         "fees": 0.095011,
         "funding": -0.75,
         "hedge_pnl": -26.345011,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 14.4,
         "legs": [
@@ -7188,6 +7194,7 @@
         "fees": 0.095011,
         "funding": -0.75,
         "hedge_pnl": -34.345011,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 14.4,
         "legs": [
@@ -8495,6 +8502,7 @@
         "fees": 0.095011,
         "funding": -0.75,
         "hedge_pnl": -42.345011,
+        "hedge_pnl_mid": null,
         "inventory_carry": 0.0,
         "inventory_drift": 28.175,
         "legs": [

@@ -1426,6 +1426,7 @@ function exposure(acc: Account[]): Exposure {
         funding: l.funding,
         pnl: legPnl(l),
       })),
+      hedge_pnl_mid: hedge,
       // the hedge against a target the mock engine would push: the target's move a little larger than the hedge's
       track: {
         since: dayStart,
