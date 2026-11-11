@@ -6,7 +6,7 @@
 // the interval is remembered on this browser. Each load is keyed by what it was asked for and drawn only
 // under that key, so switching any of them clears the chart at once and shows the new bars when they land.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { navigate, useStore } from "../store";
+import { navigate, serverNow, useStore } from "../store";
 import type { Venue } from "../protocol";
 import { Tabs, useExPref, useKlines, type ExView, type KInterval } from "../components/ex";
 import { DeskChart } from "./history/DeskChart";
@@ -25,6 +25,7 @@ import {
   deskRows,
   rangeFrom,
   rangeRows,
+  liveTail,
   todayOf,
   useDeskHistory,
   daySparks,
@@ -127,6 +128,12 @@ export function History() {
     prevRange.current = r;
     return r;
   }, [allRows, from, iv]);
+  // the forming bar moves with the Day PnL as the Desk shows it, between the 15 s loads (bars of a day only)
+  const livePnl = useStore((s) => s.snap?.summary.pnl_day ?? null);
+  const shown = useMemo(
+    () => (iv === "1w" || dayStart == null ? rows : liveTail(rows, livePnl, dayStart, STEP_S[iv] * 1000, serverNow())),
+    [rows, livePnl, dayStart, iv],
+  );
   const hourRows = useMemo(() => (dayStart == null ? [] : deskRows(hours.bars, "day", dayStart, null)), [hours.bars, dayStart]);
   // the days once both halves are in: the snapshot's kept days alone first would change the totals a moment later,
   // when the day bars bring the days before the kept ones
@@ -261,7 +268,7 @@ export function History() {
           ) : (
             <DeskChart
               key="desk"
-              rows={rows}
+              rows={shown}
               range={range}
               inRange={inRange}
               interval={iv}

@@ -376,6 +376,31 @@ export function deskRows(bars: HistBar[], period: "day" | "week", dayStart: numb
   return out;
 }
 
+/**
+ * The rows with their last bar moved by the desk's Day PnL now (`live`, the snapshot's, 8 a second), as an
+ * exchange's chart moves its forming candle between kline loads: the bar's close, high, low and the running total
+ * follow it, and past the bar's end a new bar opens (the next load brings the server's). Bars of a day only
+ * (`step` up to a day, aligned to `dayStart`, today's start); the parts are left to the loads.
+ */
+export function liveTail(rows: Row[], live: number | null, dayStart: number, step: number, now: number): Row[] {
+  const last = rows[rows.length - 1];
+  if (!last || live == null || !Number.isFinite(live) || step > 86_400_000 || now < dayStart) return rows;
+  const b = dayStart + Math.floor((now - dayStart) / step) * step;
+  if (b < last.t) return rows;
+  if (b === last.t) {
+    if (last.c === live) return rows;
+    const d = live - last.c;
+    return rows.slice(0, -1).concat({ ...last, c: live, h: Math.max(last.h, live), l: Math.min(last.l, live), cum: last.cum + d, pnl: last.pnl + d });
+  }
+  // a new bar: it opens where the last one closed, at 0 when that was on an earlier day (the day's P&L restarts)
+  const o = last.t >= dayStart ? last.c : 0;
+  const none: Split = { pi: null, mm: null, inv: null, hedge: null, reb: null, other: null };
+  return rows.concat({
+    t: b, pnl: live - o, cum: last.cum + (live - o), o, h: Math.max(o, live), l: Math.min(o, live), c: live,
+    bar: none, run: last.run, volume: 0, fills: 0, inventory: last.inventory, futures: last.futures,
+  });
+}
+
 /** Rows with their running figures measured from a range's start, and what made them: `prev` lends the rows
  *  that came out the same, so a live tick changes only the last rows' identity. */
 export interface RangeRows {
