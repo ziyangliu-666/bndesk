@@ -88,6 +88,51 @@ struct Mem {
     ids: HashMap<String, (i64, Flow)>,
     fill_rowid: i64,
     trimmed: i64,
+    /// Each closed day's final row (`finals`), and when the kept days were last read.
+    finals: Vec<DeskRow>,
+    finals_read: i64,
+}
+
+/// How often the kept days (kv `dayreal:<day>`) are read again.
+const FINALS_MS: i64 = 60_000;
+
+/// Each closed day's last row as the desk kept the day at its roll (kv `dayreal:<day>`, the money's key), at the
+/// day's last ms: the rows are every 5 s, and what the day made in its last seconds before the roll was in no
+/// row, while the next day counts from the roll. Without it a day's last row and the next day's start leave that
+/// out, and the running P&L drifts off the days' sum (2026-11-08 lost 22 USD that way). `rows` by time.
+fn finals(kv: &[(String, String)], rows: &[DeskRow], day_start_min: i64, now: i64, money: Option<&crate::store::Series>) -> Vec<DeskRow> {
+    let mut out = vec![];
+    for (k, v) in kv {
+        let Some(day) = k.strip_prefix("dayreal:").map(|d| d.split('#').next().unwrap_or(d)) else { continue };
+        let Some(t0) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0)).map(|d| d.and_utc().timestamp_millis())
+        else {
+            continue;
+        };
+        let ds = sessions::day_start(t0 + day_start_min * 60_000, day_start_min);
+        let end = ds + DAY;
+        let want = money.map_or_else(|| format!("dayreal:{day}"), |m| m.key_at(&format!("dayreal:{day}"), ds));
+        if *k != want || end > now - FINALS_MS {
+            continue;
+        }
+        let Ok(d) = serde_json::from_str::<serde_json::Value>(v) else { continue };
+        let f = |n: &str| d.get(n).and_then(serde_json::Value::as_f64);
+        let Some(pnl_day) = f("pnl_day") else { continue };
+        let i = rows.partition_point(|r| r.t < end);
+        let Some(last) = rows[..i].last().filter(|r| r.t >= ds && r.t < end - 1) else { continue };
+        out.push(DeskRow {
+            t: end - 1,
+            pnl_day,
+            trading: f("trading").or(last.trading),
+            realized: f("realized").map(|x| x + f("realized_old").unwrap_or(0.0)).or(last.realized),
+            hedge: f("hedge").or(last.hedge),
+            mm: f("mm").or(last.mm),
+            rebates: f("rebates").or(last.rebates),
+            equity: last.equity + (pnl_day - last.pnl_day),
+            ..last.clone()
+        });
+    }
+    out.sort_by_key(|r| r.t);
+    out
 }
 
 /// What a minute's (or a bar's) fills add: notional, count, and their P&L on the own mid (`FillRec::own_pnl`, the
@@ -116,7 +161,9 @@ const MIN: i64 = 60_000;
 
 impl Mem {
     /// Reads what was written since the last call (everything, the first time).
-    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64, roles: &P::Roles, money: Option<&crate::store::Series>) -> rusqlite::Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn refresh(&mut self, c: &Connection, now: i64, keep_fine_ms: i64, keep_ms: i64, roles: &P::Roles, money: Option<&crate::store::Series>,
+               day_start_min: i64) -> rusqlite::Result<()> {
         let from = self.rows.last().map_or(i64::MIN, |r| r.t - REREAD_MS);
         let mut new = desk_rows(c, from, i64::MAX)?;
         if let Some(money) = money {
@@ -150,6 +197,12 @@ impl Mem {
             }
             self.minutes.entry(f.ts - f.ts.rem_euclid(MIN)).or_default().add(&x, 1);
         }
+        if now - self.finals_read >= FINALS_MS {
+            self.finals_read = now;
+            let kv: Vec<(String, String)> =
+                c.prepare_cached("SELECT k, v FROM kv WHERE k LIKE 'dayreal:%'")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+            self.finals = finals(&kv, &self.rows, day_start_min, now, money);
+        }
         if now - self.trimmed > 3_600_000 {
             self.trimmed = now;
             self.ids.retain(|_, v| v.0 >= now - FILL_IDS_MS);
@@ -164,7 +217,15 @@ impl Mem {
     fn rows(&self, from: i64, to: i64) -> Vec<DeskRow> {
         let a = self.rows.partition_point(|r| r.t < from).saturating_sub(1);
         let b = self.rows.partition_point(|r| r.t < to);
-        self.rows[a..b].to_vec()
+        let mut out = self.rows[a..b].to_vec();
+        // each closed day ends on its kept figures (`finals`)
+        let lo = out.first().map_or(from, |r| r.t);
+        let extra: Vec<&DeskRow> = self.finals.iter().filter(|f| f.t > lo && f.t < to).collect();
+        if !extra.is_empty() {
+            out.extend(extra.into_iter().cloned());
+            out.sort_by_key(|r| r.t);
+        }
+        out
     }
 
     /// Minute -> what its fills add, over the fills in [from, to) (to the minute), in time order.
@@ -253,10 +314,11 @@ impl Api {
 
     /// `f` on the in-memory history, brought up to date first.
     async fn with_mem<R: Send + 'static>(&self, f: impl FnOnce(&Mem) -> R + Send + 'static) -> Result<R, ApiError> {
-        let (mem, fine, keep, roles, money) = (self.mem.clone(), self.keep_fine_ms, self.keep_ms, self.roles.clone(), self.money.clone());
+        let (mem, fine, keep, roles, money, dsm) =
+            (self.mem.clone(), self.keep_fine_ms, self.keep_ms, self.roles.clone(), self.money.clone(), self.day_start_min);
         blocking(self, move |c| {
             let mut m = mem.lock().unwrap();
-            m.refresh(c, now_ms(), fine, keep, &roles, money.as_ref())?;
+            m.refresh(c, now_ms(), fine, keep, &roles, money.as_ref(), dsm)?;
             Ok(f(&m))
         })
         .await
@@ -706,6 +768,26 @@ mod tests {
     use crate::store::{EquityRow, Row, Store};
     use std::sync::atomic::AtomicUsize;
 
+    /// A closed day ends on what the desk kept at its roll, not on its last 5 s row: the running P&L is then the
+    /// days' sum (11-08's last seconds moved it 22 USD that its last row missed).
+    #[test]
+    fn a_closed_day_ends_on_its_kept_figures() {
+        let row = |t: i64, pnl: f64| DeskRow { t, pnl_day: pnl, equity: 1000.0 + pnl, trading: Some(pnl), ..Default::default() };
+        let rows = vec![row(1_000, 5.0), row(DAY - 5_000, 16.0), row(DAY + 1_000, 1.0), row(DAY + 60_000, 3.0)];
+        let kv = vec![("dayreal:1970-01-01".to_string(), r#"{"pnl_day":-6.0,"trading":-7.0,"realized":1.0,"realized_old":0.5}"#.to_string()),
+                      ("dayreal:1970-01-02".to_string(), r#"{"pnl_day":9.0}"#.to_string())];
+        let f = finals(&kv, &rows, 0, DAY + 120_000, None);
+        assert_eq!(f.len(), 1, "today is not closed");
+        assert_eq!((f[0].t, f[0].pnl_day, f[0].trading, f[0].realized, f[0].equity), (DAY - 1, -6.0, Some(-7.0), Some(1.5), 994.0));
+        let mut all = rows.clone();
+        all.extend(f);
+        all.sort_by_key(|r| r.t);
+        let b = bars(&all, &[], DAY, 0, false, 0, 2);
+        assert_eq!(b.last().unwrap().c, -6.0 + 3.0);
+        // another currency's key is not this day's
+        assert!(finals(&[("dayreal:1970-01-01#1".to_string(), r#"{"pnl_day":1}"#.to_string())], &rows, 0, 3 * DAY, None).is_empty());
+    }
+
     fn row(t: i64, pnl: f64, tr: Option<f64>) -> DeskRow {
         DeskRow { t, pnl_day: pnl, trading: tr, realized: tr.map(|x| x / 2.0), hedge: None, mm: None, rebates: None, inventory: t as f64,
                   futures: -1.0, equity: 0.0 }
@@ -838,13 +920,13 @@ mod tests {
         eq(now - 60_000, 2.0);
         fill("f1", now - 290_000, 5.0);
         let mut m = Mem::default();
-        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None, 0).unwrap();
         assert_eq!(m.rows.len(), 2);
         eq(now - 60_000, 3.0); // rewritten
         eq(now, 4.0);
         fill("f1", now - 290_000, 7.0); // written again
         fill("f2", now - 10_000, 1.0);
-        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), None, 0).unwrap();
         assert_eq!(m.rows.iter().map(|r| r.pnl_day).collect::<Vec<_>>(), [1.0, 3.0, 4.0]);
         let f = m.flows(now - DAY, now + 1);
         assert_eq!(f.iter().map(|v| v.1.fills).sum::<i64>(), 2);
@@ -965,7 +1047,7 @@ mod tests {
         let mut money = crate::store::Series::one("USDT");
         money.spans.push(crate::store::Span { from: now - 2500, asset: "EUR".into() });
         let mut m = Mem::default();
-        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), Some(&money)).unwrap();
+        m.refresh(&c, now, 7 * DAY, 365 * DAY, &P::Roles::default(), Some(&money), 0).unwrap();
         assert_eq!(m.rows.iter().map(|r| r.t).collect::<Vec<_>>(), [now - 2000, now - 1000]);
     }
 }

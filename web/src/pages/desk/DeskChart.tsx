@@ -4,11 +4,11 @@
 // names the lines at rest (the header has the figures) and reads a hovered bar. What is drawn splits at today:
 // the days before are built once per load, however many, and only today's bars are built again on a tick.
 import { useMemo, useRef, type ReactNode } from "react";
-import { useStore } from "../../store";
+import { serverNow, useStore } from "../../store";
 import { compact, num, pnl } from "../../format";
 import { ACCOUNT_SERIES, C, FUT_COLOR, INV_COLOR, PNL_COLORS, PNL_STROKES } from "../../theme";
 import { ExChart, GAP, Tabs, TextToggle, rgba, useExPref, type ExLegendItem, type ExOhlc, type ExPoint, type ExSeries } from "../../components/ex";
-import { MIN, Stable, accountOnGrid, bucket, todayRows, sameOhlc, sameValue, type Row } from "./model";
+import { MIN, Stable, accountOnGrid, bucket, liveRows, todayRows, sameOhlc, sameValue, type Row } from "./model";
 import { rebatesAt, useTodayMinutes, withFills } from "./pnlData";
 import { dayEnds, pastStep, usePast, type DayOffset } from "./past";
 import { maskFormat, maskText, useHide } from "../../mask";
@@ -94,9 +94,19 @@ function DeskSeriesChart({ tab, hide }: { tab: Tab; hide: boolean }) {
 
   // today's minute rows (the volume pane at every interval), and the 5 s rows for Line; the past days before
   const minRows = useMemo(() => withFills(todayRows(bars, series, fills, dayStart, MIN), mins), [bars, series, fills, dayStart, mins]);
-  const today = useMemo(
+  const built = useMemo(
     () => (step === 0 ? todayRows(bars, series, fills, dayStart, 0) : bucket(minRows, step)),
     [step, minRows, bars, series, fills, dayStart],
+  );
+  // the forming bar follows the figures above the chart (8 a second), between the 5 s points and the minute bars
+  const livePnl = useStore((s) => s.snap?.summary.pnl_day ?? null);
+  const liveEq = useStore((s) => s.snap?.summary.equity ?? null);
+  const liveTr = useStore((s) => s.snap?.summary.pnl.trading ?? null);
+  const liveMm = useStore((s) => s.snap?.summary.pnl.quoting ?? null);
+  const liveHedge = useStore((s) => s.snap?.exposure.hedge_day?.hedge_pnl ?? null);
+  const today = useMemo(
+    () => liveRows(built, { pnl: livePnl, equity: liveEq, trading: liveTr, mm: liveMm, hedge: liveHedge }, dayStart, step, serverNow()),
+    [built, livePnl, liveEq, liveTr, liveMm, liveHedge, dayStart, step],
   );
   // each day from 0, as the phone's Desk: the Desk is today's P&L (History has the running total over the days)
   const offAt = null as ((t: number) => DayOffset) | null | undefined;

@@ -30,6 +30,40 @@ export interface Row {
 
 const minute = (ms: number) => Math.floor(ms / MIN) * MIN;
 
+/** The desk's figures now, as the snapshot carries them 8 a second (the head figures above the chart). */
+export interface Live {
+  pnl: number | null;
+  equity: number | null;
+  trading: number | null;
+  mm: number | null;
+  hedge: number | null;
+}
+
+/**
+ * Today's rows with the forming one moved by the figures now, as an exchange's chart moves its forming candle:
+ * the series and the minute bars come every 5 s and every minute, the head figures 8 a second, so without it the
+ * chart lags the numbers above it. Past the bar's end a bar opens at the last close (the next minute bar or 5 s
+ * point replaces it). `step` 0 (the 5 s points): the last point moves.
+ */
+export function liveRows(rows: Row[], live: Live, dayStart: number, step: number, now: number): Row[] {
+  const last = rows[rows.length - 1];
+  if (!last || live.pnl == null || now < dayStart || last.t < dayStart) return rows;
+  const set = (r: Row): Row => ({
+    ...r,
+    c: live.pnl!,
+    h: Math.max(r.h, live.pnl!),
+    l: Math.min(r.l, live.pnl!),
+    equity: live.equity ?? r.equity,
+    trading: live.trading ?? r.trading,
+    mm: live.mm ?? r.mm,
+    hedge: live.hedge ?? r.hedge,
+  });
+  const b = step === 0 ? last.t : dayStart + Math.floor((now - dayStart) / step) * step;
+  if (b < last.t) return rows;
+  if (b === last.t) return rows.slice(0, -1).concat(set(last));
+  return rows.concat(set({ ...last, t: b, o: last.c, h: last.c, l: last.c, vol: 0, fills: last.fills == null ? null : 0 }));
+}
+
 /** Today's rows at one minute (`step` 60 000) or at the 5 s grid (`step` 0: the series' own points). */
 export function todayRows(bars: DayBars | undefined, series: readonly SeriesPoint[] | undefined, fills: readonly Fill[] | undefined, dayStart: number, step: number): Row[] {
   const rows = new Map<number, Row>();
