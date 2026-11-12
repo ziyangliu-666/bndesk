@@ -61,8 +61,8 @@ export function DeskM() {
         parts={[
           ...(desk.mm
             ? [
-                { key: "mm", label: "MM", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.mm },
-                { key: "inv", label: "Inv", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.inventory },
+                { key: "mm", label: "MM", color: PNL_COLORS.mm, stroke: PNL_STROKES.mm, v: p.quoting },
+                { key: "inv", label: "Inv", color: PNL_COLORS.inv, stroke: PNL_STROKES.inv, v: p.holding },
               ]
             : [{ key: "trading", label: "Trading", color: PNL_COLORS.trading, stroke: PNL_STROKES.trading, v: p.trading }]),
           ...(desk.hedge ? [{ key: "hedge", label: "Hedge", color: PNL_COLORS.hedge, stroke: PNL_STROKES.hedge, v: hedge }] : []),

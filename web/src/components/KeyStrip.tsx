@@ -84,6 +84,11 @@ export function DeskTicker({ name }: { name: ReactNode }) {
   const hedge = exposure?.hedge_day?.hedge_pnl ?? null;
   const dayStart = sm ? `${hm(sm.day_start, tz)} ${tz === "utc" ? "UTC" : "local time"}` : "the day start";
   const d = useDesk();
+  // the inventory and its hedge are one position: the hedge is there to take the factor's move off the inventory
+  const net = p && hedge != null ? { all: p.holding + hedge, factor: p.factor_part + hedge } : null;
+  const invParts = hide || !p ? "" : ` Factor ${pnl(p.factor_part)}, single-name ${pnl(p.single_name)}, basis ${pnl(p.basis)}.`;
+  const netNote = (lead: string) =>
+    hide || !p || !net || !d.hedge ? "" : ` ${lead} ${pnl(net.all)} ${cur()}: the factor net of the ${hedgeWord()} ${pnl(net.factor)}, single-name ${pnl(p.single_name)}, basis ${pnl(p.basis)}.`;
   const parts: Fact[] = [
     ...(d.mm ? [] : [{ label: "Trading", value: m(pnl(p?.trading)), title: "Trading PnL: what the fills and the held inventory made, fees included." }]),
     {
@@ -91,8 +96,8 @@ export function DeskTicker({ name }: { name: ReactNode }) {
       value: m(pnl(p?.quoting)),
       title: `Each fill against its own mid 60 s later, minus fees.${hide ? "" : ` Against the mid at the fill: ${pnl(p?.edge)}; at 1 s ${pnl(p?.quoting_curve?.[0])}, 10 s ${pnl(p?.quoting_curve?.[1])}, 300 s ${pnl(p?.quoting_curve?.[3])}. Against the reference fair 60 s later (the mid before the fill moved as the leader perp moved): ${pnl(p?.mm)} ${cur()}.`}${unpriced(p, hide)}`,
     },
-    { label: "Inventory", value: m(pnl(p?.holding)), title: `Inventory PnL: what the held inventory made after the first 60 s of each fill, on the same mid; Trading PnL minus market making.${hide ? "" : ` With the reference fair's market making: ${pnl(p?.inventory)} ${cur()}.`}${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}` },
-    { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.${hide || exposure?.hedge_day?.hedge_pnl_mid == null ? "" : ` At mid, as the inventory is valued: ${pnl(exposure.hedge_day.hedge_pnl_mid)} ${cur()}.`}` },
+    { label: "Inventory", value: m(pnl(p?.holding)), title: `Inventory PnL: what the held inventory made after the first 60 s of each fill, on the same mid; Trading PnL minus market making.${hide ? "" : ` With the reference fair's market making: ${pnl(p?.inventory)} ${cur()}.`}${p?.funding_day ? `${hide ? "" : ` Funding received ${pnl(p.funding_day)}.`}` : ""}${invParts}${netNote(`With the ${hedgeWord()}`)}` },
+    { label: "Hedge", value: m(pnl(hedge)), title: `The ${hedgeWord()} legs since the day start: price at mark, minus fees, plus funding.${hide || exposure?.hedge_day?.hedge_pnl_mid == null ? "" : ` At mid, as the inventory is valued: ${pnl(exposure.hedge_day.hedge_pnl_mid)} ${cur()}.`}${netNote("With the inventory it hedges")}` },
     { label: "Rebates", value: m(pnl(sm?.rebates)), title: `Market-maker rebates ${exchangeWord()} credited since the day start, per account.` },
   ].filter((x) => (x.label === "Hedge" ? d.hedge : x.label === "Rebates" ? d.rebates : x.label === "Market making" || x.label === "Inventory" ? d.mm : true));
   const facts: Fact[][] = [
