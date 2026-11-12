@@ -176,6 +176,17 @@ pub fn in_flight(pts: &[(f64, Option<f64>)], floor: f64) -> bool {
     big > floor && d.iter().sum::<f64>().abs() < 0.25 * big
 }
 
+/// A desk point against the last one kept (`last`: its day, Day PnL and Other): a Day PnL jump over `floor` that
+/// the P&L book explains less than half of (Other took it) is a transfer one side of which is not in yet (a
+/// balance read before its stream move, or the move lost with a dropped stream until the history lists it):
+/// on 2026-11-12 a 596 USD transfer between two accounts read as +596 of Day PnL for 15 s.
+pub fn unexplained(last: Option<(i64, f64, f64)>, day: i64, pnl_day: f64, other: f64, floor: f64) -> bool {
+    last.is_some_and(|(d, p, o)| {
+        let (dp, dother) = (pnl_day - p, other - o);
+        d == day && dp.abs() > floor && (dother - dp).abs() < 0.5 * dp.abs()
+    })
+}
+
 pub struct Desk {
     pub cfg: Config,
     pub started: f64,
@@ -200,6 +211,10 @@ pub struct Desk {
     mm: Rc<MmSplit>,
     /// since when account points wait on a transfer in flight
     held: i64,
+    /// since when the desk's points wait on a Day PnL jump the book does not explain (`unexplained`), and the
+    /// last point kept: its day, Day PnL and Other
+    held_desk: i64,
+    last_kept: Option<(i64, f64, f64)>,
     /// each day's real-money split as it stood at its end (today's: now), kept in kv `dayreal:<day>`
     pub day_real: std::collections::BTreeMap<String, DayReal>,
     pub new_series: Vec<P::SeriesPoint>,
@@ -318,6 +333,8 @@ impl Desk {
             agg: None,
             mm: Rc::default(),
             held: 0,
+            held_desk: 0,
+            last_kept: None,
             day_real: std::collections::BTreeMap::new(),
             new_series: vec![],
             acct_series: HashMap::new(),
@@ -1052,6 +1069,20 @@ impl Desk {
         if prev.is_some_and(|l| l >= t) {
             return;
         }
+        if let Some(o) = s.other.filter(|_| fresh) {
+            if unexplained(self.last_kept, s.day_start, s.pnl_day, o, 50.0) {
+                // half a transfer: wait for the rest, 5 min at most (the accounts' points wait with the desk's)
+                if self.held_desk == 0 {
+                    self.held_desk = t;
+                    tracing::warn!("Day PnL {:+.2} with Other {o:+.2}: a jump the P&L book does not explain, points held", s.pnl_day);
+                }
+                if t - self.held_desk < 300_000 {
+                    return;
+                }
+            }
+            self.last_kept = Some((s.day_start, s.pnl_day, o));
+        }
+        self.held_desk = 0;
         if let Some(prev) = prev
             && t.div_euclid(MINUTE) > prev.div_euclid(MINUTE)
         {
@@ -2136,6 +2167,22 @@ mod tests {
         assert_eq!(opening_equity(Some((ds + 200, 1.0)), ds, Some(2.0)), Some(2.0));
         assert_eq!(opening_equity(Some((ds - ROLL_MARK_MS - 1, 1.0)), ds, Some(2.0)), Some(2.0));
         assert_eq!(opening_equity(None, ds, None), None);
+    }
+
+    #[test]
+    fn a_day_pnl_jump_the_book_does_not_explain_is_held() {
+        use super::unexplained;
+        let last = Some((7, -12.0, 0.55));
+        // 2026-11-12 10:16 UTC: +596 of Day PnL, all of it in Other
+        assert!(unexplained(last, 7, 583.2, 596.45, 50.0));
+        assert!(unexplained(last, 7, -608.0, -595.0, 50.0));
+        // the book explains it (a price move on the inventory), or Other alone moved, or it is small
+        assert!(!unexplained(last, 7, 583.2, 0.6, 50.0));
+        assert!(!unexplained(last, 7, -10.0, -93.0, 50.0));
+        assert!(!unexplained(last, 7, 20.0, 32.0, 50.0));
+        // a new day starts from 0, and the first point has none before it
+        assert!(!unexplained(last, 8, 583.2, 596.45, 50.0));
+        assert!(!unexplained(None, 7, 583.2, 596.45, 50.0));
     }
 
     #[test]

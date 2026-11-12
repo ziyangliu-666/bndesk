@@ -64,6 +64,17 @@ impl Agent {
         let mm_h = HK.iter().position(|k| *k == mm_horizon_s.to_string()).unwrap_or(2);
         Arc::new(Agent { history, tel, hub, mm_h })
     }
+
+    /// The engine's samples (`Telemetry::samples`), read off the desk's thread: the handlers run on it, and a week
+    /// of samples takes tens of seconds to inflate, which stopped the whole desk each time one was asked for.
+    async fn samples(&self, from: i64, to: i64, step: i64, keys: Vec<String>) -> Result<(Vec<i64>, crate::telemetry::Columns), ApiError> {
+        let tel = self.tel.clone();
+        match tokio::task::spawn_blocking(move || tel.samples(from, to, step, &keys)).await {
+            Ok(Ok(r)) => Ok(r),
+            Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+            Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        }
+    }
 }
 
 pub fn routes(a: Arc<Agent>) -> Router {
@@ -471,7 +482,7 @@ async fn series(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, Ap
     let now = now_ms();
     let accts = a.history.read(move |c| accounts(c, now)).await?;
     let pools = {
-        let (_, cols) = a.tel.samples(now - 30 * 60_000, now, 0, &["balances.".to_string() + "*"]).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let (_, cols) = a.samples(now - 30 * 60_000, now, 0, vec!["balances.*".to_string()]).await?;
         pools_of(cols.keys())
     };
     let keys = q.get("keys").map_or("", String::as_str);
@@ -510,7 +521,7 @@ async fn series(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, Ap
         let per = if agg == Agg::Last || agg == Agg::First { 1 } else { 60 };
         let thin = (step / per).max((to - grid.start) / MAX_ENGINE_SAMPLES);
         let thin = if thin <= 15_000 { 0 } else { thin };
-        let (ts, ecols) = a.tel.samples(grid.start, to - 1, thin, &eng).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let (ts, ecols) = a.samples(grid.start, to - 1, thin, eng).await?;
         let caps = if cap { capital(&ts, &ecols) } else { BTreeMap::new() };
         for (k, s) in &srcs {
             match s {
@@ -911,7 +922,7 @@ async fn markouts(State(a): State<Arc<Agent>>, Query(q): Q) -> Result<Response, 
 async fn catalog(State(a): State<Arc<Agent>>) -> Result<Response, ApiError> {
     let now = now_ms();
     let accts = a.history.read(move |c| accounts(c, now)).await?;
-    let (_, cols) = a.tel.samples(now - 30 * 60_000, now, 0, &["*".to_string()]).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (_, cols) = a.samples(now - 30 * 60_000, now, 0, vec!["*".to_string()]).await?;
     let pools = pools_of(cols.keys());
     let engine_keys: Vec<&String> = cols.keys().collect();
     let entry = |(k, u, d): &(&str, &str, &str)| json!({ "key": k, "unit": u, "means": d });
