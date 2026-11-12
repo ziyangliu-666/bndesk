@@ -198,6 +198,7 @@ pub async fn spot_trades(p: &Passes, rest: &impl RestGet) -> Result<()> {
                 fr.fee = f_or0(x, "commission")?;
                 fr.fee_asset = first(x, &["commissionAsset"]).and_then(Value::as_str).unwrap_or("").to_string();
                 fr.maker = truthy(get(x, "isMaker")?);
+                fr.swept = true;
                 on_fill(fr);
             }
             match rows.last() {
@@ -433,7 +434,8 @@ pub async fn fut_today(acct: &AccountRef, rest: &impl RestGet) -> Result<()> {
                 d.m0 = Some(to_f(&k0[1])?);
             }
         }
-        for fr in swept {
+        for mut fr in swept {
+            fr.swept = true;
             on_fill(fr);
         }
         acct.borrow_mut().apply(Event::PerpDay { symbol: sym, day: d });

@@ -804,7 +804,12 @@ impl PnlBook {
             }
         }
         self.pending = keep;
+        // the balances are as of now, not of the grid second (LAG_MS and a part of a second earlier): a fill in
+        // between that the desk has not seen yet (it was down, the sweep brings it) is in them
         self.sync_scope(m, t);
+        for p in self.pos.values_mut().filter(|p| p.t0 == t * 1000) {
+            p.t0 = now;
+        }
         let end = self.marks();
         let prev = self.prev.clone();
         for (a, b) in self.holes(t) {
@@ -1876,6 +1881,28 @@ mod tests {
         approx!(pb.pi_k(&mut m, &pb.pos["X"]), 1.0 * 3.0 + 0.5 * (100.0 - 99.0));
         let (r, o, f) = pb.fifo(&mut m, &pb.pos["X"]);
         approx!(r + o + f, 3.5);
+    }
+
+    /// 2026-11-12 11:34: a sale 2 s before booking began, while the desk was restarting, was in the balance the
+    /// opening came from and came from the sweep seconds later. Booking begins LAG_MS behind, so the sale was
+    /// after the grid's second and was taken off Q again: Π moved by its quantity times the day's move.
+    #[test]
+    fn fill_swept_just_before_booking_began_is_in_the_balance() {
+        let mut m = market();
+        tick(&mut m, 200, 100.0, 50.0, 200.0);
+        let mut pb = book(1.0);
+        pb.begin(&mut m, 4000);   // the grid begins at second 2
+        pb.m0.insert("X", 97.0);
+        pb.on_fill_at(&mut m, &fill("a", 3500, Side::Sell, 99.0, 0.5), false);
+        let p = &pb.pos["X"];
+        approx!(p.q0, 1.5);
+        approx!(p.q, 1.0);
+        assert!(pb.pending.is_empty());
+        approx!(pb.pi_k(&mut m, &pb.pos["X"]), 1.5 * 3.0 - 0.5 * (100.0 - 99.0));
+        // one swept from after booking began is the grid's, as the stream's are
+        pb.on_fill_at(&mut m, &fill("c", 4200, Side::Buy, 99.0, 0.25), false);
+        assert_eq!(pb.pending.len(), 1);
+        approx!(pb.pos["X"].q0, 1.5);
     }
 
     /// A USDC transfer in and its sale on USDCUSDT: Π holds no USDC position, books neither, and Π stays

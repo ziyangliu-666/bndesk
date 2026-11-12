@@ -311,7 +311,8 @@ impl Desk {
                         if !sf.contains(&key) {
                             sf.push(key);
                         }
-                        pnl.borrow_mut().on_fill_at(&mut m, &f, fresh);
+                        // a swept fill is not the stream's, however soon after it was made the sweep comes
+                        pnl.borrow_mut().on_fill_at(&mut m, &f, fresh && !f.swept);
                     }
                 }
             })

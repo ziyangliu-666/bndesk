@@ -179,7 +179,8 @@ pub async fn day_pass(p: &Passes, read: &impl Reads) -> Result<()> {
         }
         p.acct.borrow_mut().apply(Event::PerpDay { symbol: sym, day: d });
     }
-    for f in swept {
+    for mut f in swept {
+        f.swept = true;
         on_fill(f);
     }
     p.swept.set(started);

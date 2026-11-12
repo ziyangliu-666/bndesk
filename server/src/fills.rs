@@ -84,6 +84,9 @@ pub struct FillRec {
     pub bf: u8,
     /// The fee in the desk's currency when the fill was stored (None in rows from before it was kept).
     pub fee_usd: Option<f64>,
+    /// Read from the exchange's trade history after the fact (a sweep for what the user stream did not give),
+    /// not off the stream as it happened. Not stored.
+    pub swept: bool,
 }
 
 /// A fill's P&L on its instrument's own mid, fee in, in the desk's currency (`FillRec::own_pnl`).
@@ -157,6 +160,7 @@ impl FillRec {
             pr: [None; PATH_N],
             bf: 0,
             fee_usd: None,
+            swept: false,
         }
     }
 
